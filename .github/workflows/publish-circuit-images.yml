@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       skip_tools:
-        description: "tools imageを再buildせずlock済みimageを利用する"
+        description: "Reuse the locked tools image instead of rebuilding it"
         required: false
         default: false
         type: boolean
@@ -50,6 +50,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve image owner
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
       - name: Resolve source revision
         id: source
         run: |
@@ -74,8 +76,8 @@ jobs:
             CERN_COMMIT=${{ steps.source.outputs.cern_commit }}
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/circuit-tools:${{ github.sha }}-tools
-            ghcr.io/${{ github.repository_owner }}/circuit-tools:latest
+            ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
+            ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Resolve tools digest
@@ -89,7 +91,7 @@ jobs:
             TOOLS_TAG=$(python3 -c 'import json; print(json.load(open("docker/image-digests.json", encoding="utf-8"))["circuit_tools"]["tag"])')
           else
             case "$BUILT_DIGEST" in sha256:*) ;; *) echo "invalid tools digest: $BUILT_DIGEST" >&2; exit 1 ;; esac
-            TOOLS_REF="ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-tools@${BUILT_DIGEST}"
+            TOOLS_REF="ghcr.io/${IMAGE_OWNER}/circuit-tools@${BUILT_DIGEST}"
             TOOLS_TAG="${SOURCE_SHA}-tools"
           fi
           printf 'TOOLS_REF=%s\nTOOLS_DIGEST=%s\nTOOLS_TAG=%s\n' "$TOOLS_REF" "${TOOLS_REF##*@}" "$TOOLS_TAG" >> "$GITHUB_ENV"
@@ -114,23 +116,23 @@ jobs:
           set -euo pipefail
           uv run --project "$RUNNER_TEMP/sdk" python \
             "$RUNNER_TEMP/sdk/openhands-agent-server/openhands/agent_server/docker/build.py" \
-            --base-image "$TOOLS_REF" --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server" \
+            --base-image "$TOOLS_REF" --image "ghcr.io/${IMAGE_OWNER}/circuit-server" \
             --target source --platforms linux/amd64 --push --sdk-project-root "$RUNNER_TEMP/sdk"
       - name: Resolve server digest
         run: |
           set -euo pipefail
           SERVER_TAG="${SOURCE_SHA}-latest-source"
           SERVER_DIGEST=$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' \
-            "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server:${SERVER_TAG}" | tr -d '"')
+            "ghcr.io/${IMAGE_OWNER}/circuit-server:${SERVER_TAG}" | tr -d '"')
           case "$SERVER_DIGEST" in sha256:*) ;; *) echo "invalid server digest: $SERVER_DIGEST" >&2; exit 1 ;; esac
           printf 'SERVER_TAG=%s\nSERVER_DIGEST=%s\n' "$SERVER_TAG" "$SERVER_DIGEST" >> "$GITHUB_ENV"
-          docker buildx imagetools create --tag "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server:latest" \
-            "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server:${SERVER_TAG}"
+          docker buildx imagetools create --tag "ghcr.io/${IMAGE_OWNER}/circuit-server:latest" \
+            "ghcr.io/${IMAGE_OWNER}/circuit-server:${SERVER_TAG}"
       - name: Measure published server
         run: |
           set -euo pipefail
           uv run python scripts/measure_image_tools.py \
-            --image-ref "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server@${SERVER_DIGEST}" \
+            --image-ref "ghcr.io/${IMAGE_OWNER}/circuit-server@${SERVER_DIGEST}" \
             --out "$RUNNER_TEMP/circuit-server.json"
       - name: Update digest lock and open PR
         env:
@@ -143,13 +145,13 @@ jobs:
           git switch -c "bot/update-image-digests-${SERVER_DIGEST#sha256:}" "$(git rev-parse origin/main)"
           if [ "${{ inputs.skip_tools }}" != true ]; then
             uv run python scripts/update_image_digest_lock.py --lock docker/image-digests.json \
-              --entry circuit_tools --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-tools" \
+              --entry circuit_tools --image "ghcr.io/${IMAGE_OWNER}/circuit-tools" \
               --tag "$TOOLS_TAG" --digest "$TOOLS_DIGEST" --published-at "$published_at" \
               --workflow-run "$workflow_run" --dockerfile docker/circuit-tools.Dockerfile \
               --tools-json "$RUNNER_TEMP/circuit-tools.json"
           fi
           uv run python scripts/update_image_digest_lock.py --lock docker/image-digests.json \
-            --entry circuit_server --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server" \
+            --entry circuit_server --image "ghcr.io/${IMAGE_OWNER}/circuit-server" \
             --tag "$SERVER_TAG" --digest "$SERVER_DIGEST" --published-at "$published_at" \
             --workflow-run "$workflow_run" --dockerfile sdk:openhands-agent-server/v1.49.2 \
             --tools-json "$RUNNER_TEMP/circuit-server.json"
@@ -157,11 +159,11 @@ jobs:
           if git diff --cached --quiet -- docker/image-digests.json; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "回路イメージdigest lockを更新"
+          git commit -m "Update circuit image digest lock"
           git push --set-upstream origin HEAD
           pr_url=$(gh pr create --base main --head "$(git branch --show-current)" \
-            --title "回路イメージdigest lockを更新" \
-            --body "Publish workflowでdigest lockを更新しました。${workflow_run}")
+            --title "Update circuit image digest lock" \
+            --body "Digest lock updated by the publish workflow. ${workflow_run}")
           pr_number="${pr_url##*/}"
           gh workflow run ci.yml --ref "$(git branch --show-current)" -f base_sha="$(git rev-parse origin/main)"
           for _ in $(seq 1 120); do

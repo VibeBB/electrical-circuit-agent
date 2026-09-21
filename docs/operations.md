@@ -42,13 +42,13 @@ determinism, so published digests are locked.
 
 The only required secret is `GITHUB_TOKEN`. Enable `Allow auto-merge` in the
 repository settings and make `fast` a required check in branch protection. The
-publish workflow publishes `ghcr.io/VibeBB/circuit-tools` and
-`ghcr.io/VibeBB/circuit-server`, and creates `docker/image-digests.json` for the
+publish workflow publishes `ghcr.io/vibebb/circuit-tools` and
+`ghcr.io/vibebb/circuit-server`, and creates `docker/image-digests.json` for the
 first time via a bot PR. Filling a missing lock with placeholders is forbidden.
 
 > **Note:** `docker/image-digests.json` still records images under
 > `ghcr.io/uist1idrju3i/` and `workflow_run` URLs under the old repository.
-> After the images are republished under `ghcr.io/VibeBB/`, the lock file must
+> After the images are republished under `ghcr.io/vibebb/`, the lock file must
 > be regenerated via the publish workflow /
 > `scripts/update_image_digest_lock.py`.
 

@@ -80,7 +80,7 @@ api-server, DRC, manufacturing file export, and `circuit_design_report` follow.
 
 ### Distribution
 
-We publish `ghcr.io/VibeBB/circuit-tools` and `ghcr.io/VibeBB/circuit-server`
+We publish `ghcr.io/vibebb/circuit-tools` and `ghcr.io/vibebb/circuit-server`
 to GHCR. `latest` is a convenience alias; at runtime the SHA-256 digest-pinned
 references recorded in `docker/image-digests.json` are used. No lock file is
 created until the first publish, and pull verification is fail-closed in
@@ -90,7 +90,7 @@ image build compatibility; specify the `circuit` user for standalone runs.
 ```bash
 docker run --rm --user circuit \
   -v "$PWD/fixtures/smoke-board:/work:ro" \
-  ghcr.io/VibeBB/circuit-tools:latest \
+  ghcr.io/vibebb/circuit-tools:latest \
   python3 /opt/circuit/bin/smoke_kicad11_konnect.py
 ```
 
@@ -166,8 +166,8 @@ README は、企業利用で AGPL が適合しない場合について
 
 ### 配布
 
-GHCRには`ghcr.io/VibeBB/circuit-tools`と
-`ghcr.io/VibeBB/circuit-server`を公開します。`latest`は利便性のための
+GHCRには`ghcr.io/vibebb/circuit-tools`と
+`ghcr.io/vibebb/circuit-server`を公開します。`latest`は利便性のための
 別名であり、実行時は`docker/image-digests.json`に記録されたSHA-256 digest固定
 参照を使います。初回publishまではlockファイルを作成せず、lockが無い環境では
 pull検証をfail-closedにします。tools imageはSDK server image build互換のため
@@ -176,6 +176,6 @@ rootを既定userとし、standalone実行時は`circuit` userを明示します
 ```bash
 docker run --rm --user circuit \
   -v "$PWD/fixtures/smoke-board:/work:ro" \
-  ghcr.io/VibeBB/circuit-tools:latest \
+  ghcr.io/vibebb/circuit-tools:latest \
   python3 /opt/circuit/bin/smoke_kicad11_konnect.py
 ```
