@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "circuit": {
+      "command": "python3",
+      "args": ["-m", "circuit.mcp_server"]
+    },
+    "konnect": {
+      "command": "konnect",
+      "env": {
+        "KICAD_API_SOCKET": "ipc:///tmp/circuit-kicad.sock"
+      }
+    }
+  }
+}

@@ -1,0 +1,253 @@
+{
+    "$schema": "https://schemas.kicad.org/drc.v1.json",
+    "coordinate_units": "mm",
+    "date": "2026-09-20T11:41:32",
+    "ignored_checks": [
+        {
+            "description": "Footprint has no courtyard defined",
+            "key": "missing_courtyard"
+        },
+        {
+            "description": "Track endpoint not centered on via",
+            "key": "track_not_centered_on_via"
+        },
+        {
+            "description": "Tuning profile track geometries",
+            "key": "tuning_profile_track_geometries"
+        },
+        {
+            "description": "Footprint doesn't match symbol's footprint filters",
+            "key": "footprint_filters_mismatch"
+        },
+        {
+            "description": "Footprint component type doesn't match footprint pads",
+            "key": "footprint_type_mismatch"
+        }
+    ],
+    "included_severities": [
+        "error",
+        "warning",
+        "exclusion"
+    ],
+    "kicad_version": "10.99.0",
+    "schematic_parity": [],
+    "source": "board.kicad_pcb",
+    "unconnected_items": [
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Pad 1 [GND] of R1 on F.Cu",
+                    "pos": {
+                        "x": 99.2,
+                        "y": 100.0
+                    },
+                    "uuid": "913a29b0-e05d-4fa4-98b6-5ce7dd0d9dbf"
+                },
+                {
+                    "description": "Pad 1 [GND] of R2 on F.Cu",
+                    "pos": {
+                        "x": 109.2,
+                        "y": 100.0
+                    },
+                    "uuid": "280f0c54-a3ca-4633-9d11-552def500d8b"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        },
+        {
+            "description": "Missing connection between items",
+            "items": [
+                {
+                    "description": "Pad 2 [VCC] of R1 on F.Cu",
+                    "pos": {
+                        "x": 100.8,
+                        "y": 100.0
+                    },
+                    "uuid": "020373d2-35d5-434f-b7cd-4e1fd0a07fbd"
+                },
+                {
+                    "description": "Pad 2 [VCC] of R2 on F.Cu",
+                    "pos": {
+                        "x": 110.8,
+                        "y": 100.0
+                    },
+                    "uuid": "2a01ce1e-b5e3-467a-9d7e-7b632196b655"
+                }
+            ],
+            "severity": "error",
+            "type": "unconnected_items"
+        }
+    ],
+    "violations": [
+        {
+            "description": "The current configuration does not include the footprint library 'Resistor_SMD'",
+            "items": [
+                {
+                    "description": "Footprint R1",
+                    "pos": {
+                        "x": 100.0,
+                        "y": 100.0
+                    },
+                    "uuid": "38d93047-b7e8-4fbc-9323-5fbda4bf5a4d"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "The current configuration does not include the footprint library 'Resistor_SMD'",
+            "items": [
+                {
+                    "description": "Footprint R2",
+                    "pos": {
+                        "x": 110.0,
+                        "y": 100.0
+                    },
+                    "uuid": "9393a1f9-6b3b-4310-88f7-46702aa4446d"
+                }
+            ],
+            "severity": "warning",
+            "type": "lib_footprint_issues"
+        },
+        {
+            "description": "Silkscreen clearance",
+            "items": [
+                {
+                    "description": "Rectangle of R1 on f.silkscreen",
+                    "pos": {
+                        "x": 98.9,
+                        "y": 99.2
+                    },
+                    "uuid": "3223336e-1219-44eb-9a3a-eea0759d737a"
+                },
+                {
+                    "description": "Reference field of R1",
+                    "pos": {
+                        "x": 100.0,
+                        "y": 98.6
+                    },
+                    "uuid": "efc13942-52ee-4bfd-9223-0f0f19d36215"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_overlap"
+        },
+        {
+            "description": "Silkscreen clearance",
+            "items": [
+                {
+                    "description": "Rectangle of R2 on f.silkscreen",
+                    "pos": {
+                        "x": 108.9,
+                        "y": 99.2
+                    },
+                    "uuid": "7bc7fc0b-2491-42c1-86dc-f9dfd51bf7a6"
+                },
+                {
+                    "description": "Reference field of R2",
+                    "pos": {
+                        "x": 110.0,
+                        "y": 98.6
+                    },
+                    "uuid": "ebef2a1d-2ede-4988-9cea-a0c531206fe3"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_overlap"
+        },
+        {
+            "description": "Silkscreen clipped by solder mask",
+            "items": [
+                {
+                    "description": "Rectangle of R1 on f.silkscreen",
+                    "pos": {
+                        "x": 98.9,
+                        "y": 99.2
+                    },
+                    "uuid": "3223336e-1219-44eb-9a3a-eea0759d737a"
+                },
+                {
+                    "description": "Pad 2 [VCC] of R1 on F.Cu",
+                    "pos": {
+                        "x": 100.8,
+                        "y": 100.0
+                    },
+                    "uuid": "020373d2-35d5-434f-b7cd-4e1fd0a07fbd"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_over_copper"
+        },
+        {
+            "description": "Silkscreen clipped by solder mask",
+            "items": [
+                {
+                    "description": "Rectangle of R1 on f.silkscreen",
+                    "pos": {
+                        "x": 98.9,
+                        "y": 99.2
+                    },
+                    "uuid": "3223336e-1219-44eb-9a3a-eea0759d737a"
+                },
+                {
+                    "description": "Pad 1 [GND] of R1 on F.Cu",
+                    "pos": {
+                        "x": 99.2,
+                        "y": 100.0
+                    },
+                    "uuid": "913a29b0-e05d-4fa4-98b6-5ce7dd0d9dbf"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_over_copper"
+        },
+        {
+            "description": "Silkscreen clipped by solder mask",
+            "items": [
+                {
+                    "description": "Rectangle of R2 on f.silkscreen",
+                    "pos": {
+                        "x": 108.9,
+                        "y": 99.2
+                    },
+                    "uuid": "7bc7fc0b-2491-42c1-86dc-f9dfd51bf7a6"
+                },
+                {
+                    "description": "Pad 2 [VCC] of R2 on F.Cu",
+                    "pos": {
+                        "x": 110.8,
+                        "y": 100.0
+                    },
+                    "uuid": "2a01ce1e-b5e3-467a-9d7e-7b632196b655"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_over_copper"
+        },
+        {
+            "description": "Silkscreen clipped by solder mask",
+            "items": [
+                {
+                    "description": "Rectangle of R2 on f.silkscreen",
+                    "pos": {
+                        "x": 108.9,
+                        "y": 99.2
+                    },
+                    "uuid": "7bc7fc0b-2491-42c1-86dc-f9dfd51bf7a6"
+                },
+                {
+                    "description": "Pad 1 [GND] of R2 on F.Cu",
+                    "pos": {
+                        "x": 109.2,
+                        "y": 100.0
+                    },
+                    "uuid": "280f0c54-a3ca-4633-9d11-552def500d8b"
+                }
+            ],
+            "severity": "warning",
+            "type": "silk_over_copper"
+        }
+    ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "circuit",
+  "version": "0.1.0",
+  "description": "OpenHands plugin for conversational KiCad schematic and PCB design",
+  "author": {
+    "name": "VibeBB",
+    "url": "https://github.com/VibeBB/electrical-circuit-agent"
+  },
+  "license": "BSD-3-Clause",
+  "repository": "https://github.com/VibeBB/electrical-circuit-agent",
+  "entry_command": "doctor"
+}

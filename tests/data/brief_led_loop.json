@@ -1,0 +1,36 @@
+{
+  "name": "led_loop",
+  "description": "LED loop fixture",
+  "parts": [
+    {
+      "reference": "J1",
+      "lib_id": "Connector_Generic:Conn_01x02",
+      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
+    },
+    {
+      "reference": "R1",
+      "lib_id": "Device:R",
+      "footprint": "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+      "value": "330"
+    },
+    {
+      "reference": "D1",
+      "lib_id": "Device:LED",
+      "footprint": "LED_THT:LED_D5.0mm"
+    }
+  ],
+  "nets": [
+    {"name": "VIN", "pins": ["J1.1", "R1.1"]},
+    {"name": "LED_A", "pins": ["R1.2", "D1.2"]},
+    {"name": "GND", "pins": ["D1.1", "J1.2"]}
+  ],
+  "board": {
+    "width_mm": 44,
+    "height_mm": 25,
+    "placements": {
+      "J1": {"x_mm": 8, "y_mm": 12},
+      "R1": {"x_mm": 20, "y_mm": 12},
+      "D1": {"x_mm": 36, "y_mm": 12}
+    }
+  }
+}

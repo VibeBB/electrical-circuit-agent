@@ -1,0 +1,214 @@
+{
+  "jobs": [
+    {
+      "description": "ERC JSON",
+      "id": "00000000-0000-0000-0000-000000000001",
+      "settings": {
+        "description": "",
+        "fail_on_error": false,
+        "format": "json",
+        "output_filename": "erc.json",
+        "severity": 52,
+        "units": "mm"
+      },
+      "type": "sch_erc"
+    },
+    {
+      "description": "Schematic XML netlist",
+      "id": "00000000-0000-0000-0000-000000000002",
+      "settings": {
+        "format": "xml",
+        "output_filename": "netlist.xml",
+        "variant_names": []
+      },
+      "type": "sch_export_netlist"
+    },
+    {
+      "description": "Schematic PDF",
+      "id": "00000000-0000-0000-0000-000000000003",
+      "settings": {
+        "black_and_white": false,
+        "color_theme": "",
+        "description": "",
+        "drawing_sheet": "",
+        "format": "pdf",
+        "pdf_hierarchical_links": true,
+        "pdf_metadata": true,
+        "pdf_property_popups": true,
+        "plot_all": true,
+        "plot_drawing_sheet": true,
+        "output_dir": "",
+        "page_size": "auto",
+        "use_background_color": true
+      },
+      "type": "sch_export_plot_pdf"
+    },
+    {
+      "description": "DRC JSON",
+      "id": "00000000-0000-0000-0000-000000000004",
+      "settings": {
+        "description": "",
+        "fail_on_error": false,
+        "format": "json",
+        "output_filename": "drc.json",
+        "parity": false,
+        "report_all_track_errors": false,
+        "severity": 52,
+        "units": "mm"
+      },
+      "type": "pcb_drc"
+    },
+    {
+      "description": "Gerbers",
+      "id": "00000000-0000-0000-0000-000000000005",
+      "settings": {
+        "black_and_white": false,
+        "create_gerber_job_file": true,
+        "description": "",
+        "disable_aperture_macros": false,
+        "drawing_sheet": "",
+        "drill_shape": "full",
+        "include_netlist_attributes": true,
+        "layers": [],
+        "layers_to_include_on_all_layers": [],
+        "mirror": false,
+        "negative": false,
+        "output_filename": "",
+        "plot_drawing_sheet": false,
+        "plot_footprint_values": true,
+        "plot_pad_numbers": false,
+        "plot_ref_des": true,
+        "precision": 6,
+        "sketch_dnp_footprints_on_fab_layers": false,
+        "sketch_pads_on_fab_layers": false,
+        "subtract_solder_mask_from_silk": false,
+        "use_drill_origin": false,
+        "use_protel_file_extension": true,
+        "use_x2_format": true
+      },
+      "type": "pcb_export_gerbers"
+    },
+    {
+      "description": "Drill files",
+      "id": "00000000-0000-0000-0000-000000000006",
+      "settings": {
+        "description": "",
+        "drill_origin": "abs",
+        "excellon.combine_pth_npth": true,
+        "excellon.minimal_header": false,
+        "excellon.mirror_y": false,
+        "excellon.oval_drill_route": false,
+        "format": "excellon",
+        "generate_map": false,
+        "gerber_precision": 6,
+        "map_format": "pdf",
+        "output_dir": "",
+        "units": "mm",
+        "zero_format": "decimal"
+      },
+      "type": "pcb_export_drill"
+    },
+    {
+      "description": "Position CSV",
+      "id": "00000000-0000-0000-0000-000000000007",
+      "settings": {
+        "exclude_dnp": true,
+        "exclude_footprints_with_th": false,
+        "format": "csv",
+        "gerber_board_edge": true,
+        "negate_bottom_x": false,
+        "output_filename": "positions.csv",
+        "side": "both",
+        "single_file": true,
+        "smd_only": false,
+        "units": "mm",
+        "use_drill_place_file_origin": true
+      },
+      "type": "pcb_export_pos"
+    },
+    {
+      "description": "STEP",
+      "id": "00000000-0000-0000-0000-000000000008",
+      "settings": {
+        "board_only": false,
+        "board_outlines_chaining_epsilon": 0.01,
+        "cut_vias_in_body": false,
+        "description": "",
+        "export_board_body": true,
+        "export_components": true,
+        "export_inner_copper": false,
+        "export_pads": false,
+        "export_silkscreen": false,
+        "export_soldermask": false,
+        "export_tracks": false,
+        "export_zones": false,
+        "fill_all_vias": false,
+        "format": "step",
+        "fuse_shapes": false,
+        "include_dnp": true,
+        "include_unspecified": true,
+        "occt_format": 0,
+        "optimize_step": true,
+        "output_filename": "board.step",
+        "overwrite": true,
+        "subst_models": true,
+        "use_defined_origin": false,
+        "use_drill_origin": false,
+        "use_grid_origin": false,
+        "use_pcb_center_origin": true,
+        "user_origin.x": 0.0,
+        "user_origin.y": 0.0,
+        "variant": "",
+        "vrml_model_dir": "",
+        "vrml_relative_paths": false
+      },
+      "type": "pcb_export_3d"
+    },
+    {
+      "description": "IPC-2581",
+      "id": "00000000-0000-0000-0000-000000000009",
+      "settings": {
+        "bom_rev": "",
+        "compress": false,
+        "drawing_sheet": "",
+        "field_bom_map.dist": "",
+        "field_bom_map.dist_pn": "",
+        "field_bom_map.internal_id": "",
+        "field_bom_map.mfg": "",
+        "field_bom_map.mfg_pn": "",
+        "mode": "",
+        "net_names": "include",
+        "precision": 6,
+        "ref_des": "include",
+        "sections": "",
+        "units": "mm",
+        "variant": "",
+        "version": "C"
+      },
+      "type": "pcb_export_ipc2581"
+    },
+    {
+      "description": "ODB++",
+      "id": "00000000-0000-0000-0000-000000000010",
+      "settings": {
+        "check_zones": false,
+        "compression": "zip",
+        "drawing_sheet": "",
+        "precision": 2,
+        "units": "mm",
+        "variant": ""
+      },
+      "type": "pcb_export_odb"
+    }
+  ],
+  "meta": { "version": 1 },
+  "outputs": [
+    {
+      "description": "All job outputs",
+      "id": "00000000-0000-0000-0000-000000000011",
+      "only": [],
+      "settings": { "output_path": "." },
+      "type": "folder"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "brief_sha256": "a449cd792e34ddf5e453c73b85fa4264250276f449acf823eb51dc30d07b2205",
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "LED を 1 個点灯させる最小回路（電流制限抵抗付き）",
+      "source": "user",
+      "speaker": "user"
+    },
+    {
+      "id": "R2",
+      "text": "電源は 2 ピンのピンヘッダで供給する",
+      "source": "user",
+      "speaker": "user"
+    },
+    {
+      "id": "R3",
+      "text": "抵抗は 330Ω、貫通部品で構成する",
+      "source": "agent",
+      "speaker": "circuit-review"
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "A1",
+      "text": "基板は 44x25 mm",
+      "rationale": "会話で寸法未指定、部品が収まる最小寸法"
+    }
+  ],
+  "open_questions": [],
+  "part_sources": {
+    "J1": ["R2"],
+    "R1": ["R1", "R3"],
+    "D1": ["R1"]
+  },
+  "net_sources": {
+    "VIN": ["R2"],
+    "LED_A": ["R1"],
+    "GND": ["R2"]
+  }
+}

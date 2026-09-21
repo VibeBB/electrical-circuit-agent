@@ -1,0 +1,33 @@
+---
+name: circuit-konnect
+description: Use Konnect MCP toolsets for live KiCad PCB operations without confusing them with verdict authority.
+version: 0.1.0
+license: BSD-3-Clause
+triggers:
+  - Konnect
+  - live IPC
+  - route trace
+  - 配線
+---
+
+# Circuit Konnect
+
+For schematic authoring, validate a design brief first, load the project/library
+toolsets, call `get_symbol_info`, place symbols with `batch_place_components`, and
+connect every brief net with `batch_connect_to_net` labels. Do not draw pin-to-pin
+wires across components. In v0.12.1 call `save_project` with `{}`.
+
+Set `KICAD_API_SOCKET=ipc:///tmp/circuit-kicad.sock` and start the circuit API
+server for the selected board first. Load the PCB toolset as needed, then use
+`update_pcb_from_schematic`, `set_component_placements`, `route_pad_to_pad`, and
+`save_project`. The source should report `ipc` for live operations. Konnect is an
+unmodified AGPL subprocess; the authoritative connectivity, ERC, and DRC results
+remain the circuit kicad-cli-backed reports.
+
+The complete v0.12.1 coverage matrix is in
+`references/konnect-tools.json`, rendered in `docs/konnect-tools.md`. Use it before
+adding a tool to an authoring flow. IPC-required tools currently include
+`align_components`, `get_component_list`, `query_traces`, and `refill_zones`.
+Advisory checks and export comparisons are recorded in the design report and never
+change its kicad-cli-derived verdict. Mutating advisory tools run on copies or with
+`dry_run` where supported.

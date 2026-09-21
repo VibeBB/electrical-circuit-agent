@@ -1,0 +1,9 @@
+.git
+.gitmodules
+.venv
+.pytest_cache
+.ruff_cache
+out
+spike-konnect-kicad11
+__pycache__
+*.py[cod]

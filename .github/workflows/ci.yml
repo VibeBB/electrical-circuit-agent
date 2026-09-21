@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: "変更範囲判定の基準commit（空なら全範囲を実行）"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docker: ${{ steps.scope.outputs.docker }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - id: scope
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'workflow_dispatch' && inputs.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA:-}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
+          if grep -Eq '^(docker/|fixtures/|libraries/|scripts/smoke_|src/|tests/integration/|\.dockerignore$)' "$RUNNER_TEMP/changed-files"; then
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docker=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  fast:
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync
+      - run: uv run python scripts/verify_all.py --stage docs
+      - run: uv run python scripts/verify_all.py --stage fast
+
+  docker-smoke:
+    needs: [changes, fast]
+    if: needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - id: cern
+        run: |
+          set -euo pipefail
+          cern_commit=$(git -C libraries/cern-kicad-libs rev-parse HEAD)
+          if [[ ! "$cern_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid CERN commit: $cern_commit" >&2
+            exit 1
+          fi
+          echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
+          echo "commit=$cern_commit" >> "$GITHUB_OUTPUT"
+      - run: docker build -f docker/circuit-tools.Dockerfile -t circuit-tools:ci --build-arg CERN_COMMIT=${{ steps.cern.outputs.commit }} .
+      - run: >-
+          docker run --rm
+          --user circuit
+          -v "$PWD/fixtures/smoke-board:/work:ro"
+          circuit-tools:ci
+          python3 /opt/circuit/bin/smoke_kicad11_konnect.py
+      - run: uv sync
+      - run: uv run python scripts/verify_all.py --stage standard
+        env:
+          CIRCUIT_TOOLS_IMAGE: circuit-tools:ci

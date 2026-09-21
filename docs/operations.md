@@ -1,0 +1,197 @@
+# Operations
+
+## Development environment
+
+```bash
+uv sync
+uv run python scripts/verify_all.py --stage docs
+uv run python scripts/verify_all.py --stage fast
+python3 -m circuit.doctor
+```
+
+## Docker image
+
+```bash
+docker build -f docker/circuit-tools.Dockerfile -t circuit-tools:dev .
+docker image inspect circuit-tools:dev --format '{{.Size}}'
+docker run --rm \
+  --user circuit \
+  -v "$PWD/fixtures/smoke-board:/work:ro" \
+  circuit-tools:dev \
+  python3 /opt/circuit/bin/smoke_kicad11_konnect.py
+```
+
+The image contains the KiCad nightly PPA, the Konnect release, and the CERN
+submodule. The CERN commit is recorded in
+`/opt/circuit/libraries/cern-kicad-libs.commit` and the OCI label
+`circuit.cern.commit`. Because the SDK v1.49.2 server image build requires
+root-privileged apt/useradd on the base image, the tools image's default user is
+root. For standalone runs specify `--user circuit`; in the server image use the
+`openhands` user created by the SDK. Docker itself does not guarantee
+determinism, so published digests are locked.
+
+## CI/CD and digest lock
+
+| Workflow | Role |
+|---|---|
+| `ci.yml` | fast verification plus tools image/smoke/standard verification depending on change scope |
+| `publish-circuit-images.yml` | GHCR tools/server publishing, post-publish smoke, lock update bot PR |
+| `locked-image-check.yml` | Digest-pinned image verification on main push and weekly |
+| `main-ci-failure-issue.yml` | Filing CI/image failure Issues on main and closing them on green |
+| `check-dependency-updates.yml` | Weekly PPA/PyPI/GitHub/CERN/action update report |
+
+The only required secret is `GITHUB_TOKEN`. Enable `Allow auto-merge` in the
+repository settings and make `fast` a required check in branch protection. The
+publish workflow publishes `ghcr.io/VibeBB/circuit-tools` and
+`ghcr.io/VibeBB/circuit-server`, and creates `docker/image-digests.json` for the
+first time via a bot PR. Filling a missing lock with placeholders is forbidden.
+
+> **Note:** `docker/image-digests.json` still records images under
+> `ghcr.io/uist1idrju3i/` and `workflow_run` URLs under the old repository.
+> After the images are republished under `ghcr.io/VibeBB/`, the lock file must
+> be regenerated via the publish workflow /
+> `scripts/update_image_digest_lock.py`.
+
+The dependency update report can be checked locally as follows. `--dry-run`
+prints the report to stdout without changing GitHub Issues.
+
+```bash
+uv run python scripts/check_dependency_updates.py --dry-run
+```
+
+`verify_all.py --stage standard` requires `CIRCUIT_TOOLS_IMAGE` and runs Docker
+integration in addition to the fast checks.
+
+For direct PyPI dependencies, the resolved version in `uv.lock` is reported as
+the current value rather than the specifier in `pyproject.toml`. For specifiers
+with an upper bound, the latest release within the range is compared and the
+latest release outside the range is noted. Candidates deferred due to
+constraints such as the SDK are recorded with a reason and a re-check deadline
+in `scripts/dependency_update_deferrals.json`, and until the deadline they are
+counted as `保留（記録済み）` (deferred, recorded) rather than as updates.
+Candidates past their deadline return to the update candidates as
+`保留期限切れ` (deferral expired). Malformed JSON is fail-closed and reported as
+FAIL.
+
+## Updating pins
+
+1. Check the KiCad footprints/symbols versions in the resolute Packages index
+   of the PPA; for the core package, check the download URL and SHA-256 in the
+   Launchpad librarian.
+2. Update the `KICAD_NIGHTLY_VERSION`, footprints, and symbols pins together
+   with `THIRD_PARTY_NOTICES.md` and ADR-0002 in the same change.
+3. Verify the Konnect release asset, commit, SHA-256, and LICENSE against
+   primary sources.
+4. Update the CERN submodule and record the commit and fetch date in
+   `libraries/README.md` and `THIRD_PARTY_NOTICES.md`.
+5. To change the `openhands-sdk` or `openhands-tools` PyPI pins, update
+   `pyproject.toml`, `uv.lock`, and this document.
+6. Run docs, fast, image build, and smoke, and record the results in the
+   handoff.
+
+### Konnect v0.12.1 adoption record
+
+- Checked on: 2026-09-20
+- Update: v0.11.0 → v0.12.1
+- Primary source: [v0.12.1 release notes](https://github.com/mixelpixx/Konnect/releases/tag/v0.12.1)
+- Release notes summary:
+  - v0.11.1 improved KiCad CLI discovery and MCP tool catalogue client compatibility.
+  - v0.12.0 added board-targeted IPC, live-board verification, and stale-file fallback suppression.
+  - v0.12.1 added connectivity/no-connect/junction preservation, fail-closed placement,
+    real-connection verification in netlists, and native footprint flipping.
+- Reason for adoption: safety of schematic-to-PCB authoring, identity of the
+  target board, and fail-closed behavior based on observed results are useful
+  for the current conversational design path.
+- Note: the release notes do not claim explicit KiCad 11 support. KiCad 11
+  nightly compatibility in this project continues to be verified by image
+  smoke and direct `kicad-cli` checks.
+
+## Plugin and tests
+
+Locally, `python3 -m circuit.mcp_server` can be started as a stdio MCP server.
+`circuit_api_server_start` accepts only one `.kicad_pcb`; call
+`circuit_api_server_stop` first when switching. Docker integration tests can be
+run optionally with
+`CIRCUIT_TOOLS_IMAGE=circuit-tools:dev uv run pytest tests/integration -m docker`
+and are skipped in environments without the image.
+
+### Plugin hardening
+
+Each sub-agent's frontmatter records the library-protection hook and
+`max_budget_per_run: 3.0`. The plugin-level Stop hook reads
+`circuit-reports/design-report.json` under the working directory (up to depth
+4) and presents each verdict as additional context at the end. KiCad/CERN
+libraries covered by the `circuit-library-guard` skill are read-only; use
+`register_*_library` instead of editing. Slash command `argument-hint`s specify
+input files and export types.
+
+### Brief intake and library gate
+
+When generating a design brief from conversation, first validate the brief and
+intake sidecar produced by `circuit-brief`. `circuit_brief_intake_check`
+inspects the brief's SHA-256, the R/A/Q source mapping, and open questions, and
+does not pass anything other than `ready` to authoring.
+`circuit_brief_library_check` directly parses the installed libraries and
+inspects the pins referenced by every symbol, footprint, and net.
+
+The KiCad/CERN library search roots can be overridden with:
+
+```text
+CIRCUIT_KICAD_SHARE=/usr/share/kicad-nightly
+CIRCUIT_CERN_LIBS=/opt/circuit/libraries/cern-kicad-libs
+```
+
+To pass an intake sidecar to E2E authoring, specify `--intake PATH`.
+
+### Design brief authoring
+
+The KiCad 11 nightly E2E runs a jobset in addition to direct ERC/DRC and checks
+report consistency. The top/bottom PNGs under `circuit-reports/render/` and the
+diff JSON are auxiliary evidence for human review and do not change verdicts.
+
+To run Konnect authoring, the netlist connectivity gate, ERC, PCB update, DRC,
+and export from a design brief, run the following inside the tools image or in
+an environment with the same PATH:
+
+```bash
+docker run --rm --user circuit \
+  -v "$PWD:$PWD" -w "$PWD" circuit-tools:dev \
+  python3 scripts/e2e_authoring.py \
+  --brief tests/data/brief_led_loop.json \
+  --workdir /tmp/circuit-led-loop
+```
+
+Each Konnect call and kicad-cli gate is saved to `authoring.jsonl`, and the
+final decision is saved to `circuit-reports/design-report.json` as UTF-8 JSON.
+Connectivity compares the output of `kicad-cli sch export netlist --format
+kicadsexpr` against the design brief; Konnect's analysis results are treated as
+advisory evidence, including short detection.
+
+All 234 Konnect v0.12.1 tools are managed in `docs/konnect-tools.md` and
+`plugins/circuit/skills/circuit-konnect/references/konnect-tools.json`.
+Advisory failures during authoring are recorded but do not stop the E2E; the
+`design-report.json` verdict is determined only from the kicad-cli
+connectivity/ERC/DRC JSON.
+
+As of 2026-09-20, the resolute package
+`202609200244+21f1f53428~189~ubuntu26.04.1` failed with
+`kicad-cli sch erc` on `_cvpcb.kiface` with
+`undefined symbol: _ZN18PCB_TUNING_PATTERN10SetNetCodeEi`.
+Upstream commit `21f1f53428` moved `PCB_TUNING_PATTERN::SetNetCode` out-of-line,
+and the immediately following `7e4fac2d` reverted it as a build failure fix, but
+the 09-20 package still has an inconsistency between `_cvpcb.kiface` and the
+runtime library.
+
+Because no fixed core package remains in the PPA index, we use the
+[Launchpad librarian 09-19 build](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609190245+6d837080a5~189~ubuntu26.04.1_amd64.deb)
+`202609190245+6d837080a5~189~ubuntu26.04.1` pinned by SHA-256. On this build ERC
+and netlist export succeed, and the ERC integration test was returned to a
+normal passing test. Since the librarian's retention period is not guaranteed,
+return to the PPA pin once a fixed nightly lands back in the PPA and the
+dependency check reports it.
+
+## Sockets and permissions
+
+Pass a filesystem path such as `/tmp/circuit-smoke.sock` to the server's
+`--socket`. Pass `ipc:///tmp/circuit-smoke.sock` to the client. Run the image as
+non-root and make `$HOME` and `$HOME/.config/kicad` writable.

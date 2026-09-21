@@ -1,0 +1,174 @@
+name: Publish circuit images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docker/**"
+      - ".dockerignore"
+      - "src/**"
+      - "plugins/circuit/**"
+      - "scripts/smoke_*"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "!docker/image-digests.json"
+      - "!docker/README.md"
+  workflow_dispatch:
+    inputs:
+      skip_tools:
+        description: "tools imageを再buildせずlock済みimageを利用する"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: publish-circuit-images
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: write
+      contents: write
+      packages: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve source revision
+        id: source
+        run: |
+          set -euo pipefail
+          cern_commit=$(git -C libraries/cern-kicad-libs rev-parse HEAD)
+          if [[ ! "$cern_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid CERN commit: $cern_commit" >&2
+            exit 1
+          fi
+          echo "SOURCE_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
+          echo "cern_commit=$cern_commit" >> "$GITHUB_OUTPUT"
+      - name: Build and publish tools
+        id: tools
+        if: inputs.skip_tools != true
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: docker/circuit-tools.Dockerfile
+          build-args: |
+            IMAGE_REVISION=${{ github.sha }}
+            CERN_COMMIT=${{ steps.source.outputs.cern_commit }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/circuit-tools:${{ github.sha }}-tools
+            ghcr.io/${{ github.repository_owner }}/circuit-tools:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Resolve tools digest
+        env:
+          BUILT_DIGEST: ${{ steps.tools.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.skip_tools }}" = true ]; then
+            TOOLS_REF=$(uv run python scripts/print_locked_image.py --entry circuit_tools)
+            uv run python scripts/pull_locked_image.py --entry circuit_tools --record "$RUNNER_TEMP/pull-tools.json"
+            TOOLS_TAG=$(python3 -c 'import json; print(json.load(open("docker/image-digests.json", encoding="utf-8"))["circuit_tools"]["tag"])')
+          else
+            case "$BUILT_DIGEST" in sha256:*) ;; *) echo "invalid tools digest: $BUILT_DIGEST" >&2; exit 1 ;; esac
+            TOOLS_REF="ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-tools@${BUILT_DIGEST}"
+            TOOLS_TAG="${SOURCE_SHA}-tools"
+          fi
+          printf 'TOOLS_REF=%s\nTOOLS_DIGEST=%s\nTOOLS_TAG=%s\n' "$TOOLS_REF" "${TOOLS_REF##*@}" "$TOOLS_TAG" >> "$GITHUB_ENV"
+      - name: Measure published tools
+        env:
+          TOOLS_REF: ${{ env.TOOLS_REF }}
+        run: uv run python scripts/measure_image_tools.py --image-ref "$TOOLS_REF" --out "$RUNNER_TEMP/circuit-tools.json"
+      - name: Verify published tools smoke
+        env:
+          TOOLS_REF: ${{ env.TOOLS_REF }}
+        run: |
+          set -euo pipefail
+          docker pull "$TOOLS_REF"
+          docker run --rm --user circuit -v "$PWD/fixtures/smoke-board:/work:ro" "$TOOLS_REF" python3 /opt/circuit/bin/smoke_kicad11_konnect.py
+      - name: Clone OpenHands SDK
+        run: git clone --depth 1 --branch v1.49.2 https://github.com/OpenHands/software-agent-sdk "$RUNNER_TEMP/sdk"
+      - name: Build and publish server
+        env:
+          SDK_SHA: ${{ github.sha }}
+          CUSTOM_TAGS: latest
+        run: |
+          set -euo pipefail
+          uv run --project "$RUNNER_TEMP/sdk" python \
+            "$RUNNER_TEMP/sdk/openhands-agent-server/openhands/agent_server/docker/build.py" \
+            --base-image "$TOOLS_REF" --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server" \
+            --target source --platforms linux/amd64 --push --sdk-project-root "$RUNNER_TEMP/sdk"
+      - name: Resolve server digest
+        run: |
+          set -euo pipefail
+          SERVER_TAG="${SOURCE_SHA}-latest-source"
+          SERVER_DIGEST=$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' \
+            "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server:${SERVER_TAG}" | tr -d '"')
+          case "$SERVER_DIGEST" in sha256:*) ;; *) echo "invalid server digest: $SERVER_DIGEST" >&2; exit 1 ;; esac
+          printf 'SERVER_TAG=%s\nSERVER_DIGEST=%s\n' "$SERVER_TAG" "$SERVER_DIGEST" >> "$GITHUB_ENV"
+          docker buildx imagetools create --tag "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server:latest" \
+            "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server:${SERVER_TAG}"
+      - name: Measure published server
+        run: |
+          set -euo pipefail
+          uv run python scripts/measure_image_tools.py \
+            --image-ref "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server@${SERVER_DIGEST}" \
+            --out "$RUNNER_TEMP/circuit-server.json"
+      - name: Update digest lock and open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          published_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          workflow_run="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          git fetch origin main
+          git switch -c "bot/update-image-digests-${SERVER_DIGEST#sha256:}" "$(git rev-parse origin/main)"
+          if [ "${{ inputs.skip_tools }}" != true ]; then
+            uv run python scripts/update_image_digest_lock.py --lock docker/image-digests.json \
+              --entry circuit_tools --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-tools" \
+              --tag "$TOOLS_TAG" --digest "$TOOLS_DIGEST" --published-at "$published_at" \
+              --workflow-run "$workflow_run" --dockerfile docker/circuit-tools.Dockerfile \
+              --tools-json "$RUNNER_TEMP/circuit-tools.json"
+          fi
+          uv run python scripts/update_image_digest_lock.py --lock docker/image-digests.json \
+            --entry circuit_server --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/circuit-server" \
+            --tag "$SERVER_TAG" --digest "$SERVER_DIGEST" --published-at "$published_at" \
+            --workflow-run "$workflow_run" --dockerfile sdk:openhands-agent-server/v1.49.2 \
+            --tools-json "$RUNNER_TEMP/circuit-server.json"
+          git add docker/image-digests.json
+          if git diff --cached --quiet -- docker/image-digests.json; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "回路イメージdigest lockを更新"
+          git push --set-upstream origin HEAD
+          pr_url=$(gh pr create --base main --head "$(git branch --show-current)" \
+            --title "回路イメージdigest lockを更新" \
+            --body "Publish workflowでdigest lockを更新しました。${workflow_run}")
+          pr_number="${pr_url##*/}"
+          gh workflow run ci.yml --ref "$(git branch --show-current)" -f base_sha="$(git rev-parse origin/main)"
+          for _ in $(seq 1 120); do
+            run_id=$(gh run list --workflow ci.yml --branch "$(git branch --show-current)" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')
+            [ -n "$run_id" ] && break
+            sleep 5
+          done
+          gh run watch "$run_id"
+          test "$(gh run view "$run_id" --json conclusion --jq .conclusion)" = success
+          gh pr merge "$pr_number" --auto --squash

@@ -1,0 +1,1874 @@
+[
+  {
+    "tool": "add_board_outline",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_board_text",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_bus",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_bus_entry",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_component_annotation",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_copper_pour",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "optional",
+    "note": ""
+  },
+  {
+    "tool": "add_design_rule",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_hierarchical_sheet",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_junction",
+    "category": "schematic",
+    "role": "authoring_conditional",
+    "stage": "schematic",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "add_layer",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_mounting_hole",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "optional",
+    "note": ""
+  },
+  {
+    "tool": "add_net",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_no_connect",
+    "category": "schematic",
+    "role": "authoring_conditional",
+    "stage": "schematic",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "add_power_symbol",
+    "category": "schematic",
+    "role": "authoring_conditional",
+    "stage": "schematic",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "add_schematic_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_schematic_connection",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_schematic_net_label",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_schematic_text",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_sheet_pin",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_via",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_wire",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "add_zone",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "optional",
+    "note": ""
+  },
+  {
+    "tool": "align_components",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "required",
+    "note": ""
+  },
+  {
+    "tool": "annotate_schematic",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "apply_specctra_ses",
+    "category": "pcb",
+    "role": "authoring_conditional",
+    "stage": "layout",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "apply_template",
+    "category": "templates",
+    "role": "authoring_conditional",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "alternative to create_project when a brief matches a template; brief remains authoritative"
+  },
+  {
+    "tool": "assign_net_to_class",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "audit_connections",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "audit_decoupling",
+    "category": "review",
+    "role": "advisory",
+    "stage": "review",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "audit_manufacturing",
+    "category": "review",
+    "role": "advisory",
+    "stage": "review",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "audit_power_rails",
+    "category": "review",
+    "role": "advisory",
+    "stage": "review",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "auto_place_from_schematic",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_add_bus",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_add_junction",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_add_no_connect",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_add_wire",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_connect_pins",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_connect_to_net",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_delete",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_delete_no_connect",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_delete_schematic_components",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_delete_schematic_wire",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_edit_schematic_components",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_get_schematic_pin_locations",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_place_components",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "batch_rotate_labels",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "bulk_move_schematic_components",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "check_bom_health",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "check_clearance",
+    "category": "pcb",
+    "role": "authoring_conditional",
+    "stage": "layout",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "check_freerouting",
+    "category": "pcb",
+    "role": "authoring_conditional",
+    "stage": "layout",
+    "ipc": "unknown",
+    "note": "Requires fixture-specific prerequisites; FreeRouting tools require FreeRouting (Java/Semeru OpenJ9) — deferred."
+  },
+  {
+    "tool": "check_kicad_ui",
+    "category": "verification",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "unknown",
+    "note": "Confirm api-server IPC reachability before live operations."
+  },
+  {
+    "tool": "check_schematic_overlaps",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "compare_visual_baseline",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "connect_passthrough",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "connect_pins",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "connect_pins_to_bus",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "connect_to_net",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "copy_routing_pattern",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "create_footprint",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "create_netclass",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "create_project",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Project lifecycle operation used by the authoring flow."
+  },
+  {
+    "tool": "create_schematic",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "create_symbol",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "delete_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "delete_graphics",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "delete_no_connect",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "delete_schematic_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "delete_schematic_net_label",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "delete_schematic_wire",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "delete_sheet",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "delete_sheet_pin",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "delete_symbol",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "delete_trace",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "download_jlcpcb_database",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "duplicate_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "duplicate_sheet",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "edit_board_footprint_graphic",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "edit_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "edit_footprint_pad",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "edit_schematic_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "edit_sheet",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "edit_sheet_pin",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "enrich_datasheets",
+    "category": "integration",
+    "role": "authoring_conditional",
+    "stage": "intake",
+    "ipc": "unknown",
+    "note": "Requires network access; deferred under the pinned-library policy."
+  },
+  {
+    "tool": "estimate_cost",
+    "category": "review",
+    "role": "advisory",
+    "stage": "review",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "export_3d",
+    "category": "manufacturing",
+    "role": "export_comparison",
+    "stage": "manufacturing",
+    "ipc": "file",
+    "note": "Advisory export; produced artifacts are compared with authoritative exports."
+  },
+  {
+    "tool": "export_bom",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "export_dxf",
+    "category": "manufacturing",
+    "role": "export_comparison",
+    "stage": "manufacturing",
+    "ipc": "file",
+    "note": "Advisory export; produced artifacts are compared with authoritative exports."
+  },
+  {
+    "tool": "export_gencad",
+    "category": "manufacturing",
+    "role": "export_comparison",
+    "stage": "manufacturing",
+    "ipc": "file",
+    "note": "Advisory export; produced artifacts are compared with authoritative exports."
+  },
+  {
+    "tool": "export_gerber",
+    "category": "manufacturing",
+    "role": "export_comparison",
+    "stage": "manufacturing",
+    "ipc": "file",
+    "note": "Advisory export; produced artifacts are compared with authoritative exports."
+  },
+  {
+    "tool": "export_ipc2581",
+    "category": "manufacturing",
+    "role": "export_comparison",
+    "stage": "manufacturing",
+    "ipc": "file",
+    "note": "Advisory export; produced artifacts are compared with authoritative exports."
+  },
+  {
+    "tool": "export_manufacturing_package",
+    "category": "manufacturing",
+    "role": "export_comparison",
+    "stage": "manufacturing",
+    "ipc": "file",
+    "note": "Advisory export; produced artifacts are compared with authoritative exports."
+  },
+  {
+    "tool": "export_netlist",
+    "category": "schematic",
+    "role": "export_comparison",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory export; authoritative kicad-cli exports remain separate."
+  },
+  {
+    "tool": "export_netlist_summary",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "export_odb",
+    "category": "manufacturing",
+    "role": "export_comparison",
+    "stage": "manufacturing",
+    "ipc": "file",
+    "note": "Advisory export; produced artifacts are compared with authoritative exports."
+  },
+  {
+    "tool": "export_pdf",
+    "category": "manufacturing",
+    "role": "export_comparison",
+    "stage": "manufacturing",
+    "ipc": "file",
+    "note": "Advisory export; produced artifacts are compared with authoritative exports."
+  },
+  {
+    "tool": "export_position_file",
+    "category": "manufacturing",
+    "role": "export_comparison",
+    "stage": "manufacturing",
+    "ipc": "file",
+    "note": "Advisory export; produced artifacts are compared with authoritative exports."
+  },
+  {
+    "tool": "export_schematic_pdf",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "export_schematic_svg",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "export_specctra_dsn",
+    "category": "pcb",
+    "role": "authoring_conditional",
+    "stage": "layout",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "export_svg",
+    "category": "manufacturing",
+    "role": "export_comparison",
+    "stage": "manufacturing",
+    "ipc": "file",
+    "note": "Advisory export; produced artifacts are compared with authoritative exports."
+  },
+  {
+    "tool": "find_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "find_orphan_items",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "find_shorted_nets",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "find_single_pin_nets",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "fix_connectivity",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "flip_component",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "generate_netlist",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_active_toolsets",
+    "category": "lifecycle",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Konnect session/toolset lifecycle; not a design verdict."
+  },
+  {
+    "tool": "get_board_2d_view",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "get_board_extents",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "get_board_info",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "optional",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "get_component_list",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "required",
+    "note": ""
+  },
+  {
+    "tool": "get_component_nets",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_component_pads",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_connected_items",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "get_datasheet_url",
+    "category": "integration",
+    "role": "authoring_conditional",
+    "stage": "intake",
+    "ipc": "unknown",
+    "note": "Requires network access; deferred under the pinned-library policy."
+  },
+  {
+    "tool": "get_design_rules",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "get_drc_violations",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "get_editor_selection",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "get_editor_state",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "get_effective_config",
+    "category": "config",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Project configuration."
+  },
+  {
+    "tool": "get_footprint_info",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "get_installation_info",
+    "category": "lifecycle",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Konnect session/toolset lifecycle; not a design verdict."
+  },
+  {
+    "tool": "get_jlcpcb_database_stats",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "get_jlcpcb_part",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "get_layer_list",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "get_net_components",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_net_connections",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_net_connectivity",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_netclasses",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "get_nets_list",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_pad_position",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_pin_connections",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_pin_net_name",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_predefined_sizes",
+    "category": "config",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Project configuration."
+  },
+  {
+    "tool": "get_project_info",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Project lifecycle operation used by the authoring flow."
+  },
+  {
+    "tool": "get_recent_calls",
+    "category": "lifecycle",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Konnect session/toolset lifecycle; not a design verdict."
+  },
+  {
+    "tool": "get_schematic_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_schematic_layout",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "get_schematic_pin_locations",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_schematic_view",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_sheet_hierarchy",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "get_symbol_info",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "get_template",
+    "category": "templates",
+    "role": "advisory",
+    "stage": "intake",
+    "ipc": "file",
+    "note": "reference designs for circuit-brief; never a requirement source"
+  },
+  {
+    "tool": "group_components",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "import_sheet_pins",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "import_svg_logo",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "launch_kicad_ui",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "list_board_footprint_graphics",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "list_design_rules",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "list_footprint_libraries",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "list_library_footprints",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "list_schematic_components",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "list_schematic_labels",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "list_schematic_nets",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "list_schematic_wires",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "list_symbol_libraries",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "list_symbols_in_library",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "list_template_categories",
+    "category": "templates",
+    "role": "advisory",
+    "stage": "intake",
+    "ipc": "file",
+    "note": "reference designs for circuit-brief; never a requirement source"
+  },
+  {
+    "tool": "list_toolboxes",
+    "category": "lifecycle",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Konnect session/toolset lifecycle; not a design verdict."
+  },
+  {
+    "tool": "load_project_config",
+    "category": "config",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Project configuration."
+  },
+  {
+    "tool": "load_toolset",
+    "category": "lifecycle",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Konnect session/toolset lifecycle; not a design verdict."
+  },
+  {
+    "tool": "load_user_config",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "modify_trace",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "move_component",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "move_connected",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "move_labels_by_offset",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "move_region",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "move_schematic_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "move_sheet",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "mutate_editor_selection",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "open_project",
+    "category": "project",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "unknown",
+    "note": "Project lifecycle operation."
+  },
+  {
+    "tool": "open_schematic_viewer",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "place_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "place_component_array",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "place_decoupling_caps",
+    "category": "pcb",
+    "role": "authoring_conditional",
+    "stage": "layout",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "plan_bga_fanout",
+    "category": "pcb",
+    "role": "authoring_conditional",
+    "stage": "layout",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "plan_specctra_ses_import",
+    "category": "pcb",
+    "role": "authoring_conditional",
+    "stage": "layout",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "query_traces",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "required",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "refill_zones",
+    "category": "pcb",
+    "role": "authoring_conditional",
+    "stage": "layout",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "refine_placement_force_directed",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "register_footprint_library",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "register_symbol_library",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "reload_server",
+    "category": "lifecycle",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Konnect session/toolset lifecycle; not a design verdict."
+  },
+  {
+    "tool": "rename_project",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "render_schematic_png",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "renumber_sheet_pages",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "repair_corrupted_footprints",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "replace_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "reset_schematic_field_positions",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "resolve_cross_probe_target",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "resolve_navigation_target",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "rotate_component",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "rotate_schematic_component",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "rotate_schematic_label",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "route_differential_pair",
+    "category": "pcb",
+    "role": "authoring_conditional",
+    "stage": "layout",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "route_pad_to_pad",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "route_specctra_dsn",
+    "category": "pcb",
+    "role": "authoring_conditional",
+    "stage": "layout",
+    "ipc": "unknown",
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+  },
+  {
+    "tool": "route_trace",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "run_design_review",
+    "category": "review",
+    "role": "advisory",
+    "stage": "review",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "run_drc",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "run_erc",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "save_project",
+    "category": "project",
+    "role": "authoring",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Project lifecycle operation used by the authoring flow."
+  },
+  {
+    "tool": "save_project_config",
+    "category": "config",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Project configuration."
+  },
+  {
+    "tool": "save_user_config",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "score_placement",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "search_footprints",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "search_jlcpcb_parts",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "search_symbols",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "search_templates",
+    "category": "templates",
+    "role": "advisory",
+    "stage": "intake",
+    "ipc": "file",
+    "note": "reference designs for circuit-brief; never a requirement source"
+  },
+  {
+    "tool": "server_stats",
+    "category": "lifecycle",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Konnect session/toolset lifecycle; not a design verdict."
+  },
+  {
+    "tool": "set_active_layer",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "set_board_size",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "set_component_placements",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "set_design_rules",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "set_footprint_graphics",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "set_footprint_metadata",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "set_footprint_models",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "set_layer_constraints",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "set_predefined_sizes",
+    "category": "config",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Project configuration."
+  },
+  {
+    "tool": "set_schematic_page",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "set_visual_baseline",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "snapshot_project",
+    "category": "pcb",
+    "role": "advisory",
+    "stage": "layout",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "split_wire_at_point",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "suggest_jlcpcb_alternatives",
+    "category": "excluded",
+    "role": "excluded",
+    "stage": "none",
+    "ipc": "unknown",
+    "note": "GUI-only, external database, user configuration, or destructive operation is excluded."
+  },
+  {
+    "tool": "trace_from_point",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "unload_toolset",
+    "category": "lifecycle",
+    "role": "lifecycle",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Konnect session/toolset lifecycle; not a design verdict."
+  },
+  {
+    "tool": "update_footprints_from_library",
+    "category": "library",
+    "role": "library",
+    "stage": "any",
+    "ipc": "file",
+    "note": "Library operation; preserve pinned provenance and read-only source libraries."
+  },
+  {
+    "tool": "update_pcb_from_schematic",
+    "category": "pcb",
+    "role": "authoring",
+    "stage": "layout",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "update_symbols_from_library",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "validate_component_connections",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "validate_for_manufacturing",
+    "category": "review",
+    "role": "advisory",
+    "stage": "review",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  },
+  {
+    "tool": "validate_sheet_pins",
+    "category": "schematic",
+    "role": "authoring",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": ""
+  },
+  {
+    "tool": "validate_wire_connections",
+    "category": "schematic",
+    "role": "advisory",
+    "stage": "schematic",
+    "ipc": "file",
+    "note": "Advisory only; kicad-cli gate remains authoritative."
+  }
+]

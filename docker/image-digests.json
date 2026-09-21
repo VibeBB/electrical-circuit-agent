@@ -1,0 +1,38 @@
+{
+  "circuit_server": {
+    "digest": "sha256:90cb0feeb4d6b12597046020d1e2fbef85307c3a0e4812161480e628d7a25804",
+    "dockerfile": "sdk:openhands-agent-server/v1.49.2",
+    "image": "ghcr.io/uist1idrju3i/circuit-server",
+    "published_at": "2026-09-21T04:09:51Z",
+    "tag": "24efbe0ba06afddb557d415994491ed312e2d3fc-latest-source",
+    "tools": {
+      "cern_commit": "9dba1850616da7fb1a4834531a3a1f0fff7c8666",
+      "circuit": "0.1.0",
+      "kicad-cli": "10.99.0",
+      "kicad-nightly": "202609190245+6d837080a5~189~ubuntu26.04.1",
+      "kicad-nightly-footprints": "202609171319+1df46f29b~14~ubuntu26.04.1",
+      "kicad-nightly-symbols": "202609181937+a82391d3d~12~ubuntu26.04.1",
+      "konnect": "0.12.1",
+      "python": "Python 3.14.4"
+    },
+    "workflow_run": "https://github.com/uist1idrju3i/circuit-agent/actions/runs/35559440200"
+  },
+  "circuit_tools": {
+    "digest": "sha256:0b721de74bcd6f56dd69245fce6880ccb5fae5bb24bcf9c897b624102c9c9e4f",
+    "dockerfile": "docker/circuit-tools.Dockerfile",
+    "image": "ghcr.io/uist1idrju3i/circuit-tools",
+    "published_at": "2026-09-21T04:09:51Z",
+    "tag": "24efbe0ba06afddb557d415994491ed312e2d3fc-tools",
+    "tools": {
+      "cern_commit": "9dba1850616da7fb1a4834531a3a1f0fff7c8666",
+      "circuit": "0.1.0",
+      "kicad-cli": "10.99.0",
+      "kicad-nightly": "202609190245+6d837080a5~189~ubuntu26.04.1",
+      "kicad-nightly-footprints": "202609171319+1df46f29b~14~ubuntu26.04.1",
+      "kicad-nightly-symbols": "202609181937+a82391d3d~12~ubuntu26.04.1",
+      "konnect": "0.12.1",
+      "python": "Python 3.14.4"
+    },
+    "workflow_run": "https://github.com/uist1idrju3i/circuit-agent/actions/runs/35559440200"
+  }
+}
