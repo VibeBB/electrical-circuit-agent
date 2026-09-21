@@ -39,12 +39,16 @@ determinism, so published digests are locked.
 | `locked-image-check.yml` | Digest-pinned image verification on main push and weekly |
 | `main-ci-failure-issue.yml` | Filing CI/image failure Issues on main and closing them on green |
 | `check-dependency-updates.yml` | Weekly PPA/PyPI/GitHub/CERN/action update report |
+| `workflow-lint.yml` | zizmor static analysis of workflow files |
 
-The only required secret is `GITHUB_TOKEN`. Enable `Allow auto-merge` in the
-repository settings and make `fast` a required check in branch protection. The
-publish workflow publishes `ghcr.io/vibebb/circuit-tools` and
-`ghcr.io/vibebb/circuit-server`, and creates `docker/image-digests.json` for the
-first time via a bot PR. Filling a missing lock with placeholders is forbidden.
+The only required secret is `GITHUB_TOKEN`. Make `fast` a required check in
+branch protection. The publish workflow publishes
+`ghcr.io/vibebb/circuit-tools` and `ghcr.io/vibebb/circuit-server`, and creates
+`docker/image-digests.json` for the first time via a bot PR. Because merges by
+github-actions[bot] do not trigger `push` workflows, the publish workflow
+merges the bot PR only after its dispatched CI gate and the PR's own checks
+pass, then dispatches `ci.yml` and `locked-image-check.yml` on main for the
+merge commit. Filling a missing lock with placeholders is forbidden.
 
 The dependency update report can be checked locally as follows. `--dry-run`
 prints the report to stdout without changing GitHub Issues.

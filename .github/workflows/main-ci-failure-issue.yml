@@ -1,6 +1,8 @@
 name: Main CI failure issue
 
 on:
+  # zizmor: ignore[dangerous-triggers] reads run metadata only; it never checks
+  # out or executes the triggering run's code, so workflow_run is safe here.
   workflow_run:
     workflows: ["CI", "Publish circuit images", "Locked image check"]
     types: [completed]
@@ -17,6 +19,7 @@ concurrency:
 jobs:
   report:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Update tracking issue
         env:
