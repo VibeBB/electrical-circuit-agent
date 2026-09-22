@@ -112,14 +112,43 @@ FAIL.
 
 - Checked on: 2026-09-22
 - Update: v1.49.2 → v1.49.3
-- Primary source: [software-agent-sdk releases](https://github.com/OpenHands/software-agent-sdk/releases)
-- Release notes summary: fixes `LookupSecret` to resolve this server's own
-  lookup URLs in-process and passes MCP OAuth credentials inline on the agent.
-- Reason for adoption: patch-level fixes only; the `fastmcp<4` constraint is
-  unchanged, and the `circuit` SecretRegistry/credential path does not rely on
-  `LookupSecret` self-resolution. No behavior change expected.
-- Note: the server image's `dockerfile` label follows the resolved SDK version
-  automatically (`sdk:openhands-agent-server/v${SDK_VERSION}`).
+- Primary source: [v1.49.3 release](https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.49.3)
+- Release notes summary:
+  - `AgentContext.resolve_auto_skills()` was added and
+    `RemoteWorkspace.load_skills_from_agent_server()` now accepts
+    `base_context=` so remote skill sync preserves the caller's context,
+    including `disabled_skills`.
+  - Responses stream deltas now stamp the output `item_id`.
+  - `deepseek-v4.1-flash` and `nemotron-3-nano-omni-30b-a3b-reasoning` were
+    added to the verified-model list.
+  - Agent-server side: the Docker host gateway is exposed, and MCP OAuth
+    credentials can be passed inline on the agent.
+- Reason for adoption: pin alignment to the latest patch; no public API
+  surface used by this repository changed (no module added or removed in
+  `openhands-sdk`/`openhands-tools`/`openhands-workspace`).
+- Feature evaluation (checked against the plugin boundary):
+  - `inspect_image_with_vision` (VisionInspectTool) inspects only images
+    attached to the latest user message via a saved vision-capable LLM
+    profile; it is adopted for user-attached images only, while workspace
+    renders go through the MCP `ImageContent` / `file_editor view` path
+    (ADR-0013).
+  - `resolve_auto_skills`/`disabled_skills` and
+    `load_skills_from_agent_server` serve remote-workspace skill sync;
+    this repo loads plugin skills locally, so they are not adopted.
+  - Agent Plugins `mcp.json` portable format (root `plugin.json` +
+    `dev.openhands/` layout) would require restructuring the plugin; the
+    Claude Code format remains supported, so migration is deferred.
+  - `switch_llm` lets the agent switch LLM profiles mid-run; sub-agents
+    keep `model: inherit`, so it is not adopted.
+  - `PlanningFileEditorTool` restricts edits to `.agents_tmp/PLAN.md`;
+    circuit-brief writes the real brief file, so it is not adopted.
+  - The agent-server changes arrive via the next `circuit-server` image
+    publish, which derives `sdk_version` from the installed pin and
+    rebuilds on the SDK tag; `docker/image-digests.json` is updated by
+    that bot flow, not by hand.
+  - mcp 2.x remains deferred: v1.49.3 keeps the `fastmcp<4`
+    (`fastmcp-slim: mcp<2.0`) constraint; see
+    `scripts/dependency_update_deferrals.json`.
 
 ## Plugin and tests
 
