@@ -129,8 +129,9 @@ FAIL.
 - Feature evaluation (checked against the plugin boundary):
   - `inspect_image_with_vision` (VisionInspectTool) inspects only images
     attached to the latest user message via a saved vision-capable LLM
-    profile; circuit-review reads workspace PNG renders through files, so
-    it is not adopted.
+    profile; it is adopted for user-attached images only, while workspace
+    renders go through the MCP `ImageContent` / `file_editor view` path
+    (ADR-0013).
   - `resolve_auto_skills`/`disabled_skills` and
     `load_skills_from_agent_server` serve remote-workspace skill sync;
     this repo loads plugin skills locally, so they are not adopted.
@@ -167,6 +168,33 @@ Each sub-agent's frontmatter records the library-protection hook and
 libraries covered by the `circuit-library-guard` skill are read-only; use
 `register_*_library` instead of editing. Slash command `argument-hint`s specify
 input files and export types.
+
+### Advisory visual review
+
+`circuit_render` returns the PNG both as a JSON path and as an MCP
+`ImageContent` block, so a vision-capable model sees the render directly in
+the tool result (`file_editor view` on a PNG works the same way). The SDK
+converts `mcp.types.ImageContent` to `data:` URLs and drops image blocks when
+the model is not vision-capable, so the text result still carries alone.
+`inspect_image_with_vision` (auto-attached when the model is non-vision and a
+vision-capable saved profile exists) only inspects images in the latest user
+message — the path for user-attached board photos or screenshots, not
+workspace renders. A plugin `post_tool_use` hook records each
+`inspect_image_with_vision` call's profile, model, question, and response hash
+to `.openhands/circuit/vision-tool-events.jsonl` for cross-checking. All
+visual evidence is advisory for human judgement (ADR-0012): it must never be
+promoted to an ERC/DRC verdict, and when no vision path is available the
+review records `advisory visual review skipped` and continues.
+
+### Canvas profile scoping
+
+Agent Canvas v1.19+ supports `mcp_server_refs` (an agent profile can restrict
+the MCP servers it exposes) and v1.20 adds profile secret scoping
+(`profile_secret_scope_v1`). These are Canvas-side profile features — useful
+to scope the `circuit` or `konnect` MCP servers to the layout/schematic
+profiles that need them and to give a dedicated vision profile its own API
+key — but they change Canvas profile configuration, not this repository, so
+they are recorded here as configuration options only.
 
 ### Brief intake and library gate
 

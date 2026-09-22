@@ -28,3 +28,5 @@
 | [0010](adr/ADR-0010-brief-intake-provenance-and-library-gate.md) | Brief intake provenance and library gate |
 | [0011](adr/ADR-0011-konnect-advisory-layer-and-coverage-matrix.md) | Konnect advisory layer and coverage matrix |
 | [0012](adr/ADR-0012-kicad-cli-jobset-render-diff.md) | Adoption of kicad-cli jobset, render, and diff |
+| [0013](adr/ADR-0013-advisory-vision-review.md) | Advisory vision review via SDK ImageContent |
+| [0014](adr/ADR-0014-oracle-consult-tools-not-adopted.md) | Oracle and consult tools not adopted |

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -10,7 +11,15 @@ from typing import Any, Literal, cast
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
-from mcp.types import CallToolResult, ServerCapabilities, TextContent, Tool, ToolsCapability
+from mcp.types import (
+    CallToolResult,
+    ContentBlock,
+    ImageContent,
+    ServerCapabilities,
+    TextContent,
+    Tool,
+    ToolsCapability,
+)
 from pydantic import BaseModel
 
 from . import __version__, apiserver, brief, intake, kicad_cli, libraries, netlist, report
@@ -228,6 +237,16 @@ def _optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _image_content(path: Path) -> ImageContent | None:
+    if path.suffix.lower() != ".png" or not path.is_file():
+        return None
+    try:
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError:
+        return None
+    return ImageContent(type="image", data=data, mimeType="image/png")
+
+
 def _load_report(path: Path, *, kind: str, source: Path) -> kicad_cli.Report:
     try:
         with path.open(encoding="utf-8") as handle:
@@ -401,7 +420,12 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
         else:
             raise ValueError(f"unknown tool: {name}")
         value = result.model_dump() if isinstance(result, BaseModel) else result
-        return CallToolResult(content=[TextContent(type="text", text=_json(value))])
+        content: list[ContentBlock] = [TextContent(type="text", text=_json(value))]
+        if name == "circuit_render":
+            image = _image_content(Path(str(args["output_path"])))
+            if image is not None:
+                content.append(image)
+        return CallToolResult(content=content)
     except Exception as exc:
         return CallToolResult(
             content=[TextContent(type="text", text=_json({"error": str(exc)}))],
