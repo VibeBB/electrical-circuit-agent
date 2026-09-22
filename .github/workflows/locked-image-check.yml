@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   check-lock:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       present: ${{ steps.lock.outputs.present }}
@@ -30,7 +30,7 @@ jobs:
   check:
     needs: check-lock
     if: needs.check-lock.outputs.present == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
