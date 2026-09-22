@@ -22,7 +22,8 @@ connections in the saved schematic rather than LLM or Konnect descriptions.
 
 ## Consequences
 
-The connectivity gate, ERC, DRC, and outputs are consolidated into a single
-design report. If any of connectivity, ERC, or DRC was not run or did not pass,
-the design report fails closed. DRC is recorded as evidence of the authoring
-flow; even when connectivity and ERC pass, a DRC failure is not hidden.
+The connectivity gate, the schematic readability lint, ERC, DRC, and outputs
+are consolidated into a single design report. If any of connectivity,
+sch_lint, ERC, or DRC was not run or did not pass, the design report fails
+closed (ADR-0015). DRC is recorded as evidence of the authoring flow; even
+when connectivity and ERC pass, a DRC failure is not hidden.
