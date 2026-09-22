@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths: [".github/**"]
   pull_request:
+    # Digest-lock bot PRs only touch docker/image-digests.json; their queued
+    # (action_required) zizmor runs die at startup with a spurious
+    # "workflow file issue" failure, so skip them.
+    branches-ignore: ["bot/**"]
   merge_group:
   schedule:
     - cron: "0 3 * * 1"
