@@ -76,9 +76,10 @@ FAIL.
 
 ## Updating pins
 
-1. Check the KiCad footprints/symbols versions in the resolute Packages index
-   of the PPA; for the core package, check the download URL and SHA-256 in the
-   Launchpad librarian.
+1. Check the KiCad versions in the resolute Packages index of the PPA; the
+   core, symbols, and footprints packages are all fetched from the Launchpad
+   librarian and pinned by SHA-256, so refresh the download URLs and hashes
+   together.
 2. Update the `KICAD_NIGHTLY_VERSION`, footprints, and symbols pins together
    with `THIRD_PARTY_NOTICES.md` and ADR-0002 in the same change.
 3. Verify the Konnect release asset, commit, SHA-256, and LICENSE against
@@ -187,9 +188,17 @@ Because no fixed core package remains in the PPA index, we use the
 [Launchpad librarian 09-19 build](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609190245+6d837080a5~189~ubuntu26.04.1_amd64.deb)
 `202609190245+6d837080a5~189~ubuntu26.04.1` pinned by SHA-256. On this build ERC
 and netlist export succeed, and the ERC integration test was returned to a
-normal passing test. Since the librarian's retention period is not guaranteed,
-return to the PPA pin once a fixed nightly lands back in the PPA and the
-dependency check reports it.
+normal passing test.
+
+The PPA drops package versions once newer builds publish, which removed the
+pinned `kicad-nightly-symbols` version and broke the image build on
+2026-09-22. The symbols and footprints packages are therefore also fetched
+from the librarian and pinned by SHA-256
+(`202609181937+a82391d3d~12~ubuntu26.04.1` and
+`202609171319+1df46f29b~14~ubuntu26.04.1`), keeping the same verified set while
+making the build independent of PPA retention. Since the librarian's
+retention period is not guaranteed, revisit once a fixed nightly lands back
+in the PPA and the dependency check reports it.
 
 ## Sockets and permissions
 

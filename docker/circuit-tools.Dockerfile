@@ -8,6 +8,10 @@ ARG KICAD_NIGHTLY_FOOTPRINTS_VERSION=202609171319+1df46f29b~14~ubuntu26.04.1
 ARG KICAD_NIGHTLY_SYMBOLS_VERSION=202609181937+a82391d3d~12~ubuntu26.04.1
 ARG KICAD_NIGHTLY_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609190245+6d837080a5~189~ubuntu26.04.1_amd64.deb
 ARG KICAD_NIGHTLY_DEB_SHA256=0300ee4330d7cb07800830cb7196155cca5385aa77b65234e42158b7b701e218
+ARG KICAD_NIGHTLY_SYMBOLS_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly-symbols_202609181937+a82391d3d~12~ubuntu26.04.1_all.deb
+ARG KICAD_NIGHTLY_SYMBOLS_DEB_SHA256=34a615afda0413b046786fd12bcafc684732eef27346f60c85069f9b93c09998
+ARG KICAD_NIGHTLY_FOOTPRINTS_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly-footprints_202609171319+1df46f29b~14~ubuntu26.04.1_all.deb
+ARG KICAD_NIGHTLY_FOOTPRINTS_DEB_SHA256=f0489967798706284d3ce5ff470c2af133614b60166c620621b6a19aceb48492
 ARG KONNECT_VERSION=0.12.1
 ARG KONNECT_SHA256=8a546fc949d11edbb55096a9b1f2c8f9147b26a9916b47a5c4990ee9e9441fb6
 ARG KONNECT_COMMIT=fa62e1ccb9eba359519bf8e3eab53a6cffeee33c
@@ -42,12 +46,20 @@ RUN apt-get update \
         --output /tmp/kicad-nightly.deb \
         "${KICAD_NIGHTLY_DEB_URL}" \
     && echo "${KICAD_NIGHTLY_DEB_SHA256}  /tmp/kicad-nightly.deb" | sha256sum --check \
-    && apt-get install --no-install-recommends -y \
-        "kicad-nightly-footprints=${KICAD_NIGHTLY_FOOTPRINTS_VERSION}" \
-        "kicad-nightly-symbols=${KICAD_NIGHTLY_SYMBOLS_VERSION}" \
+    && curl --fail --location --silent --show-error \
+        --output /tmp/kicad-nightly-symbols.deb \
+        "${KICAD_NIGHTLY_SYMBOLS_DEB_URL}" \
+    && echo "${KICAD_NIGHTLY_SYMBOLS_DEB_SHA256}  /tmp/kicad-nightly-symbols.deb" | sha256sum --check \
+    && curl --fail --location --silent --show-error \
+        --output /tmp/kicad-nightly-footprints.deb \
+        "${KICAD_NIGHTLY_FOOTPRINTS_DEB_URL}" \
+    && echo "${KICAD_NIGHTLY_FOOTPRINTS_DEB_SHA256}  /tmp/kicad-nightly-footprints.deb" | sha256sum --check \
     && cd /tmp \
-    && apt-get install --no-install-recommends -y ./kicad-nightly.deb \
-    && rm -f /tmp/kicad-nightly.deb \
+    && apt-get install --no-install-recommends -y \
+        ./kicad-nightly.deb \
+        ./kicad-nightly-symbols.deb \
+        ./kicad-nightly-footprints.deb \
+    && rm -f /tmp/kicad-nightly*.deb \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/circuit/bin /opt/circuit/libraries \
