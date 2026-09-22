@@ -112,42 +112,14 @@ FAIL.
 
 - Checked on: 2026-09-22
 - Update: v1.49.2 → v1.49.3
-- Primary source: [v1.49.3 release](https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.49.3)
-- Release notes summary:
-  - `AgentContext.resolve_auto_skills()` was added and
-    `RemoteWorkspace.load_skills_from_agent_server()` now accepts
-    `base_context=` so remote skill sync preserves the caller's context,
-    including `disabled_skills`.
-  - Responses stream deltas now stamp the output `item_id`.
-  - `deepseek-v4.1-flash` and `nemotron-3-nano-omni-30b-a3b-reasoning` were
-    added to the verified-model list.
-  - Agent-server side: the Docker host gateway is exposed, and MCP OAuth
-    credentials can be passed inline on the agent.
-- Reason for adoption: pin alignment to the latest patch; no public API
-  surface used by this repository changed (no module added or removed in
-  `openhands-sdk`/`openhands-tools`/`openhands-workspace`).
-- Feature evaluation (checked against the plugin boundary):
-  - `inspect_image_with_vision` (VisionInspectTool) inspects only images
-    attached to the latest user message via a saved vision-capable LLM
-    profile; circuit-review reads workspace PNG renders through files, so
-    it is not adopted.
-  - `resolve_auto_skills`/`disabled_skills` and
-    `load_skills_from_agent_server` serve remote-workspace skill sync;
-    this repo loads plugin skills locally, so they are not adopted.
-  - Agent Plugins `mcp.json` portable format (root `plugin.json` +
-    `dev.openhands/` layout) would require restructuring the plugin; the
-    Claude Code format remains supported, so migration is deferred.
-  - `switch_llm` lets the agent switch LLM profiles mid-run; sub-agents
-    keep `model: inherit`, so it is not adopted.
-  - `PlanningFileEditorTool` restricts edits to `.agents_tmp/PLAN.md`;
-    circuit-brief writes the real brief file, so it is not adopted.
-  - The agent-server changes arrive via the next `circuit-server` image
-    publish, which derives `sdk_version` from the installed pin and
-    rebuilds on the SDK tag; `docker/image-digests.json` is updated by
-    that bot flow, not by hand.
-  - mcp 2.x remains deferred: v1.49.3 keeps the `fastmcp<4`
-    (`fastmcp-slim: mcp<2.0`) constraint; see
-    `scripts/dependency_update_deferrals.json`.
+- Primary source: [software-agent-sdk releases](https://github.com/OpenHands/software-agent-sdk/releases)
+- Release notes summary: fixes `LookupSecret` to resolve this server's own
+  lookup URLs in-process and passes MCP OAuth credentials inline on the agent.
+- Reason for adoption: patch-level fixes only; the `fastmcp<4` constraint is
+  unchanged, and the `circuit` SecretRegistry/credential path does not rely on
+  `LookupSecret` self-resolution. No behavior change expected.
+- Note: the server image's `dockerfile` label follows the resolved SDK version
+  automatically (`sdk:openhands-agent-server/v${SDK_VERSION}`).
 
 ## Plugin and tests
 
@@ -167,6 +139,33 @@ Each sub-agent's frontmatter records the library-protection hook and
 libraries covered by the `circuit-library-guard` skill are read-only; use
 `register_*_library` instead of editing. Slash command `argument-hint`s specify
 input files and export types.
+
+### Advisory visual review
+
+`circuit_render` returns the PNG both as a JSON path and as an MCP
+`ImageContent` block, so a vision-capable model sees the render directly in
+the tool result (`file_editor view` on a PNG works the same way). The SDK
+converts `mcp.types.ImageContent` to `data:` URLs and drops image blocks when
+the model is not vision-capable, so the text result still carries alone.
+`inspect_image_with_vision` (auto-attached when the model is non-vision and a
+vision-capable saved profile exists) only inspects images in the latest user
+message — the path for user-attached board photos or screenshots, not
+workspace renders. A plugin `post_tool_use` hook records each
+`inspect_image_with_vision` call's profile, model, question, and response hash
+to `.openhands/circuit/vision-tool-events.jsonl` for cross-checking. All
+visual evidence is advisory for human judgement (ADR-0012): it must never be
+promoted to an ERC/DRC verdict, and when no vision path is available the
+review records `advisory visual review skipped` and continues.
+
+### Canvas profile scoping
+
+Agent Canvas v1.19+ supports `mcp_server_refs` (an agent profile can restrict
+the MCP servers it exposes) and v1.20 adds profile secret scoping
+(`profile_secret_scope_v1`). These are Canvas-side profile features — useful
+to scope the `circuit` or `konnect` MCP servers to the layout/schematic
+profiles that need them and to give a dedicated vision profile its own API
+key — but they change Canvas profile configuration, not this repository, so
+they are recorded here as configuration options only.
 
 ### Brief intake and library gate
 
