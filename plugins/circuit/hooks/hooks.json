@@ -34,5 +34,17 @@
         }
       ]
     }
+  ],
+  "post_tool_use": [
+    {
+      "matcher": "inspect_image_with_vision",
+      "hooks": [
+        {
+          "type": "command",
+          "name": "record-vision-tool-event",
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_vision_tool_event.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_vision_tool_event.py\""
+        }
+      ]
+    }
   ]
 }

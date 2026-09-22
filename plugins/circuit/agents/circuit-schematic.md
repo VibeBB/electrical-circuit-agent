@@ -52,3 +52,11 @@ Advisory Konnect checks for this stage include `audit_connections`,
 `export_netlist_summary`, dry-run annotation/library-position checks, BOM health and
 exports, `run_erc`, schematic renders, and `snapshot_project`. These are advisory —
 record them in the design report, never promote them to a verdict.
+
+When the model is vision-capable, inspect schematic renders
+(`render_schematic_png`, `export_schematic_svg`, or `get_schematic_view`
+followed by `file_editor view` on the produced PNG) for label overlap,
+ambiguous junction dots, and unreadable hierarchy — advisory only. If no vision
+path is available, note `advisory visual review skipped` and continue. Do not
+alter schematic files based on a vision observation alone; feed findings back
+as advisory evidence for the orchestrator.

@@ -1,11 +1,12 @@
 import asyncio
+import base64
 import os
 from pathlib import Path
 from typing import Any, cast
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.types import TextContent
+from mcp.types import ImageContent, TextContent
 
 from circuit import mcp_server
 
@@ -80,5 +81,81 @@ def test_brief_validate_tool(tmp_path: Path) -> None:
         )
         assert result.isError is False
         assert '"brief_sha256"' in result.content[0].text
+
+    asyncio.run(exercise())
+
+
+def test_render_result_includes_image_content(tmp_path: Path, monkeypatch: Any) -> None:
+    # Smallest valid PNG (1x1 transparent pixel).
+    png_bytes = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c626001000000ffff03000006000557bfabd40000000049"
+        "454e44ae426082"
+    )
+    out_path = tmp_path / "render.png"
+    out_path.write_bytes(png_bytes)
+
+    def fake_render(
+        pcb: Path,
+        out: Path,
+        *,
+        side: str,
+        width: int = 1280,
+        height: int = 720,
+    ) -> Path:
+        return out_path
+
+    monkeypatch.setattr(mcp_server.kicad_cli, "render", fake_render)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_render",
+                {
+                    "board_path": str(tmp_path / "board.kicad_pcb"),
+                    "output_path": str(out_path),
+                    "side": "top",
+                },
+            ),
+        )
+        assert result.isError is False
+        assert isinstance(result.content[0], TextContent)
+        image = result.content[1]
+        assert isinstance(image, ImageContent)
+        assert image.mimeType == "image/png"
+        assert base64.b64decode(image.data) == png_bytes
+
+    asyncio.run(exercise())
+
+
+def test_render_result_text_only_when_png_missing(tmp_path: Path, monkeypatch: Any) -> None:
+    def fake_render(
+        pcb: Path,
+        out: Path,
+        *,
+        side: str,
+        width: int = 1280,
+        height: int = 720,
+    ) -> Path:
+        return tmp_path / "render.png"
+
+    monkeypatch.setattr(mcp_server.kicad_cli, "render", fake_render)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_render",
+                {
+                    "board_path": str(tmp_path / "board.kicad_pcb"),
+                    "output_path": str(tmp_path / "render.png"),
+                    "side": "top",
+                },
+            ),
+        )
+        assert result.isError is False
+        assert len(result.content) == 1
+        assert isinstance(result.content[0], TextContent)
 
     asyncio.run(exercise())
