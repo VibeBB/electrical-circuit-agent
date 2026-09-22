@@ -91,7 +91,15 @@ jobs:
           fi
           echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
           echo "commit=$cern_commit" >> "$GITHUB_OUTPUT"
-      - run: docker build -f docker/circuit-tools.Dockerfile -t circuit-tools:ci --build-arg "CERN_COMMIT=$CERN_COMMIT" .
+      # buildx with the GitHub Actions cache avoids rebuilding the KiCad base
+      # layers on every run; the lock-recorded image stays the publish target.
+      - run: >-
+          docker buildx build --load
+          -f docker/circuit-tools.Dockerfile -t circuit-tools:ci
+          --build-arg "CERN_COMMIT=$CERN_COMMIT"
+          --cache-from type=gha,scope=circuit-tools
+          --cache-to type=gha,mode=max,scope=circuit-tools
+          .
       - run: >-
           docker run --rm
           --user circuit
