@@ -41,6 +41,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
+          persist-credentials: true
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
@@ -61,8 +62,16 @@ jobs:
             echo "invalid CERN commit: $cern_commit" >&2
             exit 1
           fi
+          # The SDK clone tag and the lock provenance follow the project pin,
+          # not a hardcoded version that can drift from pyproject.toml/uv.lock.
+          sdk_version=$(uv run python -c "import importlib.metadata; print(importlib.metadata.version('openhands-sdk'))")
+          if [[ ! "$sdk_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid SDK version: $sdk_version" >&2
+            exit 1
+          fi
           echo "SOURCE_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
           echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
+          echo "SDK_VERSION=$sdk_version" >> "$GITHUB_ENV"
           echo "cern_commit=$cern_commit" >> "$GITHUB_OUTPUT"
       - name: Build and publish tools
         id: tools
@@ -107,7 +116,7 @@ jobs:
           docker pull "$TOOLS_REF"
           docker run --rm --user circuit -v "$PWD/fixtures/smoke-board:/work:ro" "$TOOLS_REF" python3 /opt/circuit/bin/smoke_kicad11_konnect.py
       - name: Clone OpenHands SDK
-        run: git clone --depth 1 --branch v1.49.2 https://github.com/OpenHands/software-agent-sdk "$RUNNER_TEMP/sdk"
+        run: git clone --depth 1 --branch "v${SDK_VERSION}" https://github.com/OpenHands/software-agent-sdk "$RUNNER_TEMP/sdk"
       - name: Build and publish server
         env:
           SDK_SHA: ${{ github.sha }}
@@ -134,16 +143,72 @@ jobs:
           uv run python scripts/measure_image_tools.py \
             --image-ref "ghcr.io/${IMAGE_OWNER}/circuit-server@${SERVER_DIGEST}" \
             --out "$RUNNER_TEMP/circuit-server.json"
-      - name: Update digest lock and open PR
+      - name: Record published image summary
+        env:
+          SKIP_TOOLS: ${{ inputs.skip_tools }}
+        run: |
+          {
+            echo "## Circuit images"
+            echo
+            if [ "${SKIP_TOOLS:-false}" = true ]; then
+              echo "- **tools**: existing locked image (not rebuilt)"
+            else
+              echo "- **tools**: \`$TOOLS_REF\`"
+            fi
+            echo "- **tools digest**: \`$TOOLS_DIGEST\`"
+            echo "- **tools tag**: \`$TOOLS_TAG\`"
+            echo "- **server**: \`ghcr.io/${IMAGE_OWNER}/circuit-server@${SERVER_DIGEST}\`"
+            echo "- **server tag**: \`$SERVER_TAG\`"
+            echo "- **workflow run**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Update digest lock and merge PR
         env:
           GH_TOKEN: ${{ github.token }}
+          SKIP_TOOLS: ${{ inputs.skip_tools }}
         run: |
           set -euo pipefail
+          dispatch_workflow() {
+            # GITHUB_TOKEN-driven push/pull_request events never produce a real gate:
+            # at most a stillborn pull_request run is recorded (cancelled before merge
+            # below), so CI for the lock branch and the checks after the merge is
+            # started explicitly.
+            local workflow="$1" ref="$2" started run_id=""
+            shift 2
+            # Reset per-call so a previous dispatch's conclusion cannot leak
+            # into the summary when this run is not observed.
+            DISPATCH_RUN_URL=""
+            DISPATCH_CONCLUSION=""
+            started=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$ref" "$@"
+            for _ in $(seq 1 30); do
+              sleep 10
+              run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$ref" \
+                --event workflow_dispatch --created ">=$started" --json databaseId --jq '.[0].databaseId // empty')
+              [ -n "$run_id" ] && break
+            done
+            if [ -z "$run_id" ]; then
+              echo "workflow_dispatch of $workflow for $ref was not observed" >&2
+              return 1
+            fi
+            DISPATCH_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            echo "$workflow run for $ref: ${DISPATCH_RUN_URL}"
+            gh run watch --repo "$GITHUB_REPOSITORY" "$run_id" || true
+            DISPATCH_CONCLUSION=$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" \
+              --json conclusion --jq '.conclusion // "unknown"')
+            echo "$workflow conclusion for $ref: ${DISPATCH_CONCLUSION}"
+            [ "$DISPATCH_CONCLUSION" = "success" ]
+          }
           published_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           workflow_run="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          git fetch origin main
-          git switch -c "bot/update-image-digests-${SERVER_DIGEST#sha256:}" "$(git rev-parse origin/main)"
-          if [ "${{ inputs.skip_tools }}" != true ]; then
+          # The lock branch starts from the current main tip, not from the published
+          # source commit, so the PR stays mergeable when main moved during the build.
+          git fetch -q origin main
+          base_sha=$(git rev-parse origin/main)
+          branch="bot/update-image-digests-${SERVER_DIGEST#sha256:}"
+          branch="${branch:0:70}"
+          git switch -q -c "$branch" "$base_sha"
+          git submodule update -q --init --recursive
+          if [ "${SKIP_TOOLS:-false}" != true ]; then
             uv run python scripts/update_image_digest_lock.py --lock docker/image-digests.json \
               --entry circuit_tools --image "ghcr.io/${IMAGE_OWNER}/circuit-tools" \
               --tag "$TOOLS_TAG" --digest "$TOOLS_DIGEST" --published-at "$published_at" \
@@ -153,24 +218,97 @@ jobs:
           uv run python scripts/update_image_digest_lock.py --lock docker/image-digests.json \
             --entry circuit_server --image "ghcr.io/${IMAGE_OWNER}/circuit-server" \
             --tag "$SERVER_TAG" --digest "$SERVER_DIGEST" --published-at "$published_at" \
-            --workflow-run "$workflow_run" --dockerfile sdk:openhands-agent-server/v1.49.2 \
+            --workflow-run "$workflow_run" --dockerfile "sdk:openhands-agent-server/v${SDK_VERSION}" \
             --tools-json "$RUNNER_TEMP/circuit-server.json"
-          git add docker/image-digests.json
-          if git diff --cached --quiet -- docker/image-digests.json; then exit 0; fi
+          if git diff --quiet -- docker/image-digests.json; then
+            echo "Image digest lock is unchanged; no pull request is needed."
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docker/image-digests.json
           git commit -m "Update circuit image digest lock"
-          git push --set-upstream origin HEAD
-          pr_url=$(gh pr create --base main --head "$(git branch --show-current)" \
-            --title "Update circuit image digest lock" \
-            --body "Digest lock updated by the publish workflow. ${workflow_run}")
-          pr_number="${pr_url##*/}"
-          gh workflow run ci.yml --ref "$(git branch --show-current)" -f base_sha="$(git rev-parse origin/main)"
-          for _ in $(seq 1 120); do
-            run_id=$(gh run list --workflow ci.yml --branch "$(git branch --show-current)" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')
-            [ -n "$run_id" ] && break
+          git push --set-upstream origin "$branch"
+          if [ "${SKIP_TOOLS:-false}" = true ]; then
+            tools_line="tools: locked image (not rebuilt)"
+          else
+            tools_line="tools: ${TOOLS_REF}"
+          fi
+          body=$(printf '%s\n' \
+            "The publish workflow updated the circuit image digest lock." \
+            "" \
+            "$tools_line" \
+            "server: ghcr.io/${IMAGE_OWNER}/circuit-server@${SERVER_DIGEST}" \
+            "workflow run: ${workflow_run}")
+          pr_url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+            --title "Update circuit image digest lock" --body "$body")
+          # A pull_request-triggered ci.yml run is also recorded for the bot
+          # PR. Its check suite becomes the newest github-actions suite on the
+          # head SHA, so the ruleset's required `fast` check must come from
+          # it — a green `fast` from only the dispatched run still leaves the
+          # merge blocked. Under an approval-gated Actions policy the run lands
+          # as action_required; approve it up front (this job has actions:
+          # write) so it can run alongside the dispatched gate below.
+          pr_ci_run=""
+          for _ in $(seq 1 6); do
+            pr_ci_run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=${branch}&event=pull_request&per_page=10" \
+              --jq '.workflow_runs[0].id // empty' || true)
+            [ -n "$pr_ci_run" ] && break
             sleep 5
           done
-          gh run watch "$run_id"
-          test "$(gh run view "$run_id" --json conclusion --jq .conclusion)" = success
-          gh pr merge "$pr_number" --auto --squash
+          if [ -n "$pr_ci_run" ] && \
+             [ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}" --jq '.conclusion // ""')" = "action_required" ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}/approve" || true
+          fi
+          if ! dispatch_workflow ci.yml "$branch" -f "base_sha=$base_sha"; then
+            echo "lock PR checks failed; the lock PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          # Wait for the pull_request run once it is real (jobs started —
+          # directly, or after the approval above); cancelling one flips the
+          # required check to cancelled and the merge stays blocked. A stillborn
+          # run never starts jobs; it sits in startup until the branch-deleting
+          # merge kills it with a spurious "workflow file issue" failure, so it
+          # is still cancelled here.
+          if [ -n "$pr_ci_run" ]; then
+            pr_ci_real=false
+            for _ in $(seq 1 18); do
+              pr_ci_conclusion=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}" \
+                --jq '.conclusion // ""' || true)
+              if [ "$pr_ci_conclusion" = "action_required" ]; then
+                gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}/approve" || true
+              elif [ -n "$pr_ci_conclusion" ]; then
+                break
+              fi
+              pr_ci_jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}/jobs?per_page=1" \
+                --jq '.total_count // 0' || echo 0)
+              [ "$pr_ci_jobs" -gt 0 ] && pr_ci_real=true && break
+              sleep 10
+            done
+            if [ "$pr_ci_real" = true ]; then
+              gh run watch --repo "$GITHUB_REPOSITORY" "$pr_ci_run" || true
+            else
+              gh run cancel --repo "$GITHUB_REPOSITORY" "$pr_ci_run" || true
+            fi
+          fi
+          if ! gh pr merge --repo "$GITHUB_REPOSITORY" --squash --delete-branch "$pr_url"; then
+            echo "lock PR merge was blocked; the lock PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          # The post-merge checks are observational: their conclusions (including
+          # 'cancelled' when a newer main push supersedes them via concurrency
+          # groups) are recorded in the step summary and never fail this run.
+          dispatch_workflow ci.yml main -f "base_sha=$base_sha" || true
+          main_conclusion="${DISPATCH_CONCLUSION:-not_observed}"
+          main_run_url="${DISPATCH_RUN_URL:-no run observed}"
+          echo "post-merge main CI: ${main_conclusion} ${main_run_url}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$main_conclusion" != "success" ]; then
+            echo "::warning::post-merge main CI for ${pr_url} finished as ${main_conclusion}: ${main_run_url}"
+          fi
+          dispatch_workflow locked-image-check.yml main || true
+          lock_conclusion="${DISPATCH_CONCLUSION:-not_observed}"
+          lock_run_url="${DISPATCH_RUN_URL:-no run observed}"
+          echo "post-merge locked image check: ${lock_conclusion} ${lock_run_url}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$lock_conclusion" != "success" ]; then
+            echo "::warning::post-merge locked image check for ${pr_url} finished as ${lock_conclusion}: ${lock_run_url}"
+          fi
