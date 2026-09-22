@@ -251,7 +251,7 @@ jobs:
           # write) so it can run alongside the dispatched gate below.
           pr_ci_run=""
           for _ in $(seq 1 6); do
-            pr_ci_run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?branch=${branch}&event=pull_request&per_page=10" \
+            pr_ci_run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=${branch}&event=pull_request&per_page=10" \
               --jq '.workflow_runs[0].id // empty' || true)
             [ -n "$pr_ci_run" ] && break
             sleep 5
