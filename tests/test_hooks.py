@@ -24,6 +24,58 @@ VISION_SCRIPT = (
     / "record_vision_tool_event.py"
 )
 
+PROTECT_SCRIPT = (
+    Path(__file__).parents[1] / "plugins" / "circuit" / "hooks" / "scripts" / "protect_libraries.py"
+)
+
+
+def _run_protect_hook(payload: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(PROTECT_SCRIPT)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_protect_denies_design_file_writes() -> None:
+    for payload in (
+        {
+            "tool_name": "file_editor",
+            "tool_input": {"command": "create", "file_path": "led.kicad_sch"},
+        },
+        {
+            "tool_name": "apply_patch",
+            "tool_input": {"patch": "+++ b/led.kicad_pcb\n"},
+        },
+    ):
+        result = _run_protect_hook(payload)
+        assert result.returncode == 2
+        assert "Konnect" in result.stderr
+
+
+def test_protect_allows_design_file_view_and_terminal() -> None:
+    for payload in (
+        {
+            "tool_name": "file_editor",
+            "tool_input": {"command": "view", "path": "led.kicad_sch"},
+        },
+        {
+            "tool_name": "terminal",
+            "tool_input": {"command": "kicad-cli sch erc led.kicad_sch"},
+        },
+    ):
+        assert _run_protect_hook(payload).returncode == 0
+
+
+def test_protect_denies_library_writes() -> None:
+    payload = {
+        "tool_name": "terminal",
+        "tool_input": {"command": "cp x libraries/cern-kicad-libs/foo"},
+    }
+    assert _run_protect_hook(payload).returncode == 2
+
 
 def _write_report(path: Path, verdict: Literal["pass", "fail"]) -> None:
     report = DesignReport(

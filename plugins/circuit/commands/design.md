@@ -22,9 +22,13 @@ machine-readable design brief and intake sidecar. Call `circuit_brief_validate`,
 failed library report must stop delegation. Create the schematic through Konnect by registering the
 required libraries, looking up every symbol with `get_symbol_info`, placing symbols,
 and using `batch_connect_to_net` net labels. Do not draw pin-to-pin wires across
-components. In Konnect 0.12.1, `save_project` takes `{}`. Call
+components. In Konnect 0.12.1, `save_project` takes `{}`. Schematic files are only
+written by Konnect operations — never by generated scripts or hand-edited
+s-expressions. Run `circuit_sch_lint` on the authored schematic and stop if it
+fails, then call
 `circuit_connectivity_check` and stop if its kicad-cli netlist gate fails, then run
-`circuit_erc`. Start the KiCad api-server, update the PCB, place and route it, save,
+`circuit_erc`. Do not re-run a gate whose inputs have not changed. Start the KiCad
+api-server, update the PCB, place and route it, save,
 run `circuit_drc`, export artifacts, and finish with `circuit_design_report`.
 
 The design report also contains an advisory Konnect section with coverage results and

@@ -11,6 +11,7 @@ from .advisory import AdvisoryResult
 from .brief import DesignBrief, brief_sha256
 from .kicad_cli import DiffReport, JobsetResult, Report
 from .netlist import ConnectivityReport
+from .sch_lint import SchLintReport
 
 
 class DesignReport(BaseModel):
@@ -20,6 +21,7 @@ class DesignReport(BaseModel):
     brief_sha256: str
     kicad_version: str
     connectivity: ConnectivityReport | None
+    sch_lint: SchLintReport | None = None
     erc: Report | None
     drc: Report | None
     exports: dict[str, list[str]]
@@ -41,6 +43,7 @@ def build_design_report(
     erc: Report | None,
     drc: Report | None,
     exports: dict[str, list[str]],
+    sch_lint: SchLintReport | None = None,
     advisory: list[AdvisoryResult] | None = None,
     renders: list[str] | None = None,
     jobset: JobsetResult | None = None,
@@ -50,6 +53,7 @@ def build_design_report(
     reasons: list[str] = []
     gates: list[tuple[str, object | None, bool]] = [
         ("connectivity", connectivity, connectivity is not None and connectivity.verdict == "pass"),
+        ("sch_lint", sch_lint, sch_lint is not None and sch_lint.verdict == "pass"),
         ("erc", erc, erc is not None and erc.verdict == "pass"),
         ("drc", drc, drc is not None and drc.verdict == "pass"),
     ]
@@ -65,6 +69,7 @@ def build_design_report(
         brief_sha256=brief_sha256(brief_path),
         kicad_version=kicad_version,
         connectivity=connectivity,
+        sch_lint=sch_lint,
         erc=erc,
         drc=drc,
         exports=exports,

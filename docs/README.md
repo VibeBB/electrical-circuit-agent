@@ -30,3 +30,4 @@
 | [0012](adr/ADR-0012-kicad-cli-jobset-render-diff.md) | Adoption of kicad-cli jobset, render, and diff |
 | [0013](adr/ADR-0013-advisory-vision-review.md) | Advisory vision review via SDK ImageContent |
 | [0014](adr/ADR-0014-oracle-consult-tools-not-adopted.md) | Oracle and consult tools not adopted |
+| [0015](adr/ADR-0015-konnect-authoring-and-sch-lint-gate.md) | Konnect-only authoring and the schematic readability gate |

@@ -7,6 +7,7 @@ from circuit.kicad_cli import (
     KicadCliError,
     Report,
     diff,
+    erc,
     export,
     export_netlist,
     jobset_run,
@@ -152,6 +153,34 @@ def test_drc_schematic_parity_error_fails(tmp_path: Path) -> None:
         kicad_version="10.99.0",
     )
     assert report.verdict == "fail"
+
+
+def test_erc_reuses_cached_report_for_unchanged_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sch = tmp_path / "a.kicad_sch"
+    sch.write_text("(kicad_sch)", encoding="utf-8")
+    output = tmp_path / "a.erc.json"
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object):
+        calls.append(args)
+        Path(args[args.index("--output") + 1]).write_text(
+            '{"$schema":"https://schemas.kicad.org/erc.v1.json",'
+            '"kicad_version":"10.99.0","sheets":[]}',
+            encoding="utf-8",
+        )
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    monkeypatch.setattr("circuit.kicad_cli.version", lambda: "10.99.0")
+    assert erc(sch, output).verdict == "pass"
+    assert len(calls) == 1
+    assert erc(sch, output).verdict == "pass"
+    assert len(calls) == 1  # unchanged input served from the cache
+    sch.write_text("(kicad_sch) changed", encoding="utf-8")
+    assert erc(sch, output).verdict == "pass"
+    assert len(calls) == 2
 
 
 def test_export_netlist_uses_kicadsexpr_and_requires_output(
@@ -330,5 +359,15 @@ def test_new_export_kinds_build_expected_argv(
     export(kind, source, tmp_path / "out")  # type: ignore[arg-type]
     assert calls
     assert calls[0][0] in {"sch", "pcb"}
-    if kind in {"pcb_pdf", "pcb_svg", "dxf"}:
+    output_arg = Path(calls[0][calls[0].index("--output") + 1])
+    if kind == "sch_svg":
+        # kicad-cli treats -o as a directory for sch svg exports.
+        assert output_arg == tmp_path / "out"
+    elif kind == "sch_pdf":
+        assert output_arg == tmp_path / "out" / "board.pdf"
+    elif kind in {"pcb_svg", "dxf"}:
+        assert output_arg == tmp_path / "out"
+        assert "F.Cu,B.Cu,Edge.Cuts" in calls[0]
+    elif kind == "pcb_pdf":
+        assert output_arg == tmp_path / "out" / "board.pdf"
         assert "F.Cu,B.Cu,Edge.Cuts" in calls[0]
