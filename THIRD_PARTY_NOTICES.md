@@ -55,8 +55,8 @@
 ## OpenHands Software Agent SDK
 
 - ライセンス: MIT
-- package: `openhands-sdk==1.49.2`, `openhands-tools==1.49.2`
-- 取得元: <https://pypi.org/project/openhands-sdk/1.49.2/>
+- package: `openhands-sdk==1.49.3`, `openhands-tools==1.49.3`
+- 取得元: <https://pypi.org/project/openhands-sdk/1.49.3/>
 - 本プロジェクトはSDKを依存関係として利用し、SDKコードをvendorしない。
 
 ## Python runtime dependencies
@@ -66,8 +66,8 @@ tools imageには`uv.lock`のruntime dependencyをインストールします。
 
 - `mcp>=1.29,<2`: MIT、<https://pypi.org/project/mcp/>
 - `pydantic>=2`: MIT、<https://pypi.org/project/pydantic/>
-- `openhands-sdk==1.49.2`: MIT、<https://pypi.org/project/openhands-sdk/1.49.2/>
-- `openhands-tools==1.49.2`: MIT、<https://pypi.org/project/openhands-tools/1.49.2/>
+- `openhands-sdk==1.49.3`: MIT、<https://pypi.org/project/openhands-sdk/1.49.3/>
+- `openhands-tools==1.49.3`: MIT、<https://pypi.org/project/openhands-tools/1.49.3/>
 
 間接依存（anyio、httpx、starlette等）のpinとライセンスは`uv.lock`および各PyPI
 distributionのmetadataに従います。本書は法的助言ではありません。

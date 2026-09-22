@@ -8,7 +8,7 @@
 
 The tools image and the OpenHands agent-server image must be distributed with
 the same KiCad/Konnect/runtime boundary, and verification results must not
-drift due to the mutability of `latest`. The SDK is not vendored; v1.49.2 is
+drift due to the mutability of `latest`. The SDK is not vendored; v1.49.3 is
 fetched in CI and the standard server image build path is used.
 
 ## Decision
@@ -18,7 +18,7 @@ and a `latest` alias. The runtime source of truth is the digest-pinned
 references in `docker/image-digests.json`. After publishing, the tools image is
 pulled and smoke is re-run; the server image is built on top of the tools
 digest with the OpenHands SDK build.py whose version follows the project pin
-(currently v1.49.2). Lock updates are separated into bot PRs. Because
+(currently v1.49.3). Lock updates are separated into bot PRs. Because
 GITHUB_TOKEN events do not start workflows, the publish workflow dispatches
 the lock-branch CI itself and merges the PR synchronously once that run
 succeeds; when the Actions policy lands the bot PR's `pull_request` run as
