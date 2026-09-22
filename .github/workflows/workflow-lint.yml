@@ -5,10 +5,11 @@ on:
     branches: [main]
     paths: [".github/**"]
   pull_request:
-    # Digest-lock bot PRs only touch docker/image-digests.json; their queued
-    # (action_required) zizmor runs die at startup with a spurious
-    # "workflow file issue" failure, so skip them.
-    branches-ignore: ["bot/**"]
+    # Digest-lock bot PRs only touch docker/image-digests.json. Filter at
+    # trigger level so no run is created: a queued (action_required) run
+    # gets killed by the branch-deleting merge with a spurious
+    # "workflow file issue" failure.
+    paths-ignore: ["docker/image-digests.json"]
   merge_group:
   schedule:
     - cron: "0 3 * * 1"
@@ -19,6 +20,9 @@ permissions:
 
 jobs:
   zizmor:
+    # branches/branches-ignore filter the PR's base branch (always main),
+    # not its head, so bot-branch lock PRs are skipped at the job level too.
+    if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'bot/')
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
