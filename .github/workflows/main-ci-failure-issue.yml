@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           gh label create ci-main-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
-            --description "mainのCIまたはimage検証が失敗している" || true
+            --description "mainのCIまたはimage検証が失敗している" --force || true
           issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label ci-main-failure \
             --json number --jq '.[0].number // empty')
           if [ "$CONCLUSION" = success ]; then
