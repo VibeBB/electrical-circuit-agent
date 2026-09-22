@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -69,7 +70,7 @@ def checks() -> list[dict[str, object]]:
         result.append(_check("socket-directory", True, str(API_SOCKET_PATH.parent)))
     except OSError as exc:
         result.append(_check("socket-directory", False, str(exc)))
-    libraries = Path("/opt/circuit/libraries/cern-kicad-libs")
+    libraries = Path(os.environ.get("CIRCUIT_CERN_LIBS", "/opt/circuit/libraries/cern-kicad-libs"))
     result.append(_check("cern-libraries", libraries.is_dir(), str(libraries)))
     return result
 

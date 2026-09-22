@@ -169,6 +169,26 @@ libraries covered by the `circuit-library-guard` skill are read-only; use
 `register_*_library` instead of editing. Slash command `argument-hint`s specify
 input files and export types.
 
+### Plugin isolation on shared hosts
+
+On an agent-server where several plugins are installed, ambient plugin hooks
+from other products fire inside every conversation (their PreToolUse,
+PostToolUse, and Stop hooks have no workspace scoping), which can deny tool
+calls and inject foreign context mid-verification. `plugins: []` in the
+conversation request does not suppress installed plugins. Before running an
+end-to-end design verification on such a host, disable every installed plugin
+except `circuit` (and re-enable them afterwards):
+
+```bash
+curl -X PATCH -H 'Content-Type: application/json' \
+  -d '{"enabled": false}' \
+  "$BASE/api/plugins/installed/<plugin-name>"
+```
+
+List installed plugins with `GET /api/plugins/installed` and verify isolation
+by confirming that hook executions in the conversation events only reference
+the circuit plugin root.
+
 ### Advisory visual review
 
 `circuit_render` returns the PNG both as a JSON path and as an MCP
@@ -185,6 +205,19 @@ to `.openhands/circuit/vision-tool-events.jsonl` for cross-checking. All
 visual evidence is advisory for human judgement (ADR-0012): it must never be
 promoted to an ERC/DRC verdict, and when no vision path is available the
 review records `advisory visual review skipped` and continues.
+
+### Schematic readability lint
+
+`circuit_sch_lint` is a deterministic gate on the authored `.kicad_sch`:
+it flags Reference/Value properties placed more than 30 mm from their symbol
+(`property_far_from_symbol`), positioned items outside the sheet bounds
+(`item_out_of_bounds`), missing property positions, and unparsable files as
+fail-closed errors, and hidden Reference/Value properties as warnings. Because
+symbol property `at` values are absolute sheet coordinates, schematics written
+by hand or by generated scripts tend to place every label at the sheet origin
+— ERC and connectivity cannot detect that defect, this gate can. Run it after
+schematic authoring and before ERC (`python3 -m circuit.sch_lint file.kicad_sch`);
+the design flow treats an error verdict as a stop.
 
 ### Canvas profile scoping
 

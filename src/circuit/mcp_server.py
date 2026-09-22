@@ -22,7 +22,7 @@ from mcp.types import (
 )
 from pydantic import BaseModel
 
-from . import __version__, apiserver, brief, intake, kicad_cli, libraries, netlist, report
+from . import __version__, apiserver, brief, intake, kicad_cli, libraries, netlist, report, sch_lint
 
 server = Server("circuit", version=__version__)
 
@@ -109,6 +109,18 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "output_path": {"type": "string"},
             },
             "required": ["brief_path", "schematic_path", "board_path"],
+        },
+    ),
+    (
+        "circuit_sch_lint",
+        "Lint schematic readability (label placement, bounds)",
+        {
+            "type": "object",
+            "properties": {
+                "schematic_path": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["schematic_path"],
         },
     ),
     (
@@ -345,6 +357,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             board = Path(str(args["board_path"]))
             reports = schematic.parent / "circuit-reports"
             connectivity_path = reports / f"{schematic.stem}.connectivity.json"
+            sch_lint_path = reports / f"{schematic.stem}.sch_lint.json"
             erc_path = reports / f"{schematic.stem}.erc.json"
             drc_path = reports / f"{board.stem}.drc.json"
             connectivity = (
@@ -352,6 +365,13 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                     connectivity_path.read_text(encoding="utf-8")
                 )
                 if connectivity_path.is_file()
+                else None
+            )
+            sch_lint_report = (
+                sch_lint.SchLintReport.model_validate_json(
+                    sch_lint_path.read_text(encoding="utf-8")
+                )
+                if sch_lint_path.is_file()
                 else None
             )
             erc_report = (
@@ -371,6 +391,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                     else "unknown"
                 ),
                 connectivity=connectivity,
+                sch_lint=sch_lint_report,
                 erc=erc_report,
                 drc=drc_report,
                 exports={},
@@ -381,6 +402,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 else reports / f"{schematic.stem}.design-report.json"
             )
             report.write_report(result, output)
+        elif name == "circuit_sch_lint":
+            source = Path(str(args["schematic_path"]))
+            result = sch_lint.lint_file(
+                source, _output_path(source, args.get("output_path"), "sch_lint")
+            )
         elif name == "circuit_erc":
             source = Path(str(args["schematic_path"]))
             result = kicad_cli.erc(source, _output_path(source, args.get("output_path"), "erc"))

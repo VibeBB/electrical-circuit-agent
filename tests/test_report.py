@@ -5,6 +5,7 @@ from circuit.brief import load_brief
 from circuit.kicad_cli import JobsetResult, Report
 from circuit.netlist import check_connectivity, parse_netlist
 from circuit.report import build_design_report, write_report
+from circuit.sch_lint import SchLintReport
 
 ROOT = Path(__file__).parent
 
@@ -20,6 +21,17 @@ def _connectivity():
     )
 
 
+def _sch_lint() -> SchLintReport:
+    return SchLintReport(
+        source=Path("a.kicad_sch"),
+        verdict="pass",
+        errors=0,
+        warnings=0,
+        symbols_checked=1,
+        findings=[],
+    )
+
+
 def test_design_report_is_fail_closed_when_gate_missing(tmp_path: Path) -> None:
     brief_path = ROOT / "data" / "brief_led_loop.json"
     value = build_design_report(
@@ -32,7 +44,11 @@ def test_design_report_is_fail_closed_when_gate_missing(tmp_path: Path) -> None:
         exports={},
     )
     assert value.verdict == "fail"
-    assert value.reasons == ["gate not executed: erc", "gate not executed: drc"]
+    assert value.reasons == [
+        "gate not executed: sch_lint",
+        "gate not executed: erc",
+        "gate not executed: drc",
+    ]
     output = tmp_path / "design-report.json"
     write_report(value, output)
     assert output.exists()
@@ -63,6 +79,7 @@ def test_design_report_passes_only_when_all_gates_pass(tmp_path: Path) -> None:
             drc_path, kind="drc", source=tmp_path / "a.kicad_pcb", kicad_version="10.99.0"
         ),
         exports={"gerbers": ["a.gbr"]},
+        sch_lint=_sch_lint(),
     )
     assert value.verdict == "pass"
 
@@ -98,6 +115,7 @@ def test_advisory_error_does_not_change_gate_verdict(tmp_path: Path) -> None:
             drc_path, kind="drc", source=tmp_path / "a.kicad_pcb", kicad_version="10.99.0"
         ),
         exports={},
+        sch_lint=_sch_lint(),
         advisory=[advisory],
     )
 
@@ -168,6 +186,7 @@ def test_jobset_inconsistency_is_a_deterministic_failure(tmp_path: Path) -> None
             drc_path, kind="drc", source=tmp_path / "a.kicad_pcb", kicad_version="10.99.0"
         ),
         exports={},
+        sch_lint=_sch_lint(),
         jobset=JobsetResult(
             jobset=tmp_path / "jobset.kicad_jobset",
             project=tmp_path / "a.kicad_pro",

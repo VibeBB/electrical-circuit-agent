@@ -16,7 +16,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal, TextIO, cast
 
-from circuit import apiserver, brief, intake, kicad_cli, libraries, netlist, report
+from circuit import apiserver, brief, intake, kicad_cli, libraries, netlist, report, sch_lint
 from circuit.advisory import AdvisoryResult, merge_detail
 from konnect_client import call_tool, notify, request
 
@@ -433,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     process: subprocess.Popen[str] | None = None
     server: subprocess.Popen[str] | None = None
     connectivity: netlist.ConnectivityReport | None = None
+    sch_lint_result: sch_lint.SchLintReport | None = None
     erc_result: kicad_cli.Report | None = None
     drc_result: kicad_cli.Report | None = None
     intake_result: intake.IntakeReport | None = None
@@ -725,6 +726,20 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 )
                 next_id += 1
+
+            sch_lint_result = sch_lint.lint_file(
+                schematic, reports_dir / f"{loaded_brief.name}.sch_lint.json"
+            )
+            _record(
+                log,
+                {
+                    "tool": "circuit.sch_lint.lint_file",
+                    "payload": {"schematic": str(schematic)},
+                    "result": sch_lint_result.model_dump(mode="json"),
+                },
+            )
+            if sch_lint_result.verdict != "pass":
+                raise StepFailure("circuit.sch_lint", sch_lint_result.model_dump_json())
 
             netlist_path = kicad_cli.export_netlist(
                 schematic, reports_dir / f"{loaded_brief.name}.net"
@@ -1295,6 +1310,7 @@ def main(argv: list[str] | None = None) -> int:
             brief_path=args.brief,
             kicad_version=erc_result.kicad_version,
             connectivity=connectivity,
+            sch_lint=sch_lint_result,
             erc=erc_result,
             drc=drc_result,
             exports=exports,

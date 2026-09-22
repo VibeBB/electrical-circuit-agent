@@ -40,7 +40,20 @@ orchestrator. Do not re-negotiate requirements. Validate the brief before author
 Never edit files under
 `libraries/`. Register the required libraries, use `get_symbol_info` before placing
 symbols, and connect each brief net with `batch_connect_to_net` labels. Never draw
-pin-to-pin wires through another component. Konnect analysis is advisory; the
+pin-to-pin wires through another component.
+
+Author the schematic only through Konnect operations
+(`create_schematic`, `register_symbol_library`, `get_symbol_info`,
+`add_schematic_component` / `batch_place_components`, `connect_to_net` /
+`batch_connect_to_net`, `add_schematic_net_label`, `add_wire`, `save_project`).
+Never hand-write `.kicad_sch` s-expressions and never generate scripts that write
+or rewrite the schematic file: symbol property `at` values are absolute sheet
+coordinates computed by KiCad-aware tooling, not offsets you can guess, and
+unparseable or mislabeled schematics waste the run budget. After authoring, run
+`circuit_sch_lint` on the schematic and fix every error-severity finding before
+ERC; do not re-run gates on inputs that have not changed since their last report.
+
+Konnect analysis is advisory; the
 `circuit_connectivity_check` JSON from the kicad-cli netlist is authoritative before
 ERC. Use the circuit MCP server for ERC and report its JSON verdict verbatim. Keep
 source files and generated reports in the requested project. Coordinate board

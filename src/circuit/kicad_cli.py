@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -212,12 +213,52 @@ def _report(kind: Literal["erc", "drc"], source: Path, output: Path) -> Report:
     )
 
 
+def _cache_sidecar(output: Path) -> Path:
+    return output.with_name(output.name + ".src_sha256")
+
+
+def _cached_report(output: Path, *, kind: Literal["erc", "drc"], source: Path) -> Report | None:
+    sidecar = _cache_sidecar(output)
+    if not output.is_file() or not sidecar.is_file():
+        return None
+    try:
+        recorded = sidecar.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if recorded != hashlib.sha256(source.read_bytes()).hexdigest():
+        return None
+    try:
+        with output.open(encoding="utf-8") as handle:
+            data: object = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    kicad_version = cast(dict[str, Any], data).get("kicad_version")
+    if not isinstance(kicad_version, str):
+        return None
+    try:
+        return Report.from_json_file(output, kind=kind, source=source, kicad_version=kicad_version)
+    except KicadCliError:
+        return None
+
+
 def erc(sch: Path, out: Path) -> Report:
-    return _report("erc", sch, out)
+    cached = _cached_report(out, kind="erc", source=sch)
+    if cached is not None:
+        return cached
+    report = _report("erc", sch, out)
+    _cache_sidecar(out).write_text(hashlib.sha256(sch.read_bytes()).hexdigest(), encoding="utf-8")
+    return report
 
 
 def drc(pcb: Path, out: Path) -> Report:
-    return _report("drc", pcb, out)
+    cached = _cached_report(out, kind="drc", source=pcb)
+    if cached is not None:
+        return cached
+    report = _report("drc", pcb, out)
+    _cache_sidecar(out).write_text(hashlib.sha256(pcb.read_bytes()).hexdigest(), encoding="utf-8")
+    return report
 
 
 def export_netlist(sch: Path, out: Path) -> Path:
@@ -297,15 +338,24 @@ def export(kind: ExportKind, source: Path, out_dir: Path) -> list[Path]:
         ]
     elif kind == "step":
         args = ["pcb", "export", "step", "--output", str(out_dir / "board.step"), str(source)]
-    elif kind in {"sch_pdf", "sch_svg"}:
-        export_kind = "pdf" if kind == "sch_pdf" else "svg"
-        suffix = "pdf" if kind == "sch_pdf" else "svg"
+    elif kind == "sch_pdf":
         args = [
             "sch",
             "export",
-            export_kind,
+            "pdf",
             "--output",
-            str(out_dir / f"{source.stem}.{suffix}"),
+            str(out_dir / f"{source.stem}.pdf"),
+            str(source),
+        ]
+    elif kind == "sch_svg":
+        # kicad-cli treats -o as an output directory for svg and writes
+        # <dir>/<stem>.svg inside it.
+        args = [
+            "sch",
+            "export",
+            "svg",
+            "--output",
+            str(out_dir),
             str(source),
         ]
     elif kind in {"pcb_pdf", "pcb_svg", "dxf"}:
@@ -315,6 +365,7 @@ def export(kind: ExportKind, source: Path, out_dir: Path) -> list[Path]:
             "pcb_svg": "--mode-multi",
             "dxf": "--mode-multi",
         }[kind]
+        output = str(out_dir / f"{source.stem}.pdf") if kind == "pcb_pdf" else str(out_dir)
         args = [
             "pcb",
             "export",
@@ -323,7 +374,7 @@ def export(kind: ExportKind, source: Path, out_dir: Path) -> list[Path]:
             "--layers",
             "F.Cu,B.Cu,Edge.Cuts",
             "--output",
-            str(out_dir / "output"),
+            output,
             str(source),
         ]
     elif kind in {"ipc2581", "odb", "gencad", "vrml", "glb"}:
