@@ -20,9 +20,9 @@
 - ライセンス: GPL-3.0-or-later
 - 取得元: <https://ppa.launchpadcontent.net/kicad/kicad-dev-nightly/>
 - package: `kicad-nightly`
-- version: `202609190245+6d837080a5~189~ubuntu26.04.1`
-- package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609190245+6d837080a5~189~ubuntu26.04.1_amd64.deb)
-- package SHA-256: `0300ee4330d7cb07800830cb7196155cca5385aa77b65234e42158b7b701e218`
+- version: `202609210241+6e93fd642e~189~ubuntu26.04.1`
+- package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609210241+6e93fd642e~189~ubuntu26.04.1_amd64.deb)
+- package SHA-256: `ca1c9e940092d606555e745c827c2b73e941249dbed9adb13a5afdc6c138bb19`
 - 実行ファイル: `/usr/lib/kicad-nightly/bin/kicad-cli`
 
 ## KiCad公式 symbol / footprint libraries
@@ -34,7 +34,7 @@
 - package: `kicad-nightly-symbols`,
   `kicad-nightly-footprints`
 - version:
-  - symbols `202609181937+a82391d3d~12~ubuntu26.04.1`
+  - symbols `202609211218+422f3fe0e~12~ubuntu26.04.1`
   - footprints `202609171319+1df46f29b~14~ubuntu26.04.1`
 
 ## CERN KiCad libraries

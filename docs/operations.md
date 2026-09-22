@@ -196,9 +196,15 @@ pinned `kicad-nightly-symbols` version and broke the image build on
 from the librarian and pinned by SHA-256
 (`202609181937+a82391d3d~12~ubuntu26.04.1` and
 `202609171319+1df46f29b~14~ubuntu26.04.1`), keeping the same verified set while
-making the build independent of PPA retention. Since the librarian's
-retention period is not guaranteed, revisit once a fixed nightly lands back
-in the PPA and the dependency check reports it.
+making the build independent of PPA retention.
+
+On 2026-09-22 the pins moved to the fixed 09-21 core
+`202609210241+6e93fd642e~189~ubuntu26.04.1` and symbols
+`202609211218+422f3fe0e~12~ubuntu26.04.1` (footprints unchanged). The 09-21
+build contains the `7e4fac2d` revert; `kicad-cli sch erc` and the docker
+integration tests were verified passing on the built image before the update.
+The librarian + SHA-256 mechanism stays in place so the build does not depend
+on PPA retention.
 
 ## Sockets and permissions
 

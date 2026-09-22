@@ -12,10 +12,9 @@ headless API server.
 
 ## Decision
 
-Use Ubuntu 26.04 as the base image and pin the footprints/symbols from
-`ppa:kicad/kicad-dev-nightly` together with the
-`202609190245+6d837080a5~189~ubuntu26.04.1` core package obtained from the
-Launchpad librarian. Start `kicad-cli api-server` per `.kicad_pcb`; no GUI or
+Use Ubuntu 26.04 as the base image and pin all three packages (core,
+symbols, footprints) to Launchpad librarian downloads verified by SHA-256;
+see the addenda for the currently pinned versions. Start `kicad-cli api-server` per `.kicad_pcb`; no GUI or
 Xvfb is used. The CLI `--socket` takes a path; the client environment variable
 takes an `ipc://` URL.
 
@@ -51,3 +50,14 @@ the Launchpad librarian `202609190245+6d837080a5~189~ubuntu26.04.1` pinned by
 SHA-256. ERC and netlist export succeed on this build. Since the librarian's
 retention period is not guaranteed, we return to the PPA pin once a fixed
 nightly lands back in the PPA and the dependency check reports it.
+
+### Addendum: 2026-09-22 pin update to the fixed 09-21 build
+
+The resolute package `202609210241+6e93fd642e~189~ubuntu26.04.1` contains the
+`7e4fac2d` revert, and `kicad-cli sch erc` plus the docker integration tests
+pass on it, so the pins moved forward to that build. The symbols and
+footprints packages also moved to librarian + SHA-256 downloads
+(`202609211218+422f3fe0e~12~ubuntu26.04.1` and
+`202609171319+1df46f29b~14~ubuntu26.04.1`), making the build independent of
+PPA retention — the mechanism that broke on 2026-09-22 when the PPA dropped
+the previously pinned symbols version.
