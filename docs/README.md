@@ -34,3 +34,4 @@
 | [0015](adr/ADR-0015-konnect-authoring-and-sch-lint-gate.md) | Konnect-only authoring and the schematic readability gate |
 | [0016](adr/ADR-0016-extended-render-surface-and-konnect-image-materialization.md) | Extended render surface and Konnect image materialization |
 | [0017](adr/ADR-0017-intake-attachment-materialization-and-evidence-binding.md) | Intake attachment materialization and evidence binding |
+| [0018](adr/ADR-0018-structured-visual-review-records.md) | Structured visual review records and image-observation provenance |

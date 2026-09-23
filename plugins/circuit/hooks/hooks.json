@@ -59,6 +59,16 @@
   ],
   "post_tool_use": [
     {
+      "matcher": "circuit_render|circuit_diff|file_editor",
+      "hooks": [
+        {
+          "type": "command",
+          "name": "record-image-observation",
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_image_observation.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_image_observation.py\""
+        }
+      ]
+    },
+    {
       "matcher": "inspect_image_with_vision",
       "hooks": [
         {

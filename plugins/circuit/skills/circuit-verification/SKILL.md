@@ -24,3 +24,14 @@ deterministic gates. Supported exports are `gerbers`, `drill`, `pos`,
 `bom`, `netlist`, `pdf-sch`, `step`, `sch_pdf`, `sch_svg`, `pcb_pdf`, `pcb_svg`,
 `dxf`, `ipc2581`, `odb`, `gencad`, `vrml`, `glb`, and `fp_svg`
 (footprint-library directory to per-footprint SVG).
+
+A vision-capable review records each inspected image as a
+`circuit-reports/review-visual-<slug>.advisory.json` with `tool: "vision_review"`
+and `detail` `{image_path, image_sha256, model, checklist, findings}` —
+`checklist` is the artifact kind (`board_top|board_bottom|board_side|
+board_isometric|board_layers|schematic|footprint`) and each finding is
+`{category, severity (error|warning|info), note, bbox?}` — see
+`src/circuit/advisory.py` `VisualReviewDetail` for the contract. Findings stay
+advisory; `circuit_render`/`circuit_diff`/`file_editor view` image
+observations are provenance-logged to
+`.openhands/circuit/image-observations.jsonl`.

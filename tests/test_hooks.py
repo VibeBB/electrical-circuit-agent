@@ -464,3 +464,100 @@ def test_intake_attachments_uses_session_default_path(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert list((workdir / "intake" / "attachments").glob("*.png"))
+
+
+OBSERVE_SCRIPT = (
+    Path(__file__).parents[1]
+    / "plugins"
+    / "circuit"
+    / "hooks"
+    / "scripts"
+    / "record_image_observation.py"
+)
+
+
+def _run_observe_hook(payload: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(OBSERVE_SCRIPT)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _observations(tmp_path: Path) -> list[dict[str, Any]]:
+    path = tmp_path / ".openhands" / "circuit" / "image-observations.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_record_image_observation_logs_render_paths(tmp_path: Path) -> None:
+    image = tmp_path / "circuit-reports" / "render-top.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    payload = {
+        "working_dir": str(tmp_path),
+        "tool_name": "circuit_render",
+        "tool_input": {"board_path": "b.kicad_pcb"},
+        "tool_response": {
+            "content": [
+                {"type": "text", "text": json.dumps({"output_path": str(image)})},
+                {"type": "image", "data": "...", "mimeType": "image/png"},
+            ]
+        },
+        "session_id": "s1",
+    }
+
+    assert _run_observe_hook(payload).returncode == 0
+    records = _observations(tmp_path)
+    assert len(records) == 1
+    assert records[0]["tool_name"] == "circuit_render"
+    assert records[0]["image_path"] == str(image)
+    assert records[0]["image_sha256"] == hashlib.sha256(_PNG).hexdigest()
+    assert records[0]["session_id"] == "s1"
+
+
+def test_record_image_observation_logs_file_editor_view(tmp_path: Path) -> None:
+    image = tmp_path / "renders" / "board.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    payload = {
+        "working_dir": str(tmp_path),
+        "tool_name": "file_editor",
+        "tool_input": {"command": "view", "path": str(image)},
+        "tool_response": {"output": "ok"},
+    }
+
+    assert _run_observe_hook(payload).returncode == 0
+    records = _observations(tmp_path)
+    assert len(records) == 1
+    assert records[0]["image_sha256"] == hashlib.sha256(_PNG).hexdigest()
+
+
+def test_record_image_observation_skips_non_image_and_errors(tmp_path: Path) -> None:
+    for payload in (
+        {
+            "working_dir": str(tmp_path),
+            "tool_name": "file_editor",
+            "tool_input": {"command": "create", "path": str(tmp_path / "a.png")},
+            "tool_response": {"output": "ok"},
+        },
+        {
+            "working_dir": str(tmp_path),
+            "tool_name": "circuit_render",
+            "tool_input": {},
+            "tool_response": {"error": "kicad-cli missing"},
+        },
+        {
+            "working_dir": str(tmp_path),
+            "tool_name": "circuit_render",
+            "tool_input": {},
+            "tool_response": {
+                "content": [{"type": "text", "text": '{"output_path": "/no/such.png"}'}]
+            },
+        },
+    ):
+        assert _run_observe_hook(payload).returncode == 0
+    assert _observations(tmp_path) == []
