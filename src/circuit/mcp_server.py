@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import shlex
@@ -155,22 +156,87 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
     ),
     (
         "circuit_render",
-        "Render a PCB for visual review",
+        "Render board or schematic views for visual review; board3d writes one "
+        "PNG/JPEG to output_path, schematic and layers kinds plot PNG pages "
+        "into output_dir and attach up to 4 images inline",
         {
             "type": "object",
             "properties": {
-                "board_path": {"type": "string"},
-                "output_path": {"type": "string"},
-                "side": {"type": "string", "enum": ["top", "bottom"]},
+                "kind": {
+                    "type": "string",
+                    "enum": ["board3d", "schematic", "layers"],
+                    "default": "board3d",
+                },
+                "board_path": {
+                    "type": "string",
+                    "description": "input .kicad_pcb (board3d, layers)",
+                },
+                "schematic_path": {
+                    "type": "string",
+                    "description": "input .kicad_sch (schematic)",
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "image file path (board3d)",
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "PNG output directory (schematic, layers)",
+                },
+                "side": {
+                    "type": "string",
+                    "enum": ["top", "bottom", "left", "right", "front", "back"],
+                    "default": "top",
+                },
                 "width": {"type": "integer", "default": 1280},
                 "height": {"type": "integer", "default": 720},
+                "rotate": {
+                    "type": "string",
+                    "description": "camera rotation 'X,Y,Z' degrees, e.g. '-45,0,45'",
+                },
+                "zoom": {"type": "number"},
+                "pan": {"type": "string", "description": "camera pan 'X,Y,Z'"},
+                "pivot": {
+                    "type": "string",
+                    "description": "pivot point in cm from board center, 'X,Y,Z'",
+                },
+                "perspective": {"type": "boolean"},
+                "floor": {"type": "boolean"},
+                "background": {
+                    "type": "string",
+                    "enum": ["default", "transparent", "opaque"],
+                },
+                "quality": {
+                    "type": "string",
+                    "enum": ["basic", "high", "user", "job_settings"],
+                },
+                "pages": {
+                    "type": "string",
+                    "description": "schematic page list, e.g. '1,3'",
+                },
+                "black_and_white": {"type": "boolean"},
+                "exclude_drawing_sheet": {"type": "boolean"},
+                "dpi": {"type": "integer", "default": 300},
+                "layers": {
+                    "type": "string",
+                    "description": "comma-separated layer names, e.g. 'F.Cu,F.Fab,Edge.Cuts'",
+                },
+                "common_layers": {
+                    "type": "string",
+                    "description": "layers drawn on every plot, e.g. 'Edge.Cuts'",
+                },
+                "mirror": {"type": "boolean"},
+                "scale": {"type": "integer", "description": "plot scale; 0 = autoscale"},
+                "sketch_pads_on_fab_layers": {"type": "boolean"},
+                "sketch_pad_numbers": {"type": "boolean"},
+                "include_border_title": {"type": "boolean"},
+                "theme": {"type": "string"},
             },
-            "required": ["board_path", "output_path", "side"],
         },
     ),
     (
         "circuit_diff",
-        "Compare two KiCad schematic or PCB files",
+        "Compare two KiCad schematic or PCB files; png/svg formats produce a visual diff artifact",
         {
             "type": "object",
             "properties": {
@@ -178,6 +244,11 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "left_path": {"type": "string"},
                 "right_path": {"type": "string"},
                 "output_path": {"type": "string"},
+                "format": {
+                    "type": "string",
+                    "enum": ["json", "png", "svg"],
+                    "default": "json",
+                },
             },
             "required": ["kind", "left_path", "right_path", "output_path"],
         },
@@ -221,9 +292,14 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                         "gencad",
                         "vrml",
                         "glb",
+                        "fp_svg",
                     ],
                 },
-                "source_path": {"type": "string"},
+                "source_path": {
+                    "type": "string",
+                    "description": "KiCad source path; for fp_svg a footprint "
+                    "library directory containing .kicad_mod files",
+                },
                 "output_dir": {"type": "string"},
             },
             "required": ["kind", "source_path", "output_dir"],
@@ -280,14 +356,26 @@ def _optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _required_string(args: dict[str, Any], name: str, context: str) -> str:
+    value = args.get(name)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{context} requires '{name}'")
+    return value
+
+
+_IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+_MAX_INLINE_IMAGES = 4
+
+
 def _image_content(path: Path) -> ImageContent | None:
-    if path.suffix.lower() != ".png" or not path.is_file():
+    mime = _IMAGE_MIME.get(path.suffix.lower())
+    if mime is None or not path.is_file():
         return None
     try:
         data = base64.b64encode(path.read_bytes()).decode("ascii")
     except OSError:
         return None
-    return ImageContent(type="image", data=data, mimeType="image/png")
+    return ImageContent(type="image", data=data, mimeType=mime)
 
 
 def _load_report(path: Path, *, kind: str, source: Path) -> kicad_cli.Report:
@@ -362,7 +450,11 @@ def _collect_advisory(directories: list[Path]) -> list[AdvisoryResult]:
 
 
 def _collect_renders(directories: list[Path]) -> list[str]:
-    return [str(path) for directory in directories for path in sorted(directory.glob("*.png"))]
+    renders: list[str] = []
+    for directory in directories:
+        for pattern in ("*.png", "*.jpg", "*.jpeg"):
+            renders.extend(str(path) for path in sorted(directory.glob(pattern)))
+    return renders
 
 
 def _collect_diffs(directories: list[Path]) -> dict[str, kicad_cli.DiffReport]:
@@ -403,6 +495,67 @@ def _jobset_consistent(
     return all(checks) if checks else None
 
 
+_BASE64_MIN_LENGTH = 1024
+
+
+def _konnect_image_dir() -> Path:
+    override = os.environ.get("CIRCUIT_KONNECT_IMAGE_DIR")
+    if override:
+        return Path(override)
+    return Path.cwd() / "circuit-reports" / "konnect-images"
+
+
+def _decode_image_payload(value: str) -> tuple[bytes, str] | None:
+    candidate = value
+    if candidate.startswith("data:"):
+        prefix, separator, candidate = candidate.partition(",")
+        if not separator or not prefix.startswith("data:image/"):
+            return None
+    if len(candidate) < _BASE64_MIN_LENGTH:
+        return None
+    try:
+        data = base64.b64decode(candidate, validate=True)
+    except ValueError:
+        return None
+    if data.startswith(b"\x89PNG"):
+        return data, ".png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return data, ".jpg"
+    return None
+
+
+def _rewrite_base64_images(value: Any, image_dir: Path, counter: list[int]) -> Any:
+    if isinstance(value, str):
+        decoded = _decode_image_payload(value)
+        if decoded is None:
+            return value
+        data, suffix = decoded
+        image_dir.mkdir(parents=True, exist_ok=True)
+        counter[0] += 1
+        path = image_dir / f"{counter[0]:03d}{suffix}"
+        path.write_bytes(data)
+        return {
+            "image_path": str(path),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    if isinstance(value, dict):
+        return {
+            key: _rewrite_base64_images(item, image_dir, counter)
+            for key, item in cast(dict[str, Any], value).items()
+        }
+    if isinstance(value, list):
+        return [_rewrite_base64_images(item, image_dir, counter) for item in cast(list[Any], value)]
+    return value
+
+
+def _rewrite_text_block_images(text: str, image_dir: Path, counter: list[int]) -> str:
+    try:
+        parsed: object = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    return json.dumps(_rewrite_base64_images(parsed, image_dir, counter), ensure_ascii=False)
+
+
 async def _konnect_call(
     tool: str,
     arguments: dict[str, Any],
@@ -415,13 +568,23 @@ async def _konnect_call(
         "KICAD_API_SOCKET": socket or os.environ.get("KICAD_API_SOCKET") or KONNECT_SOCKET_URL,
     }
     params = StdioServerParameters(command=command[0], args=command[1:], env=env)
+    counter = [0]
+    image_dir = _konnect_image_dir()
     async with (
         stdio_client(params) as (read_stream, write_stream),
         ClientSession(read_stream, write_stream) as session,
     ):
         await session.initialize()
         if ops is None:
-            return await session.call_tool(tool, arguments)
+            result = await session.call_tool(tool, arguments)
+            for index, block in enumerate(result.content):
+                text = getattr(block, "text", None)
+                if text is not None:
+                    result.content[index] = TextContent(
+                        type="text",
+                        text=_rewrite_text_block_images(text, image_dir, counter),
+                    )
+            return result
         results: list[dict[str, Any]] = []
         for op in ops:
             op_tool = str(op.get("tool", ""))
@@ -432,14 +595,20 @@ async def _konnect_call(
                 else {}
             )
             op_result = await session.call_tool(op_tool, op_arguments)
+            content: list[Any] = []
+            for block in op_result.content:
+                text = getattr(block, "text", None)
+                if text is not None:
+                    content.append(_rewrite_text_block_images(text, image_dir, counter))
+                else:
+                    content.append(
+                        _rewrite_base64_images(block.model_dump(mode="json"), image_dir, counter)
+                    )
             results.append(
                 {
                     "tool": op_tool,
                     "isError": bool(op_result.isError),
-                    "content": [
-                        getattr(block, "text", None) or block.model_dump(mode="json")
-                        for block in op_result.content
-                    ],
+                    "content": content,
                 }
             )
         return CallToolResult(
@@ -459,6 +628,7 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResult:
     args = arguments or {}
+    image_paths: list[Path] = []
     try:
         if name == "circuit_api_server_start":
             result = apiserver.start(Path(str(args["board_path"])))
@@ -590,20 +760,84 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             source = Path(str(args["board_path"]))
             result = kicad_cli.drc(source, _output_path(source, args.get("output_path"), "drc"))
         elif name == "circuit_render":
-            result = kicad_cli.render(
-                Path(str(args["board_path"])),
-                Path(str(args["output_path"])),
-                side=cast(Literal["top", "bottom"], str(args["side"])),
-                width=int(args.get("width", 1280)),
-                height=int(args.get("height", 720)),
-            )
+            render_kind = str(args.get("kind", "board3d"))
+            if render_kind == "board3d":
+                background_arg = _optional_string(args.get("background"))
+                quality_arg = _optional_string(args.get("quality"))
+                zoom_arg = args.get("zoom")
+                result = str(
+                    kicad_cli.render(
+                        Path(_required_string(args, "board_path", "kind 'board3d'")),
+                        Path(_required_string(args, "output_path", "kind 'board3d'")),
+                        side=cast(kicad_cli.CameraSide, str(args.get("side", "top"))),
+                        width=int(args.get("width", 1280)),
+                        height=int(args.get("height", 720)),
+                        rotate=_optional_string(args.get("rotate")),
+                        zoom=float(cast(float, zoom_arg)) if zoom_arg is not None else None,
+                        pan=_optional_string(args.get("pan")),
+                        pivot=_optional_string(args.get("pivot")),
+                        perspective=bool(args.get("perspective", False)),
+                        floor=bool(args.get("floor", False)),
+                        background=(
+                            cast(kicad_cli.RenderBackground, background_arg)
+                            if background_arg
+                            else None
+                        ),
+                        quality=(
+                            cast(kicad_cli.RenderQuality, quality_arg) if quality_arg else None
+                        ),
+                    )
+                )
+                image_paths = [Path(str(result))]
+            elif render_kind == "schematic":
+                images = kicad_cli.render_schematic(
+                    Path(_required_string(args, "schematic_path", "kind 'schematic'")),
+                    Path(_required_string(args, "output_dir", "kind 'schematic'")),
+                    pages=_optional_string(args.get("pages")),
+                    dpi=int(args.get("dpi", 300)),
+                    black_and_white=bool(args.get("black_and_white", False)),
+                    exclude_drawing_sheet=bool(args.get("exclude_drawing_sheet", False)),
+                    theme=_optional_string(args.get("theme")),
+                )
+                result = {
+                    "output_dir": str(Path(str(args["output_dir"]))),
+                    "images": [str(path) for path in images],
+                }
+                image_paths = images
+            elif render_kind == "layers":
+                scale_arg = args.get("scale")
+                images = kicad_cli.render_layers(
+                    Path(_required_string(args, "board_path", "kind 'layers'")),
+                    Path(_required_string(args, "output_dir", "kind 'layers'")),
+                    layers=_required_string(args, "layers", "kind 'layers'"),
+                    common_layers=_optional_string(args.get("common_layers")),
+                    mirror=bool(args.get("mirror", False)),
+                    scale=int(cast(int, scale_arg)) if scale_arg is not None else None,
+                    sketch_pads_on_fab_layers=bool(args.get("sketch_pads_on_fab_layers", False)),
+                    sketch_pad_numbers=bool(args.get("sketch_pad_numbers", False)),
+                    black_and_white=bool(args.get("black_and_white", False)),
+                    include_border_title=bool(args.get("include_border_title", False)),
+                    dpi=int(args.get("dpi", 300)),
+                    theme=_optional_string(args.get("theme")),
+                )
+                result = {
+                    "output_dir": str(Path(str(args["output_dir"]))),
+                    "images": [str(path) for path in images],
+                }
+                image_paths = images
+            else:
+                raise ValueError(f"unknown circuit_render kind: {render_kind}")
         elif name == "circuit_diff":
+            diff_format = cast(kicad_cli.DiffFormat, str(args.get("format", "json")))
             result = kicad_cli.diff(
                 cast(Literal["sch", "pcb"], str(args["kind"])),
                 Path(str(args["left_path"])),
                 Path(str(args["right_path"])),
                 Path(str(args["output_path"])),
+                format=diff_format,
             )
+            if diff_format == "png":
+                image_paths = [Path(str(args["output_path"]))]
         elif name == "circuit_jobset_run":
             jobset_arg = args.get("jobset_path")
             project = Path(str(args["project_path"]))
@@ -650,8 +884,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             raise ValueError(f"unknown tool: {name}")
         value = result.model_dump() if isinstance(result, BaseModel) else result
         content: list[ContentBlock] = [TextContent(type="text", text=_json(value))]
-        if name == "circuit_render":
-            image = _image_content(Path(str(args["output_path"])))
+        for image_path in image_paths[:_MAX_INLINE_IMAGES]:
+            image = _image_content(image_path)
             if image is not None:
                 content.append(image)
         return CallToolResult(content=content)

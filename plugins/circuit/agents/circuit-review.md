@@ -51,7 +51,10 @@ advisory — record each outcome as a
 `circuit-reports/review-<slug>.advisory.json` file following the AdvisoryResult
 contract (`tool`, `stage`="review", `status`, `summary`, `artifacts`, `detail`),
 never promote them to a verdict.
-The review may also inspect PNGs from `circuit_render` and JSON from `circuit_diff`.
+The review may also inspect PNGs from `circuit_render` — `kind: board3d` camera
+views (top/bottom, side elevations, isometric `rotate`), `kind: schematic` page
+plots, `kind: layers` per-layer plots — plus a `format: png` visual diff and the
+JSON change list from `circuit_diff`.
 Visual and diff evidence is advisory for human judgement and must not alter the
 deterministic verdict.
 

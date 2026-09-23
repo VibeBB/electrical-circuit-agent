@@ -274,6 +274,18 @@ visual evidence is advisory for human judgement (ADR-0012): it must never be
 promoted to an ERC/DRC verdict, and when no vision path is available the
 review records `advisory visual review skipped` and continues.
 
+`circuit_render` covers three kinds (ADR-0016): `board3d` (`pcb render`
+camera — six orthographic `side` views, `rotate`/`pan`/`pivot`, `zoom`,
+`perspective`, `floor`, `background`, `quality`), `schematic` (`sch export
+png`, per-page PNGs), and `layers` (`pcb export png`, per-layer PNGs); up to
+four images per call are attached as `ImageContent`. `circuit_diff` accepts
+`format: png|svg` for a visual diff. `circuit_export` kind `fp_svg` plots
+each `.kicad_mod` in a footprint library directory to SVG. Base64 image
+payloads inside `circuit_konnect_call` results are written to
+`$CIRCUIT_KONNECT_IMAGE_DIR` (default `circuit-reports/konnect-images/`) and
+replaced by `{"image_path", "sha256"}` provenance records — the Konnect
+binary itself stays unmodified.
+
 ### Schematic readability lint
 
 `circuit_sch_lint` is a deterministic gate on the authored `.kicad_sch`:

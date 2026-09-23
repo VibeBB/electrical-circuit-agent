@@ -32,3 +32,4 @@
 | [0013](adr/ADR-0013-advisory-vision-review.md) | Advisory vision review via SDK ImageContent |
 | [0014](adr/ADR-0014-oracle-consult-tools-not-adopted.md) | Oracle and consult tools not adopted |
 | [0015](adr/ADR-0015-konnect-authoring-and-sch-lint-gate.md) | Konnect-only authoring and the schematic readability gate |
+| [0016](adr/ADR-0016-extended-render-surface-and-konnect-image-materialization.md) | Extended render surface and Konnect image materialization |
