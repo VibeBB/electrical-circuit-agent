@@ -1,5 +1,5 @@
 {
-  "brief_sha256": "a449cd792e34ddf5e453c73b85fa4264250276f449acf823eb51dc30d07b2205",
+  "brief_sha256": "c613b10f8db70a3f4be00db14942ed853f8272e4b82e86241ad2028821bd971b",
   "requirements": [
     {
       "id": "R1",
@@ -29,13 +29,26 @@
   ],
   "open_questions": [],
   "part_sources": {
-    "J1": ["R2"],
-    "R1": ["R1", "R3"],
-    "D1": ["R1"]
+    "J1": [
+      "R2"
+    ],
+    "R1": [
+      "R1",
+      "R3"
+    ],
+    "D1": [
+      "R1"
+    ]
   },
   "net_sources": {
-    "VIN": ["R2"],
-    "LED_A": ["R1"],
-    "GND": ["R2"]
+    "VIN": [
+      "R2"
+    ],
+    "LED_A": [
+      "R1"
+    ],
+    "GND": [
+      "R2"
+    ]
   }
 }

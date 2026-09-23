@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "system": "circuit",
+  "connectors": [
+    {
+      "ref": "J1",
+      "family_hint": "JST XH",
+      "housing": "B4B-XH-A",
+      "rated_current_a": 3.0,
+      "rated_voltage_v": 250.0,
+      "cavities": ["1", "2", "3", "4"]
+    },
+    {
+      "ref": "J2",
+      "family_hint": "JST XH",
+      "housing": "B2B-XH-A",
+      "rated_current_a": 3.0,
+      "rated_voltage_v": 250.0,
+      "cavities": ["1", "2"]
+    }
+  ],
+  "nets": [
+    {
+      "ref": "VCC",
+      "signal_class": "power",
+      "voltage_v": 12.0,
+      "current_a": 1.5
+    },
+    {
+      "ref": "GND",
+      "signal_class": "ground",
+      "voltage_v": 0.0,
+      "current_a": 1.5
+    },
+    {
+      "ref": "SDA",
+      "signal_class": "data",
+      "voltage_v": 3.3,
+      "current_a": 0.05
+    }
+  ]
+}

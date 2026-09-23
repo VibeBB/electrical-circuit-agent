@@ -31,6 +31,8 @@ from . import (
     __version__,
     apiserver,
     brief,
+    connectivity,
+    doctor,
     intake,
     kicad_cli,
     libraries,
@@ -115,6 +117,24 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
             },
             "required": ["brief_path", "schematic_path"],
         },
+    ),
+    (
+        "circuit_connectivity_export",
+        "Emit the wire-agent ConnectivitySource contract (*.connectivity.json)",
+        {
+            "type": "object",
+            "properties": {
+                "brief_path": {"type": "string"},
+                "netlist_path": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["brief_path"],
+        },
+    ),
+    (
+        "circuit_doctor",
+        "Report circuit environment diagnostics",
+        {"type": "object", "properties": {}},
     ),
     (
         "circuit_design_report",
@@ -741,15 +761,43 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             brief_path = Path(str(args["brief_path"]))
             source = Path(str(args["schematic_path"]))
             netlist_path = kicad_cli.export_netlist(source, _netlist_path(source, None))
-            connectivity = netlist.check_connectivity(
+            connectivity_report = netlist.check_connectivity(
                 brief.load_brief(brief_path),
                 netlist.parse_netlist(netlist_path),
                 brief_path=brief_path,
                 netlist_path=netlist_path,
             )
             output = _output_path(source, args.get("output_path"), "connectivity")
-            output.write_text(connectivity.model_dump_json(indent=2), encoding="utf-8")
-            result = connectivity
+            output.write_text(connectivity_report.model_dump_json(indent=2), encoding="utf-8")
+            result = connectivity_report
+        elif name == "circuit_connectivity_export":
+            brief_path = Path(str(args["brief_path"]))
+            design = brief.load_brief(brief_path)
+            parsed_netlist = (
+                netlist.parse_netlist(Path(str(args["netlist_path"])))
+                if args.get("netlist_path")
+                else None
+            )
+            output = _output_path(
+                brief_path,
+                _optional_string(args.get("output_path")),
+                "connectivity-source",
+            )
+            connectivity.write_connectivity(design, output, parsed_netlist)
+            payload = connectivity.connectivity_source(design, parsed_netlist)
+            result = {
+                "verdict": "pass",
+                "design": design.name,
+                "connectors": [item["ref"] for item in payload["connectors"]],
+                "nets": [item["ref"] for item in payload["nets"]],
+                "out": str(output),
+            }
+        elif name == "circuit_doctor":
+            checks = doctor.checks()
+            result = {
+                "status": "ok" if all(item["status"] != "fail" for item in checks) else "fail",
+                "checks": checks,
+            }
         elif name == "circuit_design_report":
             brief_path = Path(str(args["brief_path"]))
             schematic = Path(str(args["schematic_path"]))
@@ -759,7 +807,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             sch_lint_path = reports / f"{schematic.stem}.sch_lint.json"
             erc_path = reports / f"{schematic.stem}.erc.json"
             drc_path = reports / f"{board.stem}.drc.json"
-            connectivity = (
+            connectivity_report = (
                 netlist.ConnectivityReport.model_validate_json(
                     connectivity_path.read_text(encoding="utf-8")
                 )
@@ -791,7 +839,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                     if drc_report is not None
                     else "unknown"
                 ),
-                connectivity=connectivity,
+                connectivity=connectivity_report,
                 sch_lint=sch_lint_report,
                 erc=erc_report,
                 drc=drc_report,

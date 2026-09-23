@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -19,6 +19,9 @@ class Placement(BaseModel):
     rotation_deg: float = 0.0
 
 
+SIGNAL_CLASSES = ("power", "ground", "signal", "analog", "data", "highspeed", "shield")
+
+
 class Part(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -26,6 +29,10 @@ class Part(BaseModel):
     lib_id: str
     footprint: str
     value: str | None = None
+    connector: bool = False
+    housing: str | None = None
+    rated_current_a: float | None = Field(default=None, gt=0)
+    rated_voltage_v: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_library_ids(self) -> Part:
@@ -41,6 +48,11 @@ class Net(BaseModel):
 
     name: str = Field(pattern=r"^[A-Za-z0-9_+\-./]+$")
     pins: list[str] = Field(min_length=2)
+    signal_class: (
+        Literal["power", "ground", "signal", "analog", "data", "highspeed", "shield"] | None
+    ) = None
+    voltage_v: float = Field(default=0.0, ge=0)
+    current_a: float = Field(default=0.0, ge=0)
 
 
 class Board(BaseModel):
