@@ -1,0 +1,5 @@
+# The GitHub-hosted ubuntu-26.04 runner is newer than actionlint's bundled
+# label table; declare it so runner-label checks still catch real typos.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

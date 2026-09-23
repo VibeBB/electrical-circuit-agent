@@ -8,6 +8,11 @@ on:
       - ".dockerignore"
       - "src/**"
       - "plugins/circuit/**"
+      - "scripts/e2e_authoring.py"
+      - "scripts/measure_image_tools.py"
+      - "scripts/print_locked_image.py"
+      - "scripts/pull_locked_image.py"
+      - "scripts/update_image_digest_lock.py"
       - "scripts/smoke_*"
       - "pyproject.toml"
       - "uv.lock"
@@ -33,10 +38,10 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 120
     permissions:
-      actions: write
-      contents: write
-      packages: write
-      pull-requests: write
+      actions: write # approve gated runs and dispatch ci/lock checks on branches and main
+      contents: write # push the digest-lock branch
+      packages: write # push images to GHCR
+      pull-requests: write # open, close, and merge digest-lock PRs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,9 +74,11 @@ jobs:
             echo "invalid SDK version: $sdk_version" >&2
             exit 1
           fi
-          echo "SOURCE_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
-          echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
-          echo "SDK_VERSION=$sdk_version" >> "$GITHUB_ENV"
+          {
+            echo "SOURCE_SHA=${GITHUB_SHA}"
+            echo "CERN_COMMIT=$cern_commit"
+            echo "SDK_VERSION=$sdk_version"
+          } >> "$GITHUB_ENV"
           echo "cern_commit=$cern_commit" >> "$GITHUB_OUTPUT"
       - name: Build and publish tools
         id: tools
@@ -88,7 +95,7 @@ jobs:
             ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
             ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true
       - name: Resolve tools digest
         env:
           BUILT_DIGEST: ${{ steps.tools.outputs.digest }}
@@ -121,6 +128,10 @@ jobs:
         env:
           SDK_SHA: ${{ github.sha }}
           CUSTOM_TAGS: latest
+          # Arm the upstream registry cache export: without it the
+          # cache-from buildcache-*-main ref 404s on every publish and each
+          # server build runs cold.
+          OPENHANDS_BUILDKIT_CACHE_MODE: max
         run: |
           set -euo pipefail
           uv run --project "$RUNNER_TEMP/sdk" python \
@@ -216,6 +227,29 @@ jobs:
             DISPATCH_CONCLUSION="${DISPATCH_CONCLUSION:-unknown}"
             echo "$workflow conclusion for $ref: ${DISPATCH_CONCLUSION}"
             [ "$DISPATCH_CONCLUSION" = "success" ]
+          }
+          dispatch_and_forget() {
+            # Post-merge checks are fire-and-forget: main-ci-failure-issue
+            # watches every completed main run and files the tracking
+            # issue, so this job only records the dispatched run URL and
+            # returns without waiting for the conclusion.
+            local workflow="$1" ref="$2" started run_id=""
+            shift 2
+            DISPATCH_RUN_URL=""
+            started=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            retry gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$ref" "$@"
+            for _ in $(seq 1 30); do
+              sleep 10
+              run_id=$(retry gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$ref" \
+                --event workflow_dispatch --created ">=$started" --json databaseId --jq '.[0].databaseId // empty' || true)
+              [ -n "$run_id" ] && break
+            done
+            if [ -z "$run_id" ]; then
+              echo "workflow_dispatch of $workflow for $ref was not observed" >&2
+              return 1
+            fi
+            DISPATCH_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            echo "$workflow run for $ref: ${DISPATCH_RUN_URL}"
           }
           published_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           workflow_run="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
@@ -318,7 +352,14 @@ jobs:
             if [ "$pr_ci_real" = true ]; then
               gh run watch --repo "$GITHUB_REPOSITORY" "$pr_ci_run" --interval 30 || true
             else
-              retry gh run cancel --repo "$GITHUB_REPOSITORY" "$pr_ci_run" || true
+              # Cancelling an already-completed run errors; retrying that
+              # error burns ~2.5min. Check status first and keep the retry
+              # only for runs that are genuinely still in progress.
+              pr_ci_status=$(retry gh run view --repo "$GITHUB_REPOSITORY" "$pr_ci_run" \
+                --json status --jq '.status // empty' || true)
+              if [ "$pr_ci_status" != "completed" ]; then
+                retry gh run cancel --repo "$GITHUB_REPOSITORY" "$pr_ci_run" || true
+              fi
             fi
           fi
           # --auto arms auto-merge so required checks that are still
@@ -341,20 +382,14 @@ jobs:
             echo "auto-merge is armed on $pr_url but the merge did not land within the wait; post-merge checks skipped" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # The post-merge checks are observational: their conclusions (including
-          # 'cancelled' when a newer main push supersedes them via concurrency
-          # groups) are recorded in the step summary and never fail this run.
-          dispatch_workflow ci.yml main -f "base_sha=$base_sha" || true
-          main_conclusion="${DISPATCH_CONCLUSION:-not_observed}"
+          # The post-merge checks are fire-and-forget: this job dispatches
+          # them on main, records their run URLs, and finishes. Completion
+          # is delegated to main-ci-failure-issue, which watches every
+          # completed main run and files the tracking issue on failures.
+          dispatch_and_forget ci.yml main -f "base_sha=$base_sha" || true
           main_run_url="${DISPATCH_RUN_URL:-no run observed}"
-          echo "post-merge main CI: ${main_conclusion} ${main_run_url}" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$main_conclusion" != "success" ]; then
-            echo "::warning::post-merge main CI for ${pr_url} finished as ${main_conclusion}: ${main_run_url}"
-          fi
-          dispatch_workflow locked-image-check.yml main || true
-          lock_conclusion="${DISPATCH_CONCLUSION:-not_observed}"
+          echo "post-merge main CI dispatched: ${main_run_url}" >> "$GITHUB_STEP_SUMMARY"
+          dispatch_and_forget locked-image-check.yml main || true
           lock_run_url="${DISPATCH_RUN_URL:-no run observed}"
-          echo "post-merge locked image check: ${lock_conclusion} ${lock_run_url}" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$lock_conclusion" != "success" ]; then
-            echo "::warning::post-merge locked image check for ${pr_url} finished as ${lock_conclusion}: ${lock_run_url}"
-          fi
+          echo "post-merge locked image check dispatched: ${lock_run_url}" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::post-merge verification for ${pr_url} is delegated to main-ci-failure-issue: ${main_run_url} ${lock_run_url}"

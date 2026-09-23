@@ -2,12 +2,11 @@ name: Check dependency updates
 
 on:
   schedule:
-    - cron: "0 0 * * 1"
+    - cron: "0 2 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: check-dependency-updates
@@ -17,6 +16,9 @@ jobs:
   check:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    permissions:
+      contents: read # check out the dependency update scripts
+      issues: write # update the "Dependency update check report" Issue
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

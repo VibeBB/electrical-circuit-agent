@@ -22,7 +22,7 @@ from konnect_client import call_tool, notify, request
 
 # Cold-start toolset loads can exceed the default 30s MCP timeout while
 # Konnect brings the KiCad session up; keep them on a longer budget.
-LOAD_TOOLSET_TIMEOUT = 120.0
+LOAD_TOOLSET_TIMEOUT = 180.0
 
 TOOLSETS = [
     "project",
@@ -377,6 +377,7 @@ def _start_konnect(
                 "capabilities": {},
                 "clientInfo": {"name": "circuit-e2e-authoring", "version": "0.1"},
             },
+            LOAD_TOOLSET_TIMEOUT,
         )
         response = raw_response
         _record(log, {"method": "initialize", "payload": {}, "result": summarize(response)})
@@ -384,14 +385,28 @@ def _start_konnect(
         notify(process, "notifications/initialized")
         _record(log, {"method": "notifications/initialized", "payload": {}})
         for toolset in TOOLSETS:
-            _, next_id = _call(
-                process,
-                next_id,
-                "load_toolset",
-                {"name": toolset},
-                log,
-                LOAD_TOOLSET_TIMEOUT,
-            )
+            try:
+                _, next_id = _call(
+                    process,
+                    next_id,
+                    "load_toolset",
+                    {"name": toolset},
+                    log,
+                    LOAD_TOOLSET_TIMEOUT,
+                )
+            except StepFailure as exc:
+                if "timeout waiting for MCP response" not in str(exc):
+                    raise
+                # A cold KiCad session can overrun even the long budget once;
+                # retry the same toolset on a fresh message id before failing.
+                _, next_id = _call(
+                    process,
+                    next_id + 1,
+                    "load_toolset",
+                    {"name": toolset},
+                    log,
+                    LOAD_TOOLSET_TIMEOUT,
+                )
         return process, next_id
     except Exception:
         process.kill()
