@@ -61,3 +61,12 @@ footprints packages also moved to librarian + SHA-256 downloads
 `202609171319+1df46f29b~14~ubuntu26.04.1`), making the build independent of
 PPA retention — the mechanism that broke on 2026-09-22 when the PPA dropped
 the previously pinned symbols version.
+
+### Addendum: 2026-09-23 pin update to the 09-23 build
+
+The pins moved to the 09-23 core `202609230242+3f88267300~189~ubuntu26.04.1`,
+symbols `202609221218+1565b6644~12~ubuntu26.04.1`, and footprints
+`202609222017+55d9dd1a3~14~ubuntu26.04.1`, all fetched from the Launchpad
+librarian and pinned by SHA-256. The `_cvpcb.kiface` ERC failure was re-tested
+on the built image: `kicad-cli sch erc` and the docker integration tests pass,
+so the update was adopted.

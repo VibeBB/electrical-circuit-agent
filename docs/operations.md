@@ -24,7 +24,7 @@ docker run --rm \
 The image contains the KiCad nightly PPA, the Konnect release, and the CERN
 submodule. The CERN commit is recorded in
 `/opt/circuit/libraries/cern-kicad-libs.commit` and the OCI label
-`circuit.cern.commit`. Because the SDK v1.49.3 server image build requires
+`circuit.cern.commit`. Because the SDK v1.49.4 server image build requires
 root-privileged apt/useradd on the base image, the tools image's default user is
 root. For standalone runs specify `--user circuit`; in the server image use the
 `openhands` user created by the SDK. Docker itself does not guarantee
@@ -147,6 +147,30 @@ FAIL.
     rebuilds on the SDK tag; `docker/image-digests.json` is updated by
     that bot flow, not by hand.
   - mcp 2.x remains deferred: v1.49.3 keeps the `fastmcp<4`
+    (`fastmcp-slim: mcp<2.0`) constraint; see
+    `scripts/dependency_update_deferrals.json`.
+
+### OpenHands SDK v1.49.4 adoption record
+
+- Checked on: 2026-09-23
+- Update: v1.49.3 → v1.49.4
+- Primary source: [v1.49.4 release](https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.49.4)
+- Release notes summary:
+  - `openhands-sdk` now resolves this server's own `LookupSecret` URLs
+    in-process (#5026), and deleting the active ACP profile resets
+    `agent_settings` (#5205).
+  - Dependency bumps: `agent-client-protocol` to `>=0.12.1,<0.13.0` and
+    `joserfc` to `>=1.7.5`.
+- Reason for adoption: pin alignment to the latest patch; no public API
+  surface used by this repository changed (no module added or removed in
+  `openhands-sdk`/`openhands-tools`/`openhands-workspace`).
+- Feature evaluation (checked against the plugin boundary):
+  - The `LookupSecret` in-process resolution and the ACP profile reset are
+    agent-server side fixes; they arrive via the next `circuit-server` image
+    publish, which derives `sdk_version` from the installed pin and rebuilds
+    on the SDK tag; `docker/image-digests.json` is updated by that bot flow,
+    not by hand.
+  - mcp 2.x remains deferred: v1.49.4 keeps the `fastmcp<4`
     (`fastmcp-slim: mcp<2.0`) constraint; see
     `scripts/dependency_update_deferrals.json`.
 
@@ -337,6 +361,14 @@ build contains the `7e4fac2d` revert; `kicad-cli sch erc` and the docker
 integration tests were verified passing on the built image before the update.
 The librarian + SHA-256 mechanism stays in place so the build does not depend
 on PPA retention.
+
+On 2026-09-23 the pins moved to the 09-23 core
+`202609230242+3f88267300~189~ubuntu26.04.1`, symbols
+`202609221218+1565b6644~12~ubuntu26.04.1`, and footprints
+`202609222017+55d9dd1a3~14~ubuntu26.04.1`. The `_cvpcb.kiface` ERC failure was
+re-tested on the built image: `kicad-cli sch erc` and the docker integration
+tests pass, so the update was adopted. The librarian + SHA-256 mechanism stays
+in place.
 
 ## Sockets and permissions
 
