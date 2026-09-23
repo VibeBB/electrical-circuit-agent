@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: Zizmor
         env:
           # GH_TOKEN enables zizmor's online audits (advisory DB lookups,
@@ -40,3 +40,10 @@ jobs:
         if: always()
         with:
           sarif_file: results.sarif
+      - name: Fail on zizmor findings
+        # The SARIF run always exits 0 so findings can be uploaded; the
+        # plain-format run exits non-zero when findings exist, which makes
+        # them gate this check.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uvx zizmor@1.30.1 --format plain .github/workflows
