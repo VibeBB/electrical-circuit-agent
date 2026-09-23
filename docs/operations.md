@@ -286,6 +286,21 @@ payloads inside `circuit_konnect_call` results are written to
 replaced by `{"image_path", "sha256"}` provenance records — the Konnect
 binary itself stays unmodified.
 
+### Intake attachments and evidence binding
+
+User-attached images are materialized to `<workspace>/intake/attachments/`
+by the `intake-attachments` hook (session_start, user_prompt_submit, stop;
+ADR-0017). The hook scans the agent-canvas event store
+`~/.openhands/agent-canvas/dev_conversations/<session_id>/events/` —
+override with `$CIRCUIT_AGENT_EVENTS_DIR` — decodes each `data:` image to
+`<sha256[:12]>.<ext>`, and appends provenance to `manifest.jsonl`; the
+output dir is overridable via `$CIRCUIT_INTAKE_ATTACHMENTS_DIR`. When the
+events directory is unreachable (remote runtimes) the hook exits quietly
+and the fallback is dropping files into `intake/` manually. `Assumption`
+and `OpenQuestion` records may bind such a file with an `evidence` field
+(`kind`, `path`, `sha256`, `note`); `check_intake` verifies existence and
+hash — fail-closed.
+
 ### Schematic readability lint
 
 `circuit_sch_lint` is a deterministic gate on the authored `.kicad_sch`:
