@@ -89,9 +89,38 @@ def checks() -> list[dict[str, object]]:
         result.append(_check("socket-directory", True, str(API_SOCKET_PATH.parent)))
     except OSError as exc:
         result.append(_check("socket-directory", False, str(exc)))
-    libraries = Path(os.environ.get("CIRCUIT_CERN_LIBS", "/opt/circuit/libraries/cern-kicad-libs"))
-    result.append(_check("cern-libraries", libraries.is_dir(), str(libraries)))
+    candidates = _cern_library_candidates()
+    found = next((p for p in candidates if _has_cern_libraries(p)), None)
+    detail = (
+        str(found)
+        if found is not None
+        else "not found (searched: " + ", ".join(str(p) for p in candidates) + ")"
+    )
+    result.append(_check("cern-libraries", found is not None, detail))
     return result
+
+
+def _has_cern_libraries(path: Path) -> bool:
+    return (path / "SchLib").is_dir() and (path / "PcbLib").is_dir()
+
+
+def _cern_library_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    env = os.environ.get("CIRCUIT_CERN_LIBS")
+    if env:
+        candidates.append(Path(env))
+    candidates.append(Path("/opt/circuit/libraries/cern-kicad-libs"))
+    home = Path.home()
+    candidates.append(home / "opt/circuit/libraries/cern-kicad-libs")
+    candidates.extend(
+        sorted(
+            home.glob(
+                ".openhands/cache/extensions/electrical-circuit-agent-*/"
+                "libraries/cern-kicad-libs"
+            )
+        )
+    )
+    return candidates
 
 
 def main() -> int:

@@ -41,6 +41,50 @@ def test_doctor_honors_circuit_cern_libs_env(monkeypatch: MonkeyPatch, tmp_path:
     assert item["status"] == "ok"
 
 
+def test_doctor_cern_libraries_falls_back_to_home_opt(monkeypatch: MonkeyPatch) -> None:
+    def available(_name: str) -> str:
+        return "/usr/bin/tool"
+
+    def fake_run(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    expected = Path.home() / "opt/circuit/libraries/cern-kicad-libs"
+    monkeypatch.delenv("CIRCUIT_CERN_LIBS", raising=False)
+    monkeypatch.setattr(doctor.shutil, "which", available)
+    monkeypatch.setattr(doctor, "version", lambda: "10.99.0")
+    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
+
+    def is_dir(self: Path) -> bool:
+        return str(self).startswith(str(expected))
+
+    monkeypatch.setattr(doctor.Path, "is_dir", is_dir)
+    monkeypatch.setattr(doctor.Path, "glob", lambda *_args: iter(()))
+    result = doctor.checks()
+    item = next(i for i in result if i["name"] == "cern-libraries")
+    assert item["status"] == "ok"
+    assert item["detail"] == str(expected)
+
+
+def test_doctor_cern_libraries_reports_searched_paths(monkeypatch: MonkeyPatch) -> None:
+    def available(_name: str) -> str:
+        return "/usr/bin/tool"
+
+    def fake_run(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.delenv("CIRCUIT_CERN_LIBS", raising=False)
+    monkeypatch.setattr(doctor.shutil, "which", available)
+    monkeypatch.setattr(doctor, "version", lambda: "10.99.0")
+    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
+    monkeypatch.setattr(doctor.Path, "is_dir", lambda _self: False)
+    monkeypatch.setattr(doctor.Path, "glob", lambda *_args: iter(()))
+    result = doctor.checks()
+    item = next(i for i in result if i["name"] == "cern-libraries")
+    assert item["status"] == "fail"
+    assert "searched" in item["detail"]
+    assert "/opt/circuit/libraries/cern-kicad-libs" in item["detail"]
+
+
 def test_doctor_passes_with_available_tools(monkeypatch: MonkeyPatch) -> None:
     def available(_name: str) -> str:
         return "/usr/bin/tool"
