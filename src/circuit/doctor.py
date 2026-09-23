@@ -115,8 +115,7 @@ def _cern_library_candidates() -> list[Path]:
     candidates.extend(
         sorted(
             home.glob(
-                ".openhands/cache/extensions/electrical-circuit-agent-*/"
-                "libraries/cern-kicad-libs"
+                ".openhands/cache/extensions/electrical-circuit-agent-*/libraries/cern-kicad-libs"
             )
         )
     )
