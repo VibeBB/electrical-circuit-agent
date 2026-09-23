@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -57,8 +58,11 @@ def test_doctor_cern_libraries_falls_back_to_home_opt(monkeypatch: MonkeyPatch) 
     def is_dir(self: Path) -> bool:
         return str(self).startswith(str(expected))
 
+    def no_glob(*_args: Any) -> Iterator[Path]:
+        return iter(())
+
     monkeypatch.setattr(doctor.Path, "is_dir", is_dir)
-    monkeypatch.setattr(doctor.Path, "glob", lambda *_args: iter(()))
+    monkeypatch.setattr(doctor.Path, "glob", no_glob)
     result = doctor.checks()
     item = next(i for i in result if i["name"] == "cern-libraries")
     assert item["status"] == "ok"
@@ -76,13 +80,22 @@ def test_doctor_cern_libraries_reports_searched_paths(monkeypatch: MonkeyPatch) 
     monkeypatch.setattr(doctor.shutil, "which", available)
     monkeypatch.setattr(doctor, "version", lambda: "10.99.0")
     monkeypatch.setattr(doctor.subprocess, "run", fake_run)
-    monkeypatch.setattr(doctor.Path, "is_dir", lambda _self: False)
-    monkeypatch.setattr(doctor.Path, "glob", lambda *_args: iter(()))
+
+    def no_dirs(_self: Path) -> bool:
+        return False
+
+    def no_glob(*_args: Any) -> Iterator[Path]:
+        return iter(())
+
+    monkeypatch.setattr(doctor.Path, "is_dir", no_dirs)
+    monkeypatch.setattr(doctor.Path, "glob", no_glob)
     result = doctor.checks()
     item = next(i for i in result if i["name"] == "cern-libraries")
     assert item["status"] == "fail"
-    assert "searched" in item["detail"]
-    assert "/opt/circuit/libraries/cern-kicad-libs" in item["detail"]
+    detail = item["detail"]
+    assert isinstance(detail, str)
+    assert "searched" in detail
+    assert "/opt/circuit/libraries/cern-kicad-libs" in detail
 
 
 def test_doctor_passes_with_available_tools(monkeypatch: MonkeyPatch) -> None:
