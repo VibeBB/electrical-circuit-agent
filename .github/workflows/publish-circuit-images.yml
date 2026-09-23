@@ -74,9 +74,11 @@ jobs:
             echo "invalid SDK version: $sdk_version" >&2
             exit 1
           fi
-          echo "SOURCE_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
-          echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
-          echo "SDK_VERSION=$sdk_version" >> "$GITHUB_ENV"
+          {
+            echo "SOURCE_SHA=${GITHUB_SHA}"
+            echo "CERN_COMMIT=$cern_commit"
+            echo "SDK_VERSION=$sdk_version"
+          } >> "$GITHUB_ENV"
           echo "cern_commit=$cern_commit" >> "$GITHUB_OUTPUT"
       - name: Build and publish tools
         id: tools
