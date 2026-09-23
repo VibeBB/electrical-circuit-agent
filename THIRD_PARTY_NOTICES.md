@@ -46,6 +46,30 @@
 - 配置: `libraries/cern-kicad-libs`
 - upstreamのLICENSEをsubmodule内で維持する。
 
+## FreeRouting
+
+- ライセンス: GPL-3.0
+- バージョン: v2.4.1
+- asset: `freerouting-2.4.1.jar`
+- SHA-256: `251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9`
+- 取得元: <https://github.com/freerouting/freerouting/releases/tag/v2.4.1>
+- LICENSE: <https://raw.githubusercontent.com/freerouting/freerouting/v2.4.1/LICENSE>
+- 再配布: release JARを無改変で `/opt/freerouting/freerouting.jar` に配置し、
+  Konnectが `java -jar` で別プロセス起動する。Pythonへのimport/linkは行わない。
+- image内のLICENSE配置: `/usr/share/doc/freerouting/LICENSE`
+
+## IBM Semeru Runtime Open Edition (Eclipse OpenJ9)
+
+- ライセンス: EPL-2.0 / Apache-2.0 / GPL-2.0-with-classpath-exception
+  （tarball内 `/opt/jre/legal/` にモジュール毎のライセンスを同梱）
+- バージョン: 27.0.0.0 (OpenJ9 0.62.0)
+- asset: `ibm-semeru-open-jre_x64_linux_27.0.0.0.tar.gz`
+- SHA-256: `9e6d9c1131da124bd08eb4183f7787a9f90111fc3d62c1231976c2d37372d59e`
+- 取得元: <https://github.com/ibmruntimes/semeru27-binaries/releases/tag/jdk-27.0.0.0>
+- 再配布: release tarballを無改変で `/opt/jre` に展開し、`JAVA_HOME`/`PATH` で
+  FreeRouting実行JREとして解決する。
+- image内のprovenance: `/usr/share/doc/semeru-jre/SOURCE`
+
 ## Ubuntu base image
 
 - image: `ubuntu:26.04`

@@ -90,6 +90,12 @@ def version_tuple(value: str) -> tuple[int, ...]:
     return tuple(int(item) for item in values)
 
 
+def release_version(tag_name: str, prefix: str) -> str:
+    if not tag_name.startswith(prefix):
+        raise ValueError(f"release tag does not start with {prefix!r}: {tag_name}")
+    return tag_name.removeprefix(prefix)
+
+
 def _project_pins(root: Path) -> dict[str, ProjectDependency]:
     data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     project_value = data.get("project")
@@ -291,6 +297,33 @@ def _statuses(root: Path, fetch: Fetch, fetch_json: FetchJson) -> list[Status]:
             version_tuple(latest_konnect) > version_tuple(current_konnect),
         )
     )
+    semeru_major = args.get("SEMERU_JRE_VERSION", "0").split(".")[0]
+    for name, arg_name, repo, prefix in (
+        ("FreeRouting", "FREEROUTING_VERSION", "freerouting/freerouting", "v"),
+        (
+            "Semeru JRE (OpenJ9)",
+            "SEMERU_JRE_VERSION",
+            f"ibmruntimes/semeru{semeru_major}-binaries",
+            "jdk-",
+        ),
+    ):
+        release_value = fetch_json(f"https://api.github.com/repos/{repo}/releases/latest")
+        if not isinstance(release_value, dict):
+            raise ValueError(f"{name} release response is malformed")
+        release = cast(dict[str, Any], release_value)
+        if not isinstance(release.get("tag_name"), str):
+            raise ValueError(f"{name} release response is malformed")
+        latest = release_version(str(release["tag_name"]), prefix)
+        current = args.get(arg_name, "")
+        statuses.append(
+            Status(
+                name,
+                current,
+                latest,
+                "GitHub release",
+                version_tuple(latest) > version_tuple(current),
+            )
+        )
     for package in ("poppler-utils", "librsvg2-bin"):
         statuses.append(
             Status(
