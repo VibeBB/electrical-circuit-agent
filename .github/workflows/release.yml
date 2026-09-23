@@ -1,0 +1,235 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump kind"
+        required: false
+        default: patch
+        type: choice
+        options: [patch, minor, major]
+      version:
+        description: "Explicit X.Y.Z override; leave empty to bump"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-26.04
+    # Covers the slow path: direct-push rejection → bump PR + dispatched
+    # checks + merge wait.
+    timeout-minutes: 45
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+      sha: ${{ steps.bump.outputs.sha }}
+    steps:
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          test "$REF" = "refs/heads/main"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Bump version files
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ inputs.bump }}
+          SET_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          SET_VERSION="${SET_VERSION#v}"
+          CURRENT=$(python3 -c 'import tomllib,sys;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          SKIP_COMMIT=false
+          if [ -n "$SET_VERSION" ]; then
+            if [ "$SET_VERSION" = "$CURRENT" ]; then
+              VERSION="$CURRENT"
+              python3 scripts/bump_version.py --dry-run --bump patch >/dev/null
+              SKIP_COMMIT=true
+            else
+              VERSION=$(python3 scripts/bump_version.py --set "$SET_VERSION")
+            fi
+          else
+            VERSION=$(python3 scripts/bump_version.py --bump "$BUMP")
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}"; then
+            echo "::error::tag v${VERSION} already exists" >&2
+            exit 1
+          fi
+          if [ "$SKIP_COMMIT" = true ]; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add plugins/circuit/.plugin/plugin.json pyproject.toml \
+              plugins/circuit/skills/*/SKILL.md uv.lock
+            git commit -m "Release v${VERSION}: update version files"
+            if git push origin HEAD:main; then
+              echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            else
+              # No bypass actor is configured, so the pull_request rule
+              # rejects a direct push. Route the bump commit through a pull
+              # request instead — same self-approve + dispatched checks +
+              # auto-merge flow as bard-agent.
+              echo "::warning::direct push to main rejected; routing the version bump through a pull request"
+              branch="bot/release-bump-v${VERSION}-${GITHUB_RUN_ID}"
+              git push origin "HEAD:refs/heads/${branch}"
+              body=$(printf '%s\n' \
+                "Automated version bump for the Release workflow." \
+                "" \
+                "version: v${VERSION}" \
+                "workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")
+              pr_url=$(gh pr create \
+                --repo "$GITHUB_REPOSITORY" \
+                --base main \
+                --head "$branch" \
+                --title "Release v${VERSION}: update version files" \
+                --body "$body")
+              echo "version-bump PR: $pr_url" >> "$GITHUB_STEP_SUMMARY"
+              # Pull_request runs on the bot branch queue as
+              # approval-gated action_required runs; poll and approve. A
+              # rejected approval is non-fatal: the dispatched run below
+              # still satisfies required checks.
+              gated_seen=0
+              empty_streak=0
+              for _ in $(seq 1 10); do
+                batch=$(gh run list --repo "$GITHUB_REPOSITORY" --branch "$branch" \
+                  --event pull_request --status action_required --json databaseId --jq '.[].databaseId')
+                if [ -z "$batch" ]; then
+                  empty_streak=$((empty_streak + 1))
+                  if { [ "$gated_seen" -eq 0 ] && [ "$empty_streak" -ge 3 ]; } || \
+                     { [ "$gated_seen" -eq 1 ] && [ "$empty_streak" -ge 2 ]; }; then
+                    break
+                  fi
+                  sleep 30
+                  continue
+                fi
+                empty_streak=0
+                gated_seen=1
+                for gated in $batch; do
+                  gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$gated/approve" || true
+                done
+                sleep 10
+              done
+              started=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+              gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+              failed=0
+              for wf in ci.yml; do
+                run_id=""
+                for _ in $(seq 1 30); do
+                  sleep 10
+                  run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch "$branch" \
+                    --event workflow_dispatch --created ">=$started" --json databaseId --jq '.[0].databaseId // empty')
+                  [ -n "$run_id" ] && break
+                done
+                if [ -z "$run_id" ]; then
+                  echo "$wf workflow_dispatch for $branch was not observed; the version-bump PR was left open" >> "$GITHUB_STEP_SUMMARY"
+                  exit 1
+                fi
+                echo "$wf run for $branch: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                gh run watch --repo "$GITHUB_REPOSITORY" "$run_id" --interval 30 || true
+                conclusion=$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" \
+                  --json conclusion --jq '.conclusion // "unknown"')
+                echo "$wf conclusion for $branch: $conclusion"
+                if [ "$conclusion" != "success" ]; then
+                  failed=1
+                fi
+              done
+              if [ "$failed" -ne 0 ]; then
+                echo "version-bump PR checks failed; the PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
+                exit 1
+              fi
+              # Arm auto-merge on the version-bump PR. Checks are already
+              # green here so the merge lands immediately; arming failure
+              # leaves the PR open for manual merge.
+              gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch "$pr_url" || {
+                echo "version-bump PR auto-merge could not be armed; the PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
+                echo "::error::version-bump PR $pr_url was not auto-merged; merge it, then re-run Release with version=${VERSION}."
+                exit 1
+              }
+              # Wait for the merge to land on main so the release SHA is the
+              # real main tip, not the branch head.
+              merged=false
+              for _ in $(seq 1 40); do
+                merged_at=$(gh api "repos/$GITHUB_REPOSITORY/pulls/${pr_url##*/}" --jq '.merged_at // empty')
+                [ -n "$merged_at" ] && { merged=true; break; }
+                sleep 30
+              done
+              if [ "$merged" != true ]; then
+                echo "version-bump PR did not merge within the wait; it was left open" >> "$GITHUB_STEP_SUMMARY"
+                echo "::error::merge $pr_url, then re-run Release with version=${VERSION}."
+                exit 1
+              fi
+              git fetch -q origin main
+              echo "sha=$(git rev-parse origin/main)" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: bump-version
+    uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository] same-repo reuse
+    with:
+      ref: ${{ needs.bump-version.outputs.sha }}
+
+  install-smoke:
+    needs: bump-version
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.bump-version.outputs.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.12"
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Smoke-test remote install
+        env:
+          REF: ${{ needs.bump-version.outputs.sha }}
+        run: >
+          uv run python scripts/smoke_install_plugin.py
+          --repo VibeBB/electrical-circuit-agent --ref "$REF" --repo-path plugins/circuit
+
+  release:
+    needs: [bump-version, verify, install-smoke]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.bump-version.outputs.version }}
+      SHA: ${{ needs.bump-version.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.bump-version.outputs.sha }}
+          persist-credentials: false
+      - name: Build release zip
+        run: |
+          mkdir -p dist
+          (cd plugins && zip -r "../dist/circuit-plugin-v${VERSION}.zip" circuit)
+      - name: Create release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "v${VERSION}" --target "$SHA"
+          --title "circuit v${VERSION}" --generate-notes dist/*.zip
