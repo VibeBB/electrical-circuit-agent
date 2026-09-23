@@ -10,7 +10,6 @@ on:
     # gets killed by the branch-deleting merge with a spurious
     # "workflow file issue" failure.
     paths-ignore: ["docker/image-digests.json"]
-  merge_group:
   schedule:
     - cron: "0 3 * * 1"
 
