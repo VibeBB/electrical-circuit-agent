@@ -18,6 +18,7 @@ PLUGIN_DIR = REPO_ROOT / "plugins" / "circuit"
 EXPECTED_AGENTS = {"circuit-brief", "circuit-layout", "circuit-review", "circuit-schematic"}
 EXPECTED_SKILLS = {
     "circuit-brief",
+    "circuit-brief-rules",
     "circuit-konnect",
     "circuit-libraries",
     "circuit-library-guard",
@@ -123,11 +124,18 @@ def main() -> int:
         for reason in reasons:
             print(reason)
         return 1
+    all_hooks = (
+        EXPECTED_SESSION_START_HOOKS
+        | EXPECTED_USER_PROMPT_SUBMIT_HOOKS
+        | EXPECTED_PRE_TOOL_USE_HOOKS
+        | EXPECTED_STOP_HOOKS
+        | EXPECTED_POST_TOOL_USE_HOOKS
+    )
     print(
-        "plugin-load OK: agents={circuit-brief,circuit-layout,circuit-review,"
-        "circuit-schematic} skills={circuit-brief,circuit-konnect,"
-        "circuit-libraries,circuit-library-guard,circuit-verification,"
-        "circuit-workflow} commands={design,doctor,drc,erc,export}"
+        f"plugin-load OK: agents={{{','.join(sorted(EXPECTED_AGENTS))}}} "
+        f"skills={{{','.join(sorted(EXPECTED_SKILLS))}}} "
+        f"commands={{{','.join(sorted(EXPECTED_COMMANDS))}}} "
+        f"hooks={{{','.join(sorted(all_hooks))}}}"
     )
     return 0
 
