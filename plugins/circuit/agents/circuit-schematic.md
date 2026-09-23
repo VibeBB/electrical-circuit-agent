@@ -10,10 +10,10 @@ tools:
   - task_tracker
 mcp_config:
   circuit:
-    command: python3
+    command: sh
     args:
-      - -m
-      - circuit.mcp_server
+      - -c
+      - 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit"; do [ -f "$c/scripts/circuit_launcher.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || { echo "circuit plugin root unresolved" >&2; exit 2; }; exec python3 "$p/scripts/circuit_launcher.py" mcp_server'
   konnect:
     command: konnect
     env:
@@ -46,7 +46,11 @@ Author the schematic only through Konnect operations
 (`create_schematic`, `register_symbol_library`, `get_symbol_info`,
 `add_schematic_component` / `batch_place_components`, `connect_to_net` /
 `batch_connect_to_net`, `add_schematic_net_label`, `add_wire`, `save_project`).
-Never hand-write `.kicad_sch` s-expressions and never generate scripts that write
+If dynamically loaded `konnect_*` toolsets never become visible, invoke the same
+operations through `circuit_konnect_call` (`{"tool": ..., "arguments": {...}}`),
+or as a last resort through a stdio JSON-RPC client against the `konnect` binary;
+never write the file another way. Never hand-write `.kicad_sch` s-expressions and
+never generate scripts that write
 or rewrite the schematic file: symbol property `at` values are absolute sheet
 coordinates computed by KiCad-aware tooling, not offsets you can guess, and
 unparseable or mislabeled schematics waste the run budget. After authoring, run

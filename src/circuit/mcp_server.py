@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import shlex
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
@@ -24,6 +28,7 @@ from pydantic import BaseModel, ValidationError
 
 from . import __version__, apiserver, brief, intake, kicad_cli, libraries, netlist, report, sch_lint
 from .advisory import AdvisoryResult
+from .paths import KONNECT_SOCKET_URL
 
 server = Server("circuit", version=__version__)
 
@@ -224,6 +229,20 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
             "required": ["kind", "source_path", "output_dir"],
         },
     ),
+    (
+        "circuit_konnect_call",
+        "Invoke a Konnect operation through a managed stdio session when "
+        "dynamically loaded toolsets are not visible to the harness",
+        {
+            "type": "object",
+            "properties": {
+                "tool": {"type": "string"},
+                "arguments": {"type": "object"},
+                "socket": {"type": "string"},
+            },
+            "required": ["tool"],
+        },
+    ),
     ("circuit_kicad_version", "Get KiCad version", {"type": "object", "properties": {}}),
 ]
 
@@ -371,6 +390,21 @@ def _jobset_consistent(
     if jobset.drc_report is not None and drc_report is not None:
         checks.append(kicad_cli.reports_equivalent(jobset.drc_report, drc_report.report_path))
     return all(checks) if checks else None
+
+
+async def _konnect_call(tool: str, arguments: dict[str, Any], socket: str | None) -> CallToolResult:
+    command = shlex.split(os.environ.get("CIRCUIT_KONNECT", "konnect"))
+    env = {
+        **os.environ,
+        "KICAD_API_SOCKET": socket or os.environ.get("KICAD_API_SOCKET") or KONNECT_SOCKET_URL,
+    }
+    params = StdioServerParameters(command=command[0], args=command[1:], env=env)
+    async with (
+        stdio_client(params) as (read_stream, write_stream),
+        ClientSession(read_stream, write_stream) as session,
+    ):
+        await session.initialize()
+        return await session.call_tool(tool, arguments)
 
 
 @server.list_tools()
@@ -544,6 +578,15 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 cast(kicad_cli.ExportKind, str(args["kind"])),
                 Path(str(args["source_path"])),
                 Path(str(args["output_dir"])),
+            )
+        elif name == "circuit_konnect_call":
+            konnect_arguments = args.get("arguments")
+            return await _konnect_call(
+                str(args["tool"]),
+                cast(dict[str, Any], konnect_arguments)
+                if isinstance(konnect_arguments, dict)
+                else {},
+                _optional_string(args.get("socket")),
             )
         elif name == "circuit_kicad_version":
             result = kicad_cli.version()

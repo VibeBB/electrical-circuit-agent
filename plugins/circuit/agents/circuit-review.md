@@ -10,10 +10,10 @@ tools:
   - task_tracker
 mcp_config:
   circuit:
-    command: python3
+    command: sh
     args:
-      - -m
-      - circuit.mcp_server
+      - -c
+      - 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit"; do [ -f "$c/scripts/circuit_launcher.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || { echo "circuit plugin root unresolved" >&2; exit 2; }; exec python3 "$p/scripts/circuit_launcher.py" mcp_server'
   konnect:
     command: konnect
     env:

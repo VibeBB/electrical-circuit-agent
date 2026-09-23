@@ -56,10 +56,29 @@ def checks() -> list[dict[str, object]]:
         except OSError as exc:
             result.append(_check("konnect", False, str(exc)))
     try:
-        __import__("circuit")
-        result.append(_check("circuit-import", True, "importable"))
+        import circuit
+
+        result.append(_check("circuit-import", True, str(Path(circuit.__file__).parent)))
     except ImportError as exc:
         result.append(_check("circuit-import", False, str(exc)))
+    else:
+        missing: list[str] = []
+        for module in ("circuit.sch_lint",):
+            try:
+                __import__(module)
+            except ImportError:
+                missing.append(module)
+        from . import kicad_cli
+
+        if not hasattr(kicad_cli, "_cache_sidecar"):
+            missing.append("kicad_cli.src_sha256")
+        result.append(
+            _check(
+                "package-features",
+                not missing,
+                "all expected" if not missing else f"stale package, missing {missing}",
+            )
+        )
     try:
         API_SOCKET_PATH.parent.mkdir(parents=True, exist_ok=True)
         probe_path = API_SOCKET_PATH.parent / ".circuit-write-test"

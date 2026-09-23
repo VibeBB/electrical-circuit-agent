@@ -35,6 +35,7 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_diff",
         "circuit_jobset_run",
         "circuit_export",
+        "circuit_konnect_call",
         "circuit_kicad_version",
         "circuit_sch_lint",
     }
@@ -68,7 +69,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 17
+            assert len(tools.tools) == 18
             result = await session.call_tool("circuit_kicad_version", {})
             assert result.isError is False
             content = result.content[0]
@@ -164,6 +165,32 @@ def test_render_result_text_only_when_png_missing(tmp_path: Path, monkeypatch: A
         assert result.isError is False
         assert len(result.content) == 1
         assert isinstance(result.content[0], TextContent)
+
+    asyncio.run(exercise())
+
+
+def test_konnect_call_proxies_to_managed_subprocess(tmp_path: Path, monkeypatch: Any) -> None:
+    fake = tmp_path / "kicad-cli"
+    fake.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "10.99.0"; exit 0; fi\nexit 1\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("CIRCUIT_KICAD_CLI", str(fake))
+    monkeypatch.setenv("CIRCUIT_KONNECT", "python3 -m circuit.mcp_server")
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_konnect_call",
+                {"tool": "circuit_kicad_version"},
+            ),
+        )
+        assert result.isError is False
+        content = result.content[0]
+        assert isinstance(content, TextContent)
+        assert "10.99.0" in content.text
 
     asyncio.run(exercise())
 
