@@ -45,7 +45,10 @@ _PAPER_SIZES: dict[str, tuple[float, float]] = {
     "A5": (210.0, 148.0),
 }
 _LABEL_DISTANCE_MM = 30.0
+_PROPERTY_ON_BODY_MM = 2.5
 _LABELED_PROPERTIES = {"Reference", "Value"}
+_TITLE_BLOCK_FIELDS = ("title", "date", "rev")
+_MIN_SHEET_USAGE = 0.30
 _POSITIONED_ITEMS = {
     "label",
     "global_label",
@@ -118,6 +121,7 @@ def lint_schematic(path: Path) -> SchLintReport:
     findings: list[SchLintFinding] = []
     page_width, page_height = _paper_size(root)
     symbols = 0
+    item_positions: list[tuple[float, float]] = []
     for node in root[1:]:
         if not isinstance(node, list) or not node or not isinstance(node[0], str):
             continue
@@ -127,6 +131,7 @@ def lint_schematic(path: Path) -> SchLintReport:
         if position is None:
             continue
         px, py = position
+        item_positions.append(position)
         if not (0.0 <= px <= page_width and 0.0 <= py <= page_height):
             findings.append(
                 SchLintFinding(
@@ -178,6 +183,19 @@ def lint_schematic(path: Path) -> SchLintReport:
                         items=[f"symbol uuid={uuid} {name}={prop[2]!r}"],
                     )
                 )
+            body_distance = ((lx - px) ** 2 + (ly - py) ** 2) ** 0.5
+            if body_distance < _PROPERTY_ON_BODY_MM:
+                findings.append(
+                    SchLintFinding(
+                        type="property_on_symbol",
+                        severity="warning",
+                        description=(
+                            f"{name} property at ({lx:.2f},{ly:.2f}) sits on the "
+                            f"symbol body at ({px:.2f},{py:.2f}) and may be unreadable"
+                        ),
+                        items=[f"symbol uuid={uuid} {name}={prop[2]!r}"],
+                    )
+                )
             if _has_flag(prop, "hide"):
                 findings.append(
                     SchLintFinding(
@@ -187,6 +205,36 @@ def lint_schematic(path: Path) -> SchLintReport:
                         items=[f"symbol uuid={uuid}"],
                     )
                 )
+
+    title_block = _first_child(root, "title_block")
+    missing_fields: list[str] = []
+    for field_name in _TITLE_BLOCK_FIELDS:
+        field = _first_child(title_block, field_name) if title_block is not None else None
+        if field is None or len(field) < 2 or not isinstance(field[1], str) or not field[1].strip():
+            missing_fields.append(field_name)
+    if missing_fields:
+        findings.append(
+            SchLintFinding(
+                type="title_block_incomplete",
+                severity="warning",
+                description="title block fields are empty or missing: " + ", ".join(missing_fields),
+            )
+        )
+    if symbols >= 2 and item_positions:
+        xs = [position[0] for position in item_positions]
+        ys = [position[1] for position in item_positions]
+        usage = ((max(xs) - min(xs)) * (max(ys) - min(ys))) / (page_width * page_height)
+        if usage < _MIN_SHEET_USAGE:
+            findings.append(
+                SchLintFinding(
+                    type="sheet_underutilized",
+                    severity="warning",
+                    description=(
+                        f"placed items cover {usage * 100:.0f}% of the sheet; "
+                        "spread placement for readability"
+                    ),
+                )
+            )
 
     errors = sum(1 for f in findings if f.severity == "error")
     warnings = sum(1 for f in findings if f.severity == "warning")
