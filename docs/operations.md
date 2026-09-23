@@ -280,12 +280,18 @@ review records `advisory visual review skipped` and continues.
 it flags Reference/Value properties placed more than 30 mm from their symbol
 (`property_far_from_symbol`), positioned items outside the sheet bounds
 (`item_out_of_bounds`), missing property positions, and unparsable files as
-fail-closed errors, and hidden Reference/Value properties as warnings. Because
+fail-closed errors. Warning-severity findings cover readability defects ERC
+cannot see: hidden or on-symbol Reference/Value properties (`property_hidden`,
+`property_on_symbol`), empty title-block fields (`title_block_incomplete`),
+placement using less than 30% of the sheet (`sheet_underutilized`), and
+label-only connectivity with no wires (`label_only_connectivity`). Because
 symbol property `at` values are absolute sheet coordinates, schematics written
 by hand or by generated scripts tend to place every label at the sheet origin
 — ERC and connectivity cannot detect that defect, this gate can. Run it after
 schematic authoring and before ERC (`python3 -m circuit.sch_lint file.kicad_sch`);
-the design flow treats an error verdict as a stop.
+the design flow treats an error verdict as a stop, and the authoring prompts
+instruct the agent to repair warning findings through Konnect ops (field
+position resets, label moves, `edit_sheet`, component moves) and re-lint.
 
 ### Canvas profile scoping
 

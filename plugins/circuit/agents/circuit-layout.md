@@ -42,11 +42,19 @@ directly — call `save_project({})` after edits, then call
 `circuit_drc` and `circuit_design_report`. Report the JSON verdicts verbatim. Do not
 treat your review or a tool narrative as acceptance authority. If dynamically
 loaded `konnect_*` toolsets never become visible, invoke the same operations
-through `circuit_konnect_call`; a stdio JSON-RPC client against the `konnect`
+through `circuit_konnect_call` (batch them in its `ops` array so `load_toolset`
+shares the session); a stdio JSON-RPC client against the `konnect`
 binary is the last-resort fallback.
+
+After rendering, fix silkscreen overlaps and illegible or upside-down reference
+designators reported by rendered views with `edit_board_footprint_graphic` before
+the final render.
 
 Advisory Konnect checks for this stage include board info/extents/layers,
 `score_placement`, dry-run `refine_placement_force_directed`, design rules and
 netclasses, dry-run `fix_connectivity`, `query_traces`, `get_connected_items`,
 `run_drc`/`get_drc_violations`, visual baseline comparison, and `snapshot_project`.
-These are advisory — record them in the design report, never promote them to a verdict.
+These are advisory — record each outcome as a
+`circuit-reports/layout-<slug>.advisory.json` file following the AdvisoryResult
+contract (`tool`, `stage`="layout", `status`, `summary`, `artifacts`, `detail`),
+never promote them to a verdict.
