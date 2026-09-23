@@ -30,6 +30,8 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_brief_library_check",
         "circuit_netlist_export",
         "circuit_connectivity_check",
+        "circuit_connectivity_export",
+        "circuit_doctor",
         "circuit_design_report",
         "circuit_erc",
         "circuit_drc",
@@ -74,7 +76,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 21
+            assert len(tools.tools) == 23
             result = await session.call_tool("circuit_kicad_version", {})
             assert result.isError is False
             content = result.content[0]

@@ -29,3 +29,16 @@ declared-but-missing or mismatched evidence fails the gate.
 Run the library gate before authoring. It parses the installed `.kicad_sym` and `.pretty`
 files directly and must be `pass` for every symbol, footprint, and referenced pin. Both
 gates are fail-closed and must be recorded as JSON reports.
+
+## Wire harness contract fields
+
+Parts with `connector: true` become harness connectors for wire-agent. They can
+carry `housing` plus `rated_current_a`/`rated_voltage_v` (omitted values fall
+back to wire's defaults of 3 A / 250 V). Nets can declare `signal_class`
+(power|ground|signal|analog|data|highspeed|shield — inferred from the name when
+absent), `voltage_v`, and `current_a`. Emit the contract with
+`circuit_connectivity_export` (or
+`python3 "$CIRCUIT_PLUGIN/scripts/circuit_launcher.py" connectivity
+--brief <brief.json> --out <name>.connectivity-source.json`); it writes the
+wire `ConnectivitySource` schema and fails closed when a connector has no pins
+in the brief (or in `--netlist <path>` when given).

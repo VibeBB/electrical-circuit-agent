@@ -190,28 +190,40 @@ The normative host procedure is: run the digest-pinned `circuit-server` image
 image supplies KiCad/konnect/libraries, and the plugin supplies the assets and
 the launcher described below.
 
-Installing plugin assets does not reinstall the `circuit` Python package, so a
-plain `python3 -m circuit.mcp_server` can silently import a stale site-packages
-copy that lacks tools the assets expect (observed as missing `circuit_sch_lint`
-and missing `src_sha256` caching). Every entry point — `.mcp.json`, each
-sub-agent's `mcp_config`, and the session_start doctor hook — therefore runs
-through `plugins/circuit/scripts/circuit_launcher.py`, which prepends the first
-matching source tree to `PYTHONPATH` and then execs the module:
+Installing plugin assets does not reinstall the `circuit` Python package, and
+the host interpreter is not guaranteed to carry KiCad or the package
+dependencies, so every entry point — `.mcp.json`, each sub-agent's
+`mcp_config`, and the session_start doctor hook — runs through
+`plugins/circuit/scripts/circuit_launcher.py`, which execs the module inside
+docker (`docker run --rm -i --network none --user uid:gid`, workspace mounted
+at its own path). The launcher resolves the tools image in order:
+
+1. `$CIRCUIT_TOOLS_IMAGE` (a full ref, optionally digest-pinned)
+2. `plugins/circuit/tools-image.json` or the repo cache's
+   `docker/image-digests.json` (`circuit_tools` entry)
+3. a local build of the cached `docker/circuit-tools.Dockerfile`, tagged
+   `openhands-circuit-tools:<dockerfile sha256[:12]>`
+
+and mounts the first matching source tree read-only at `/plugin-src`
+(`PYTHONPATH`):
 
 1. `$CIRCUIT_SRC`
 2. newest `~/.openhands/cache/extensions/electrical-circuit-agent-*/src`
    (the vendored snapshot matching the installed plugin)
-3. `/opt/circuit/src` (the circuit-server image layout)
+3. `/opt/circuit/src` (the circuit-tools image layout)
 4. `<repo>/src` in a repository checkout
-5. otherwise the already-installed package, with a stderr warning
+5. otherwise the image's own baked package is used
+
+The KiCad API socket (`KICAD_API_SOCKET`, default `/tmp/circuit-kicad.sock`) is
+bind-mounted into the container when it exists on the host; `konnect` runs
+inside the image as an unmodified AGPL binary spawned by `circuit.mcp_server`.
 
 `circuit.doctor` reports the resolved package path under `circuit-import` and
 fails `package-features` when expected capabilities (`circuit.sch_lint`,
 `kicad_cli.src_sha256` caching) are absent — run
 `python3 plugins/circuit/scripts/circuit_launcher.py doctor` after install to
-verify. On hosts not running the image, set `CIRCUIT_SRC` explicitly and
-provide `kicad-cli`, `konnect`, and the CERN libraries separately; missing
-tools remain fail-closed rather than being installed by the plugin.
+verify. Missing tools fail closed inside the container rather than falling
+back to the host.
 
 The doctor `cern-libraries` check searches the following locations in order
 and reports the first populated library (a directory containing `SchLib` and

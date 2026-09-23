@@ -8,10 +8,15 @@ github:VibeBB/electrical-circuit-agent
 path: plugins/circuit
 ```
 
-Running it requires the `circuit-tools` image provided in PR3. Inside the image,
-`kicad-cli`, `konnect`, and the Python `circuit` package are available from the
-PATH/import path, and Konnect is launched as a separate-process MCP server.
-ERC/DRC verdicts are based solely on `kicad-cli` JSON.
+Running it requires docker — every entry point goes through
+`plugins/circuit/scripts/circuit_launcher.py`, which execs the module inside the
+digest-pinned `circuit-tools` image (`$CIRCUIT_TOOLS_IMAGE` →
+`docker/image-digests.json` → a local build of the cached Dockerfile). The image
+bundles `kicad-cli`, `konnect`, the CERN/official libraries, and the Python
+`circuit` package; the plugin's shipped `src/` is mounted read-only at
+`/plugin-src` so assets and code never diverge. The KiCad API socket
+(`KICAD_API_SOCKET`, default `/tmp/circuit-kicad.sock`) is bind-mounted when it
+exists on the host. ERC/DRC verdicts are based solely on `kicad-cli` JSON.
 
 `circuit-brief` creates a brief and intake sidecar from conversational
 requirements, and schematic authoring proceeds only after intake is `ready` and

@@ -5,7 +5,11 @@
     {
       "reference": "J1",
       "lib_id": "Connector_Generic:Conn_01x02",
-      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
+      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+      "connector": true,
+      "housing": "B2B-XH-A",
+      "rated_current_a": 3.0,
+      "rated_voltage_v": 250.0
     },
     {
       "reference": "R1",
@@ -20,17 +24,52 @@
     }
   ],
   "nets": [
-    {"name": "VIN", "pins": ["J1.1", "R1.1"]},
-    {"name": "LED_A", "pins": ["R1.2", "D1.2"]},
-    {"name": "GND", "pins": ["D1.1", "J1.2"]}
+    {
+      "name": "VIN",
+      "pins": [
+        "J1.1",
+        "R1.1"
+      ],
+      "signal_class": "power",
+      "voltage_v": 12.0,
+      "current_a": 0.06
+    },
+    {
+      "name": "LED_A",
+      "pins": [
+        "R1.2",
+        "D1.2"
+      ],
+      "voltage_v": 12.0,
+      "current_a": 0.06
+    },
+    {
+      "name": "GND",
+      "pins": [
+        "D1.1",
+        "J1.2"
+      ],
+      "signal_class": "ground",
+      "voltage_v": 0.0,
+      "current_a": 0.06
+    }
   ],
   "board": {
     "width_mm": 44,
     "height_mm": 25,
     "placements": {
-      "J1": {"x_mm": 8, "y_mm": 12},
-      "R1": {"x_mm": 20, "y_mm": 12},
-      "D1": {"x_mm": 36, "y_mm": 12}
+      "J1": {
+        "x_mm": 8,
+        "y_mm": 12
+      },
+      "R1": {
+        "x_mm": 20,
+        "y_mm": 12
+      },
+      "D1": {
+        "x_mm": 36,
+        "y_mm": 12
+      }
     }
   }
 }
