@@ -8,6 +8,7 @@
 | [`architecture.md`](architecture.md) | Responsibility boundaries and execution sequence |
 | [`operations.md`](operations.md) | Build, smoke, dependency updates |
 | [`konnect-tools.md`](konnect-tools.md) | Konnect v0.12.1 complete tool coverage matrix |
+| [`research/vision-deepening-plan.md`](research/vision-deepening-plan.md) | Research and phased plan for deepening the advisory vision lane |
 | [`adr/ADR-0010-brief-intake-provenance-and-library-gate.md`](adr/ADR-0010-brief-intake-provenance-and-library-gate.md) | Brief intake provenance and library gate |
 | [`adr/ADR-0012-kicad-cli-jobset-render-diff.md`](adr/ADR-0012-kicad-cli-jobset-render-diff.md) | Adoption of kicad-cli jobset, render, and diff |
 | [`adr/ADR-0008-cicd-ghcr-digest-lock.md`](adr/ADR-0008-cicd-ghcr-digest-lock.md) | GHCR publishing and digest lock |
