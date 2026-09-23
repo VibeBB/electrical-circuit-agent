@@ -45,14 +45,17 @@ RUN apt-get update \
     && add-apt-repository --yes ppa:kicad/kicad-dev-nightly \
     && apt-get update \
     && curl --fail --location --silent --show-error \
+        --retry 5 --retry-delay 10 --retry-all-errors \
         --output /tmp/kicad-nightly.deb \
         "${KICAD_NIGHTLY_DEB_URL}" \
     && echo "${KICAD_NIGHTLY_DEB_SHA256}  /tmp/kicad-nightly.deb" | sha256sum --check \
     && curl --fail --location --silent --show-error \
+        --retry 5 --retry-delay 10 --retry-all-errors \
         --output /tmp/kicad-nightly-symbols.deb \
         "${KICAD_NIGHTLY_SYMBOLS_DEB_URL}" \
     && echo "${KICAD_NIGHTLY_SYMBOLS_DEB_SHA256}  /tmp/kicad-nightly-symbols.deb" | sha256sum --check \
     && curl --fail --location --silent --show-error \
+        --retry 5 --retry-delay 10 --retry-all-errors \
         --output /tmp/kicad-nightly-footprints.deb \
         "${KICAD_NIGHTLY_FOOTPRINTS_DEB_URL}" \
     && echo "${KICAD_NIGHTLY_FOOTPRINTS_DEB_SHA256}  /tmp/kicad-nightly-footprints.deb" | sha256sum --check \
@@ -66,6 +69,7 @@ RUN apt-get update \
 
 RUN mkdir -p /opt/circuit/bin /opt/circuit/libraries \
     && curl --fail --location --silent --show-error \
+        --retry 5 --retry-delay 10 --retry-all-errors \
         --output /tmp/konnect.tar.gz \
         "https://github.com/mixelpixx/Konnect/releases/download/v${KONNECT_VERSION}/konnect-v${KONNECT_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
     && echo "${KONNECT_SHA256}  /tmp/konnect.tar.gz" | sha256sum --check \
@@ -74,6 +78,7 @@ RUN mkdir -p /opt/circuit/bin /opt/circuit/libraries \
     && rm -f /tmp/konnect.tar.gz /tmp/konnect \
     && mkdir -p /usr/share/doc/konnect \
     && curl --fail --location --silent --show-error \
+        --retry 5 --retry-delay 10 --retry-all-errors \
         --output /usr/share/doc/konnect/LICENSE \
         "https://raw.githubusercontent.com/mixelpixx/Konnect/${KONNECT_COMMIT}/LICENSE" \
     && printf '%s\n' \
@@ -96,6 +101,7 @@ RUN if [ -f /usr/share/doc/kicad-nightly-symbols/LICENSE.md ]; then \
           /opt/circuit/libraries/kicad-official-LICENSE.md; \
     else \
         curl --fail --location --silent --show-error \
+          --retry 5 --retry-delay 10 --retry-all-errors \
           --output /opt/circuit/libraries/kicad-official-LICENSE.md \
           https://gitlab.com/kicad/libraries/kicad-symbols/-/raw/master/LICENSE.md; \
     fi \
