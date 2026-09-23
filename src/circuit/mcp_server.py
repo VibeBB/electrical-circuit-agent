@@ -23,6 +23,7 @@ from mcp.types import (
     ServerCapabilities,
     TextContent,
     Tool,
+    ToolAnnotations,
     ToolsCapability,
 )
 from pydantic import BaseModel, ValidationError
@@ -697,12 +698,60 @@ async def _konnect_call(
         )
 
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
+def _anno(
+    title: str, *, write: bool, destructive: bool = False, idempotent: bool = True
+) -> ToolAnnotations:
+    return ToolAnnotations(
+        title=title,
+        readOnlyHint=not write,
+        destructiveHint=destructive,
+        idempotentHint=idempotent,
+        openWorldHint=False,
+    )
+
+
+_ANNOTATIONS: dict[str, ToolAnnotations] = {
+    "circuit_api_server_start": _anno("Start API server", write=True, idempotent=True),
+    "circuit_api_server_status": _anno("API server status", write=False),
+    "circuit_api_server_stop": _anno("Stop API server", write=True, idempotent=True),
+    "circuit_brief_validate": _anno("Validate design brief", write=False),
+    "circuit_brief_intake_check": _anno("Intake check", write=True),
+    "circuit_brief_library_check": _anno("Library check", write=True),
+    "circuit_netlist_export": _anno("Netlist export", write=True),
+    "circuit_connectivity_check": _anno("Connectivity check", write=True),
+    "circuit_connectivity_export": _anno("Connectivity export", write=True),
+    "circuit_doctor": _anno("Circuit doctor", write=False),
+    "circuit_design_report": _anno("Design report", write=True),
+    "circuit_sch_lint": _anno("Schematic lint", write=True),
+    "circuit_erc": _anno("ERC", write=True),
+    "circuit_drc": _anno("DRC", write=True),
+    "circuit_render": _anno("Render", write=True),
+    "circuit_diff": _anno("Design diff", write=True),
+    "circuit_jobset_run": _anno("Jobset run", write=True),
+    "circuit_export": _anno("Export", write=True),
+    "circuit_import": _anno("Import", write=True),
+    "circuit_stackup": _anno("Stackup", write=True),
+    "circuit_rasterize": _anno("Rasterize", write=True),
+    "circuit_konnect_call": _anno("Konnect call", write=True, destructive=True, idempotent=False),
+    "circuit_kicad_version": _anno("KiCad version", write=False),
+}
+
+
+def tool_specs() -> list[Tool]:
     return [
-        Tool(name=name, description=description, inputSchema=schema)
+        Tool(
+            name=name,
+            description=description,
+            inputSchema=schema,
+            annotations=_ANNOTATIONS[name],
+        )
         for name, description, schema in _TOOLS
     ]
+
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    return tool_specs()
 
 
 @server.call_tool()
