@@ -213,6 +213,20 @@ verify. On hosts not running the image, set `CIRCUIT_SRC` explicitly and
 provide `kicad-cli`, `konnect`, and the CERN libraries separately; missing
 tools remain fail-closed rather than being installed by the plugin.
 
+The doctor `cern-libraries` check searches the following locations in order
+and reports the first populated library (a directory containing `SchLib` and
+`PcbLib`), so non-image hosts that install the libraries under `$HOME` still
+pass:
+
+1. `$CIRCUIT_CERN_LIBS`
+2. `/opt/circuit/libraries/cern-kicad-libs` (image layout)
+3. `~/opt/circuit/libraries/cern-kicad-libs`
+4. `~/.openhands/cache/extensions/electrical-circuit-agent-*/libraries/cern-kicad-libs`
+   (vendored snapshot, when the submodule content is present)
+
+When none match, the check reports every searched path instead of failing
+silently on a single fixed path.
+
 ### Plugin hardening
 
 Each sub-agent's frontmatter records the library-protection hook and
@@ -330,6 +344,13 @@ All 234 Konnect v0.12.1 tools are managed in `docs/konnect-tools.md` and
 Advisory failures during authoring are recorded but do not stop the E2E; the
 `design-report.json` verdict is determined only from the kicad-cli
 connectivity/ERC/DRC JSON.
+
+`kicad-cli pcb drc` on the nightly toolchain can report
+`lib_footprint_mismatch` violations when a footprint stored in the board
+differs from the installed library source (observed with CERN-library
+footprints under 2026-09 nightly packages). These are library-skew warnings
+inherent to the moving nightly libraries, not design errors; they count as
+DRC warnings and do not by themselves change a passing verdict.
 
 As of 2026-09-20, the resolute package
 `202609200244+21f1f53428~189~ubuntu26.04.1` failed with
