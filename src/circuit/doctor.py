@@ -97,6 +97,7 @@ def checks() -> list[dict[str, object]]:
         else "not found (searched: " + ", ".join(str(p) for p in candidates) + ")"
     )
     result.append(_check("cern-libraries", found is not None, detail))
+    result.append(_vision_probe())
     return result
 
 
@@ -122,12 +123,72 @@ def _cern_library_candidates() -> list[Path]:
     return candidates
 
 
+_VISION_MODEL_HINTS = (
+    "vision",
+    "kimi-k3",
+    "gpt-4o",
+    "gpt-4.1",
+    "gpt-5",
+    "claude",
+    "gemini",
+    "qwen-vl",
+)
+
+
+def _vision_probe() -> dict[str, object]:
+    """Warn-level vision-lane probe; never fail-closed.
+
+    Reports the best available lane as `vision=<lane>` in the detail:
+    `model` (a vision-capable conversation model is configured), `profile`
+    (a dedicated vision agent profile is configured), `materialize-only`
+    (intake images can be materialized but no vision model is set up), or
+    `none`. Model names are matched heuristically, not authoritatively.
+    """
+    profile = os.environ.get("OPENHANDS_AGENT_PROFILE") or os.environ.get("CIRCUIT_VISION_PROFILE")
+    model = os.environ.get("OPENHANDS_LLM_MODEL") or os.environ.get("LLM_MODEL")
+    events = os.environ.get("CIRCUIT_AGENT_EVENTS_DIR")
+    events_dir = (
+        Path(events)
+        if events
+        else Path.home() / ".openhands" / "agent-canvas" / "dev_conversations"
+    )
+    tools = [
+        name
+        for name in ("pdftoppm", "rsvg-convert")
+        if shutil.which(os.environ.get(f"CIRCUIT_{name.upper().replace('-', '_')}", name))
+    ]
+    tools_detail = f"; rasterizers={','.join(tools)}" if tools else ""
+    if model and any(hint in model.lower() for hint in _VISION_MODEL_HINTS):
+        return {
+            "name": "vision",
+            "status": "ok",
+            "detail": f"vision=model ({model}){tools_detail}",
+        }
+    if profile and "vision" in profile.lower():
+        return {
+            "name": "vision",
+            "status": "ok",
+            "detail": f"vision=profile ({profile}){tools_detail}",
+        }
+    if events_dir.is_dir():
+        return {
+            "name": "vision",
+            "status": "ok",
+            "detail": f"vision=materialize-only ({events_dir}){tools_detail}",
+        }
+    return {
+        "name": "vision",
+        "status": "warn",
+        "detail": "vision=none (no vision model, profile, or events dir)" + tools_detail,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--warn", action="store_true")
     args = parser.parse_args()
     results = checks()
-    ok = all(item["status"] == "ok" for item in results)
+    ok = all(item["status"] != "fail" for item in results)
     payload = {"status": "ok" if ok else "fail", "checks": results}
     print(json.dumps(payload, ensure_ascii=False))
     return 0 if ok or args.warn else 1

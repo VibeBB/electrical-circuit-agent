@@ -8,7 +8,6 @@
 | [`architecture.md`](architecture.md) | Responsibility boundaries and execution sequence |
 | [`operations.md`](operations.md) | Build, smoke, dependency updates |
 | [`konnect-tools.md`](konnect-tools.md) | Konnect v0.12.1 complete tool coverage matrix |
-| [`research/vision-deepening-plan.md`](research/vision-deepening-plan.md) | Research and phased plan for deepening the advisory vision lane |
 | [`adr/ADR-0010-brief-intake-provenance-and-library-gate.md`](adr/ADR-0010-brief-intake-provenance-and-library-gate.md) | Brief intake provenance and library gate |
 | [`adr/ADR-0012-kicad-cli-jobset-render-diff.md`](adr/ADR-0012-kicad-cli-jobset-render-diff.md) | Adoption of kicad-cli jobset, render, and diff |
 | [`adr/ADR-0008-cicd-ghcr-digest-lock.md`](adr/ADR-0008-cicd-ghcr-digest-lock.md) | GHCR publishing and digest lock |
@@ -36,3 +35,4 @@
 | [0017](adr/ADR-0017-intake-attachment-materialization-and-evidence-binding.md) | Intake attachment materialization and evidence binding |
 | [0018](adr/ADR-0018-structured-visual-review-records.md) | Structured visual review records and image-observation provenance |
 | [0019](adr/ADR-0019-existing-drawings-ingestion-and-rasterizer-deps.md) | Existing-drawings ingestion, rasterizer dependencies, and the stackup section diagram |
+| [0020](adr/ADR-0020-vision-lane-diagnostics.md) | Vision-lane diagnostics in doctor |

@@ -456,3 +456,33 @@ in place.
 Pass a filesystem path such as `/tmp/circuit-smoke.sock` to the server's
 `--socket`. Pass `ipc:///tmp/circuit-smoke.sock` to the client. Run the image as
 non-root and make `$HOME` and `$HOME/.config/kicad` writable.
+
+## Vision lane diagnostics
+
+`python3 -m circuit.doctor` reports the best available vision lane as
+`vision=<lane>`: `model` (vision-capable conversation model configured),
+`profile` (a dedicated vision agent profile), `materialize-only`
+(intake images can be materialized but no vision reader is set up), or
+`none`. The check is warn-level: `none` emits `status: "warn"` and never
+fails the diagnostic; vision stays advisory (ADR-0020). Available
+rasterizers (`pdftoppm`, `rsvg-convert` — poppler-utils / librsvg2-bin,
+ADR-0019) are listed in the detail line.
+
+Model capability matrix observed on the deployment environment:
+
+| Agent profile | Model | Vision |
+| --- | --- | --- |
+| `default` | kimi-k2.6 | no |
+| `kimi-k3-vision` | kimi-k3 | yes |
+
+Canvas guidance: for image-heavy sessions (sketch/photo intake, render
+review) prefer starting the conversation on the `kimi-k3-vision` agent
+profile; for a mid-session lane, use the `switch_llm` pattern from
+ADR-0017 (`subagent_vision` model parameter). Per-profile API keys are
+scoped via the provider-backed secrets mechanism documented in
+"Canvas profile scoping" — the same profile selection keeps the
+session-scoped key bound to the right provider lane.
+
+With P5 the phased vision-deepening plan is fully implemented; ADR-0016
+through ADR-0020 are the normative records (the research plan document
+was removed).

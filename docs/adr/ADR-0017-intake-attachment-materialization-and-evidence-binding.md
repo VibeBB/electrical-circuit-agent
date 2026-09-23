@@ -39,8 +39,7 @@ Before this, attached images lived only in conversation context: only the
 latest image-bearing user message was reachable (via
 `inspect_image_with_vision`), and nothing linked an `A*`/`Q*` record to
 the bytes it was read from — an image-derived assumption could not be
-re-inspected or audited later (gap G3/G4 in
-research/vision-deepening-plan.md). Materializing to the workspace gives
+re-inspected or audited later. Materializing to the workspace gives
 renders-style provenance (`path` + `sha256`) to intake evidence, and the
 optional `evidence` binding keeps `extra="forbid"` compatibility while
 making "this assumption came from *those* bytes" mechanically checkable.

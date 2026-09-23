@@ -113,4 +113,49 @@ def test_doctor_passes_with_available_tools(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(doctor.subprocess, "run", fake_run)
     monkeypatch.setattr(doctor.Path, "is_dir", is_dir)
     result = doctor.checks()
-    assert all(item["status"] == "ok" for item in result)
+    assert all(item["status"] != "fail" for item in result)
+    vision = next(i for i in result if i["name"] == "vision")
+    assert vision["status"] == "ok"
+    assert "vision=materialize-only" in str(vision["detail"])
+
+
+def test_doctor_vision_probe_model_lane(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENHANDS_LLM_MODEL", "kimi-k3")
+    item = doctor._vision_probe()  # pyright: ignore[reportPrivateUsage]
+    assert item["status"] == "ok"
+    detail = item["detail"]
+    assert isinstance(detail, str)
+    assert detail.startswith("vision=model (kimi-k3)")
+
+
+def test_doctor_vision_probe_profile_lane(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENHANDS_AGENT_PROFILE", "kimi-k3-vision")
+    monkeypatch.delenv("OPENHANDS_LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    item = doctor._vision_probe()  # pyright: ignore[reportPrivateUsage]
+    assert item["status"] == "ok"
+    detail = item["detail"]
+    assert isinstance(detail, str)
+    assert detail.startswith("vision=profile (kimi-k3-vision)")
+
+
+def test_doctor_vision_probe_none_warns_only(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("OPENHANDS_AGENT_PROFILE", raising=False)
+    monkeypatch.delenv("CIRCUIT_VISION_PROFILE", raising=False)
+    monkeypatch.delenv("OPENHANDS_LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(tmp_path / "missing"))
+    item = doctor._vision_probe()  # pyright: ignore[reportPrivateUsage]
+    assert item["status"] == "warn"
+    assert "vision=none" in str(item["detail"])
+
+
+def test_doctor_vision_probe_lists_rasterizers(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENHANDS_LLM_MODEL", "kimi-k3")
+
+    def found(_name: str) -> str:
+        return "/usr/bin/x"
+
+    monkeypatch.setattr(doctor.shutil, "which", found)
+    item = doctor._vision_probe()  # pyright: ignore[reportPrivateUsage]
+    assert "rasterizers=pdftoppm,rsvg-convert" in str(item["detail"])
