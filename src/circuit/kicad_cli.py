@@ -431,6 +431,127 @@ def _require_input(path: Path, label: str) -> None:
         raise KicadCliError(f"{label} is missing or empty: {path}")
 
 
+ImportKind = Literal["sch", "pcb"]
+
+_IMPORT_FORMATS: dict[ImportKind, frozenset[str]] = {
+    "sch": frozenset(
+        {
+            "auto",
+            "altium",
+            "eagle",
+            "cadstar",
+            "easyeda",
+            "easyedapro",
+            "ltspice",
+            "pads",
+            "diptrace",
+            "pcad",
+            "orcad",
+        }
+    ),
+    "pcb": frozenset(
+        {
+            "auto",
+            "pads",
+            "altium",
+            "eagle",
+            "cadstar",
+            "fabmaster",
+            "pcad",
+            "solidworks",
+        }
+    ),
+}
+
+
+class ImportResult(BaseModel):
+    kind: ImportKind
+    source: Path
+    output: Path
+    report_path: Path | None = None
+    report: dict[str, object] | None = None
+
+
+def import_file(
+    kind: ImportKind,
+    source: Path,
+    output: Path,
+    *,
+    format: str = "auto",
+) -> ImportResult:
+    _require_input(source, "import source")
+    if format not in _IMPORT_FORMATS[kind]:
+        raise KicadCliError(f"unsupported {kind} import format: {format}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    report_path = output.with_name(output.name + ".import.json")
+    result = run(
+        [
+            kind,
+            "import",
+            "--format",
+            format,
+            "--report-format",
+            "json",
+            "--report-file",
+            str(report_path),
+            "--output",
+            str(output),
+            str(source),
+        ]
+    )
+    if result.returncode:
+        raise KicadCliError(result.stderr.strip() or f"kicad-cli {kind} import failed")
+    if not output.is_file() or output.stat().st_size == 0:
+        raise KicadCliError("kicad-cli produced no import output")
+    if not report_path.is_file():
+        raise KicadCliError("kicad-cli produced no import report")
+    try:
+        with report_path.open(encoding="utf-8") as handle:
+            report: object = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise KicadCliError(f"could not parse {kind} import report {report_path}: {exc}") from exc
+    if not isinstance(report, dict):
+        raise KicadCliError(f"{kind} import report must be a JSON object")
+    return ImportResult(
+        kind=kind,
+        source=source,
+        output=output,
+        report_path=report_path,
+        report=cast(dict[str, object], report),
+    )
+
+
+def export_stackup(pcb: Path, out: Path) -> dict[str, object]:
+    _require_input(pcb, "PCB")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    result = run(
+        [
+            "pcb",
+            "export",
+            "stackup",
+            "--format",
+            "json",
+            "--units",
+            "mm",
+            "--output",
+            str(out),
+            str(pcb),
+        ]
+    )
+    if result.returncode:
+        raise KicadCliError(result.stderr.strip() or "kicad-cli stackup export failed")
+    if not out.is_file():
+        raise KicadCliError("kicad-cli produced no stackup report")
+    try:
+        with out.open(encoding="utf-8") as handle:
+            data: object = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise KicadCliError(f"could not parse stackup report {out}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise KicadCliError("stackup report must be a JSON object")
+    return cast(dict[str, object], data)
+
+
 CameraSide = Literal["top", "bottom", "left", "right", "front", "back"]
 RenderBackground = Literal["default", "transparent", "opaque"]
 RenderQuality = Literal["basic", "high", "user", "job_settings"]

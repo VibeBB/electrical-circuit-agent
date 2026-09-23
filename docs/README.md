@@ -35,3 +35,4 @@
 | [0016](adr/ADR-0016-extended-render-surface-and-konnect-image-materialization.md) | Extended render surface and Konnect image materialization |
 | [0017](adr/ADR-0017-intake-attachment-materialization-and-evidence-binding.md) | Intake attachment materialization and evidence binding |
 | [0018](adr/ADR-0018-structured-visual-review-records.md) | Structured visual review records and image-observation provenance |
+| [0019](adr/ADR-0019-existing-drawings-ingestion-and-rasterizer-deps.md) | Existing-drawings ingestion, rasterizer dependencies, and the stackup section diagram |

@@ -59,7 +59,7 @@
   ],
   "post_tool_use": [
     {
-      "matcher": "circuit_render|circuit_diff|file_editor",
+      "matcher": "circuit_render|circuit_diff|circuit_rasterize|file_editor",
       "hooks": [
         {
           "type": "command",

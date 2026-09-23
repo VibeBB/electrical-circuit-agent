@@ -75,7 +75,13 @@ Read per image kind:
 - datasheet page/screenshot → pin tables and package dims, cross-checked
   against `get_symbol_info` pin existence — vision proposes, the gate disposes;
 - existing schematic/drawing image → topology candidates; for CAD source
-  files prefer the `circuit_import` path when available.
+  files prefer the `circuit_import` path when available;
+- PDF datasheet or drawing → `circuit_rasterize` the file to page PNGs first,
+  then read the pages as above;
+- foreign CAD source (.asc/.brd/.sch/.pcbdoc etc.) → `circuit_import`
+  (kicad-cli `sch import`/`pcb import`) → render the result and compare
+  against the source image; the importer's own `<output>.import.json` report
+  records what was converted.
 
 A blocked intake or failed library report must never be handed to `circuit-schematic`.
 Never edit `libraries/`.

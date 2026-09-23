@@ -291,6 +291,17 @@ def _statuses(root: Path, fetch: Fetch, fetch_json: FetchJson) -> list[Status]:
             version_tuple(latest_konnect) > version_tuple(current_konnect),
         )
     )
+    for package in ("poppler-utils", "librsvg2-bin"):
+        statuses.append(
+            Status(
+                package,
+                "unpinned",
+                "(Ubuntu 26.04 archive)",
+                "apt",
+                False,
+                "P4 rasterizer dep; version tracking deferred to the Ubuntu archive",
+            )
+        )
     head = subprocess.run(
         ["git", "-C", str(root / "libraries" / "cern-kicad-libs"), "rev-parse", "HEAD"],
         check=True,

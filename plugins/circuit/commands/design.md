@@ -56,6 +56,9 @@ matters — place the PNGs under
 `circuit-reports/`, `circuit_export` with each kind under `<project>/exports/<kind>/`,
 `circuit_jobset_run` for the manufacturing outputs, and `circuit_diff` whenever a
 baseline or snapshot exists (write `*.diff.json` under `circuit-reports/`).
+`circuit_stackup` writes a deterministic section-diagram SVG next to the
+stackup JSON for cross-section review; `circuit_import` and
+`circuit_rasterize` cover foreign CAD files and PDF intake.
 Record every advisory check outcome as a
 `circuit-reports/<stage>-<slug>.advisory.json` file — one JSON object per check
 following the AdvisoryResult contract: `{"tool": <konnect tool or check name>,

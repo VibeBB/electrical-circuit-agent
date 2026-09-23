@@ -37,6 +37,9 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_diff",
         "circuit_jobset_run",
         "circuit_export",
+        "circuit_import",
+        "circuit_stackup",
+        "circuit_rasterize",
         "circuit_konnect_call",
         "circuit_kicad_version",
         "circuit_sch_lint",
@@ -71,7 +74,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 18
+            assert len(tools.tools) == 21
             result = await session.call_tool("circuit_kicad_version", {})
             assert result.isError is False
             content = result.content[0]
@@ -683,5 +686,102 @@ def test_design_report_collects_pipeline_sections(tmp_path: Path) -> None:
         assert design.jobset_consistent is True
         assert "board.pcb" in design.diffs
         assert design.diffs["board.pcb"].identical is True
+
+    asyncio.run(exercise())
+
+
+def test_import_dispatches_and_returns_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from circuit.kicad_cli import ImportResult
+
+    def fake_import(kind: str, source: Path, output: Path, *, format: str) -> ImportResult:
+        return ImportResult(
+            kind=cast(Any, kind),
+            source=source,
+            output=output,
+            report_path=output.with_name(output.name + ".import.json"),
+            report={"source_format": "LTspice"},
+        )
+
+    monkeypatch.setattr(mcp_server.kicad_cli, "import_file", fake_import)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_import",
+                {
+                    "kind": "sch",
+                    "source_path": str(tmp_path / "in.asc"),
+                    "output_path": str(tmp_path / "out.kicad_sch"),
+                    "format": "ltspice",
+                },
+            ),
+        )
+        assert result.isError is False
+        payload = json.loads(result.content[0].text)
+        assert payload["report"] == {"source_format": "LTspice"}
+        assert payload["output"].endswith("out.kicad_sch")
+
+    asyncio.run(exercise())
+
+
+def test_stackup_writes_json_and_svg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out_dir = tmp_path / "stackup"
+
+    def fake_stackup(board: Path, out: Path) -> dict[str, object]:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text('{"layers":[]}', encoding="utf-8")
+        return {"layers": [{"type": "BSLT_COPPER", "enabled": True}]}
+
+    monkeypatch.setattr(mcp_server.kicad_cli, "export_stackup", fake_stackup)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_stackup",
+                {"board_path": str(tmp_path / "board.kicad_pcb"), "output_dir": str(out_dir)},
+            ),
+        )
+        assert result.isError is False
+        payload = json.loads(result.content[0].text)
+        assert Path(payload["json_path"]).is_file()
+        svg = Path(payload["svg_path"])
+        assert svg.is_file() and svg.read_text(encoding="utf-8").startswith("<svg")
+
+    asyncio.run(exercise())
+
+
+def test_rasterize_attaches_pngs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    png_bytes = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c626001000000ffff03000006000557bfabd40000000049"
+        "454e44ae426082"
+    )
+    page = tmp_path / "doc-1.png"
+    page.write_bytes(png_bytes)
+
+    def fake_rasterize(source: Path, out_dir: Path, *, dpi: int) -> list[Path]:
+        return [page]
+
+    monkeypatch.setattr(mcp_server.raster, "rasterize", fake_rasterize)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_rasterize",
+                {
+                    "source_path": str(tmp_path / "doc.pdf"),
+                    "output_dir": str(tmp_path / "pages"),
+                },
+            ),
+        )
+        assert result.isError is False
+        image = result.content[1]
+        assert isinstance(image, ImageContent)
+        assert image.mimeType == "image/png"
 
     asyncio.run(exercise())

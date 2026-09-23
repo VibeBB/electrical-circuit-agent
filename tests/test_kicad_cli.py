@@ -10,6 +10,8 @@ from circuit.kicad_cli import (
     erc,
     export,
     export_netlist,
+    export_stackup,
+    import_file,
     jobset_run,
     render,
     render_layers,
@@ -527,3 +529,92 @@ def test_new_export_kinds_build_expected_argv(
     elif kind == "pcb_pdf":
         assert output_arg == tmp_path / "out" / "board.pdf"
         assert "F.Cu,B.Cu,Edge.Cuts" in calls[0]
+
+
+def test_import_file_runs_importer_and_reads_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "design.asc"
+    source.write_text("Version 4", encoding="utf-8")
+    output = tmp_path / "out" / "design.kicad_sch"
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object):
+        calls.append(args)
+        report_path = Path(args[args.index("--report-file") + 1])
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            '{"source_format":"LTspice","statistics":{"sheets":1}}', encoding="utf-8"
+        )
+        out = Path(args[args.index("--output") + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("(kicad_sch)", encoding="utf-8")
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    result = import_file("sch", source, output, format="ltspice")
+    assert result.output.is_file()
+    assert result.report_path is not None and result.report_path.name.endswith(".import.json")
+    assert result.report == {"source_format": "LTspice", "statistics": {"sheets": 1}}
+    args = calls[0]
+    assert args[:2] == ["sch", "import"]
+    assert "--format" in args and args[args.index("--format") + 1] == "ltspice"
+    assert "--report-format" in args and args[args.index("--report-format") + 1] == "json"
+
+
+def test_import_file_rejects_bad_format(tmp_path: Path) -> None:
+    source = tmp_path / "x.asc"
+    source.write_text("Version 4", encoding="utf-8")
+    with pytest.raises(KicadCliError, match="format"):
+        import_file("pcb", source, tmp_path / "x.kicad_pcb", format="ltspice")
+
+
+def test_import_file_fails_closed_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "design.asc"
+    source.write_text("Version 4", encoding="utf-8")
+
+    def fake_run(args: list[str], **_: object):
+        report_path = Path(args[args.index("--report-file") + 1])
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text("{}", encoding="utf-8")
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    with pytest.raises(KicadCliError, match="no import output"):
+        import_file("sch", source, tmp_path / "out.kicad_sch")
+
+
+def test_export_stackup_reads_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    board = tmp_path / "board.kicad_pcb"
+    board.write_text("(kicad_pcb)", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object):
+        calls.append(args)
+        Path(args[args.index("--output") + 1]).write_text(
+            '{"layers":[{"type":"BSLT_COPPER","enabled":true}]}', encoding="utf-8"
+        )
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    data = export_stackup(board, tmp_path / "out" / "board-stackup.json")
+    assert data["layers"] == [{"type": "BSLT_COPPER", "enabled": True}]
+    assert calls[0][:3] == ["pcb", "export", "stackup"]
+    assert calls[0][calls[0].index("--format") + 1] == "json"
+
+
+def test_export_stackup_fails_closed_on_bad_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = tmp_path / "board.kicad_pcb"
+    board.write_text("(kicad_pcb)", encoding="utf-8")
+
+    def fake_run(args: list[str], **_: object):
+        Path(args[args.index("--output") + 1]).write_text("not json", encoding="utf-8")
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    with pytest.raises(KicadCliError, match="parse"):
+        export_stackup(board, tmp_path / "board-stackup.json")
