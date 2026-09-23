@@ -1,10 +1,12 @@
 import asyncio
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import ImageContent, TextContent
@@ -110,6 +112,7 @@ def test_render_result_includes_image_content(tmp_path: Path, monkeypatch: Any) 
         side: str,
         width: int = 1280,
         height: int = 720,
+        **_: object,
     ) -> Path:
         return out_path
 
@@ -145,6 +148,7 @@ def test_render_result_text_only_when_png_missing(tmp_path: Path, monkeypatch: A
         side: str,
         width: int = 1280,
         height: int = 720,
+        **_: object,
     ) -> Path:
         return tmp_path / "render.png"
 
@@ -165,6 +169,289 @@ def test_render_result_text_only_when_png_missing(tmp_path: Path, monkeypatch: A
         assert result.isError is False
         assert len(result.content) == 1
         assert isinstance(result.content[0], TextContent)
+
+    asyncio.run(exercise())
+
+
+def test_render_schematic_kind_attaches_images(tmp_path: Path, monkeypatch: Any) -> None:
+    png_bytes = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c626001000000ffff03000006000557bfabd40000000049"
+        "454e44ae426082"
+    )
+    out_dir = tmp_path / "sch-png"
+    produced = [out_dir / f"board-{page}.png" for page in (1, 2)]
+    for path in produced:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(png_bytes)
+
+    def fake_render_schematic(sch: Path, out: Path, **_: object) -> list[Path]:
+        return produced
+
+    monkeypatch.setattr(mcp_server.kicad_cli, "render_schematic", fake_render_schematic)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_render",
+                {
+                    "kind": "schematic",
+                    "schematic_path": str(tmp_path / "board.kicad_sch"),
+                    "output_dir": str(out_dir),
+                },
+            ),
+        )
+        assert result.isError is False
+        assert isinstance(result.content[0], TextContent)
+        payload = json.loads(result.content[0].text)
+        assert payload["images"] == [str(path) for path in produced]
+        images = result.content[1:]
+        assert len(images) == 2
+        assert all(isinstance(image, ImageContent) for image in images)
+
+    asyncio.run(exercise())
+
+
+def test_render_layers_kind_attaches_capped_images(tmp_path: Path, monkeypatch: Any) -> None:
+    png_bytes = b"\x89PNG" + b"0" * 32
+    out_dir = tmp_path / "layers"
+    out_dir.mkdir()
+    produced = [out_dir / f"board-{index}.png" for index in range(6)]
+    for path in produced:
+        path.write_bytes(png_bytes)
+
+    def fake_render_layers(pcb: Path, out: Path, **kwargs: object) -> list[Path]:
+        assert kwargs["layers"] == "F.Cu,B.Cu"
+        return produced
+
+    monkeypatch.setattr(mcp_server.kicad_cli, "render_layers", fake_render_layers)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_render",
+                {
+                    "kind": "layers",
+                    "board_path": str(tmp_path / "board.kicad_pcb"),
+                    "output_dir": str(out_dir),
+                    "layers": "F.Cu,B.Cu",
+                },
+            ),
+        )
+        assert result.isError is False
+        payload = json.loads(result.content[0].text)
+        assert len(payload["images"]) == 6
+        assert len(result.content) == 1 + 4  # inline image cap
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "kind,missing",
+    [
+        ("board3d", "output_path"),
+        ("schematic", "schematic_path"),
+        ("schematic", "output_dir"),
+        ("layers", "board_path"),
+        ("layers", "layers"),
+    ],
+)
+def test_render_kind_requires_its_inputs(tmp_path: Path, kind: str, missing: str) -> None:
+    async def exercise() -> None:
+        args: dict[str, Any] = {
+            "kind": kind,
+            "board_path": str(tmp_path / "board.kicad_pcb"),
+            "schematic_path": str(tmp_path / "board.kicad_sch"),
+            "output_path": str(tmp_path / "out.png"),
+            "output_dir": str(tmp_path / "out"),
+            "layers": "F.Cu",
+        }
+        del args[missing]
+        result = cast(Any, await mcp_server.call_tool("circuit_render", args))
+        assert result.isError is True
+        assert isinstance(result.content[0], TextContent)
+        assert missing in result.content[0].text
+
+    asyncio.run(exercise())
+
+
+def test_render_unknown_kind_errors(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_render",
+                {"kind": "cross_section", "board_path": str(tmp_path / "b.kicad_pcb")},
+            ),
+        )
+        assert result.isError is True
+        assert "unknown circuit_render kind" in result.content[0].text
+
+    asyncio.run(exercise())
+
+
+def test_diff_png_attaches_image(tmp_path: Path, monkeypatch: Any) -> None:
+    png_bytes = b"\x89PNG" + b"0" * 32
+    out_path = tmp_path / "diff.png"
+    out_path.write_bytes(png_bytes)
+
+    def fake_diff(
+        kind: str, left: Path, right: Path, out: Path, *, format: str = "json"
+    ) -> DiffReport:
+        assert format == "png"
+        return DiffReport(
+            kind=cast(Any, kind),
+            left=left,
+            right=right,
+            identical=False,
+            exit_code=5,
+            output=out_path,
+            format="png",
+        )
+
+    monkeypatch.setattr(mcp_server.kicad_cli, "diff", fake_diff)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_diff",
+                {
+                    "kind": "pcb",
+                    "left_path": str(tmp_path / "a.kicad_pcb"),
+                    "right_path": str(tmp_path / "b.kicad_pcb"),
+                    "output_path": str(out_path),
+                    "format": "png",
+                },
+            ),
+        )
+        assert result.isError is False
+        image = result.content[1]
+        assert isinstance(image, ImageContent)
+        assert base64.b64decode(image.data) == png_bytes
+
+    asyncio.run(exercise())
+
+
+def test_rewrite_text_block_images_extracts_payload(tmp_path: Path) -> None:
+    png_bytes = b"\x89PNG" + b"payload" * 200
+    encoded = base64.b64encode(png_bytes).decode("ascii")
+    counter = [0]
+    rewritten = mcp_server._rewrite_text_block_images(  # pyright: ignore[reportPrivateUsage]
+        json.dumps({"tool": "render_schematic_png", "png_base64": encoded}),
+        tmp_path / "images",
+        counter,
+    )
+    payload = json.loads(rewritten)
+    entry = payload["png_base64"]
+    assert Path(entry["image_path"]).read_bytes() == png_bytes
+    assert entry["sha256"] == hashlib.sha256(png_bytes).hexdigest()
+
+
+def test_rewrite_text_block_images_ignores_non_image_text(tmp_path: Path) -> None:
+    counter = [0]
+    text = json.dumps({"result": "all good", "note": "x" * 5000})
+    rewritten = mcp_server._rewrite_text_block_images(  # pyright: ignore[reportPrivateUsage]
+        text, tmp_path / "images", counter
+    )
+    assert rewritten == text
+    assert (
+        mcp_server._rewrite_text_block_images(  # pyright: ignore[reportPrivateUsage]
+            "not json at all", tmp_path / "images", counter
+        )
+        == "not json at all"
+    )
+
+
+def test_rewrite_base64_images_handles_data_url_and_image_blocks(
+    tmp_path: Path,
+) -> None:
+    png_bytes = b"\x89PNG" + b"payload" * 200
+    encoded = base64.b64encode(png_bytes).decode("ascii")
+    counter = [0]
+    rewritten = mcp_server._rewrite_base64_images(  # pyright: ignore[reportPrivateUsage]
+        {
+            "type": "image",
+            "data": encoded,
+            "mimeType": "image/png",
+            "nested": [{"url": f"data:image/png;base64,{encoded}"}],
+        },
+        tmp_path / "images",
+        counter,
+    )
+    assert isinstance(rewritten, dict)
+    rewritten_dict = cast(dict[str, Any], rewritten)
+    assert str(rewritten_dict["data"]["image_path"]).endswith(".png")
+    nested = cast(list[dict[str, Any]], rewritten_dict["nested"])
+    assert (
+        str(cast(dict[str, Any], nested[0]["url"])["sha256"])
+        == hashlib.sha256(png_bytes).hexdigest()
+    )
+    assert counter[0] == 2
+
+
+def test_konnect_call_ops_extract_image_blocks(tmp_path: Path, monkeypatch: Any) -> None:
+    png_bytes = (
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000a49444154789c626001000000ffff03000006000557bfabd40000000049"
+            "454e44ae426082"
+        )
+        + b"pad" * 400
+    )
+    out_path = tmp_path / "render.png"
+    out_path.write_bytes(png_bytes)
+
+    # The managed konnect subprocess cannot inherit monkeypatches, so wrap the
+    # real server in a script that stubs kicad_cli.render for the child.
+    wrapper = tmp_path / "konnect_stub.py"
+    wrapper.write_text(
+        "import asyncio\n"
+        "from pathlib import Path\n"
+        "from circuit import mcp_server\n"
+        f"PNG = {png_bytes!r}\n"
+        "def fake_render(pcb, out, **_):\n"
+        "    out.write_bytes(PNG)\n"
+        "    return out\n"
+        "mcp_server.kicad_cli.render = fake_render\n"
+        "asyncio.run(mcp_server._run())\n",
+        encoding="utf-8",
+    )
+    _fake_konnect(tmp_path, monkeypatch)
+    monkeypatch.setenv("CIRCUIT_KONNECT", f"python3 {wrapper}")
+    monkeypatch.setenv("CIRCUIT_KONNECT_IMAGE_DIR", str(tmp_path / "konnect-images"))
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_konnect_call",
+                {
+                    "ops": [
+                        {
+                            "tool": "circuit_render",
+                            "arguments": {
+                                "kind": "board3d",
+                                "board_path": str(tmp_path / "b.kicad_pcb"),
+                                "output_path": str(out_path),
+                                "side": "top",
+                            },
+                        }
+                    ],
+                },
+            ),
+        )
+        assert result.isError is False
+        payload = json.loads(result.content[0].text)
+        blocks = cast(list[Any], payload["results"][0]["content"])
+        dict_blocks = [cast(dict[str, Any], block) for block in blocks if isinstance(block, dict)]
+        image_data = cast(dict[str, str], dict_blocks[0]["data"])
+        assert image_data["sha256"] == hashlib.sha256(png_bytes).hexdigest()
+        extracted = Path(image_data["image_path"])
+        assert extracted.is_file()
+        assert extracted.read_bytes() == png_bytes
 
     asyncio.run(exercise())
 

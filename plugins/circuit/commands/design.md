@@ -49,8 +49,11 @@ it, save, then run `circuit_drc`. Fix silkscreen overlaps and illegible or
 rotated reference designators reported by rendered views with
 `edit_board_footprint_graphic` before the final render. The design is not
 complete until the pipeline
-tail has also run: `circuit_render` for top and bottom views (place the PNGs under
-`circuit-reports/`), `circuit_export` with each kind under `<project>/exports/<kind>/`,
+tail has also run: `circuit_render` for top and bottom board views plus a side
+elevation (`kind: board3d` with `side`/`rotate`), a schematic page plot
+(`kind: schematic`), and per-layer plots (`kind: layers`) when copper detail
+matters — place the PNGs under
+`circuit-reports/`, `circuit_export` with each kind under `<project>/exports/<kind>/`,
 `circuit_jobset_run` for the manufacturing outputs, and `circuit_diff` whenever a
 baseline or snapshot exists (write `*.diff.json` under `circuit-reports/`).
 Record every advisory check outcome as a

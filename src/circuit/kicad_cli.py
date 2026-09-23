@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -300,7 +301,11 @@ ExportKind = Literal[
     "gencad",
     "vrml",
     "glb",
+    "fp_svg",
 ]
+
+
+DiffFormat = Literal["json", "png", "svg"]
 
 
 class DiffReport(BaseModel):
@@ -310,6 +315,7 @@ class DiffReport(BaseModel):
     identical: bool
     exit_code: int
     output: Path
+    format: DiffFormat = "json"
     changes: list[dict[str, object]] = Field(default_factory=lambda: list[dict[str, object]]())
 
 
@@ -377,6 +383,20 @@ def export(kind: ExportKind, source: Path, out_dir: Path) -> list[Path]:
             output,
             str(source),
         ]
+    elif kind == "fp_svg":
+        # kicad-cli 10.99 resolves the footprint library, so the input must be
+        # a library directory containing .kicad_mod files; a bare .kicad_mod
+        # file path fails with "Footprint library does not exist".
+        args = [
+            "fp",
+            "export",
+            "svg",
+            "--sketch-pads-on-fab-layers",
+            "--sketch-pad-numbers",
+            "--output",
+            str(out_dir),
+            str(source),
+        ]
     elif kind in {"ipc2581", "odb", "gencad", "vrml", "glb"}:
         suffix = {"ipc2581": "xml", "odb": "zip", "gencad": "cad", "vrml": "wrl", "glb": "glb"}[
             kind
@@ -411,33 +431,70 @@ def _require_input(path: Path, label: str) -> None:
         raise KicadCliError(f"{label} is missing or empty: {path}")
 
 
+CameraSide = Literal["top", "bottom", "left", "right", "front", "back"]
+RenderBackground = Literal["default", "transparent", "opaque"]
+RenderQuality = Literal["basic", "high", "user", "job_settings"]
+
+_XYZ_PATTERN = re.compile(r"^-?\d+(?:\.\d+)?(,-?\d+(?:\.\d+)?){2}$")
+
+
+def _xyz_arg(name: str, value: str | None) -> list[str]:
+    if value is None:
+        return []
+    if not _XYZ_PATTERN.match(value):
+        raise KicadCliError(f"{name} must be three comma-separated numbers 'X,Y,Z'")
+    return [f"--{name}", value]
+
+
 def render(
     pcb: Path,
     out: Path,
     *,
-    side: Literal["top", "bottom"],
+    side: CameraSide = "top",
     width: int = 1280,
     height: int = 720,
+    rotate: str | None = None,
+    zoom: float | None = None,
+    pan: str | None = None,
+    pivot: str | None = None,
+    perspective: bool = False,
+    floor: bool = False,
+    background: RenderBackground | None = None,
+    quality: RenderQuality | None = None,
 ) -> Path:
     _require_input(pcb, "PCB")
     if width <= 0 or height <= 0:
         raise KicadCliError("render dimensions must be positive")
+    if zoom is not None and zoom <= 0:
+        raise KicadCliError("render zoom must be positive")
+    args = [
+        "pcb",
+        "render",
+        "--output",
+        str(out),
+        "--width",
+        str(width),
+        "--height",
+        str(height),
+        "--side",
+        side,
+    ]
+    args += _xyz_arg("rotate", rotate)
+    args += _xyz_arg("pan", pan)
+    args += _xyz_arg("pivot", pivot)
+    if zoom is not None:
+        args += ["--zoom", str(zoom)]
+    if perspective:
+        args.append("--perspective")
+    if floor:
+        args.append("--floor")
+    if background is not None:
+        args += ["--background", background]
+    if quality is not None:
+        args += ["--quality", quality]
+    args.append(str(pcb))
     out.parent.mkdir(parents=True, exist_ok=True)
-    result = run(
-        [
-            "pcb",
-            "render",
-            "--output",
-            str(out),
-            "--width",
-            str(width),
-            "--height",
-            str(height),
-            "--side",
-            side,
-            str(pcb),
-        ]
-    )
+    result = run(args)
     if result.returncode:
         raise KicadCliError(result.stderr.strip() or "kicad-cli render failed")
     if not out.is_file() or out.stat().st_size == 0:
@@ -445,7 +502,116 @@ def render(
     return out
 
 
-def diff(kind: Literal["sch", "pcb"], left: Path, right: Path, out: Path) -> DiffReport:
+def _collect_pngs(out_dir: Path, stem: str) -> list[Path]:
+    images = sorted(path for path in out_dir.glob(f"{stem}*.png") if path.is_file())
+    if not images:
+        raise KicadCliError(f"kicad-cli produced no PNG output in {out_dir}")
+    return images
+
+
+def render_schematic(
+    sch: Path,
+    out_dir: Path,
+    *,
+    pages: str | None = None,
+    dpi: int = 300,
+    black_and_white: bool = False,
+    exclude_drawing_sheet: bool = False,
+    theme: str | None = None,
+) -> list[Path]:
+    _require_input(sch, "schematic")
+    if dpi <= 0:
+        raise KicadCliError("render dpi must be positive")
+    args = [
+        "sch",
+        "export",
+        "png",
+        "--output",
+        str(out_dir),
+        "--dpi",
+        str(dpi),
+    ]
+    if pages:
+        args += ["--pages", pages]
+    if black_and_white:
+        args.append("--black-and-white")
+    if exclude_drawing_sheet:
+        args.append("--exclude-drawing-sheet")
+    if theme:
+        args += ["--theme", theme]
+    args.append(str(sch))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result = run(args)
+    if result.returncode:
+        raise KicadCliError(result.stderr.strip() or "kicad-cli schematic png export failed")
+    return _collect_pngs(out_dir, sch.stem)
+
+
+def render_layers(
+    pcb: Path,
+    out_dir: Path,
+    *,
+    layers: str,
+    common_layers: str | None = None,
+    mirror: bool = False,
+    scale: int | None = None,
+    sketch_pads_on_fab_layers: bool = False,
+    sketch_pad_numbers: bool = False,
+    black_and_white: bool = False,
+    include_border_title: bool = False,
+    dpi: int = 300,
+    theme: str | None = None,
+) -> list[Path]:
+    _require_input(pcb, "PCB")
+    if not layers.strip():
+        raise KicadCliError("layers must name at least one layer")
+    if dpi <= 0:
+        raise KicadCliError("render dpi must be positive")
+    if scale is not None and scale < 0:
+        raise KicadCliError("scale must be non-negative")
+    args = [
+        "pcb",
+        "export",
+        "png",
+        "--output",
+        str(out_dir),
+        "--layers",
+        layers,
+        "--dpi",
+        str(dpi),
+    ]
+    if common_layers:
+        args += ["--common-layers", common_layers]
+    if mirror:
+        args.append("--mirror")
+    if scale is not None:
+        args += ["--scale", str(scale)]
+    if sketch_pads_on_fab_layers:
+        args.append("--sketch-pads-on-fab-layers")
+    if sketch_pad_numbers:
+        args.append("--sketch-pad-numbers")
+    if black_and_white:
+        args.append("--black-and-white")
+    if include_border_title:
+        args.append("--include-border-title")
+    if theme:
+        args += ["--theme", theme]
+    args.append(str(pcb))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result = run(args)
+    if result.returncode:
+        raise KicadCliError(result.stderr.strip() or "kicad-cli pcb png export failed")
+    return _collect_pngs(out_dir, pcb.stem)
+
+
+def diff(
+    kind: Literal["sch", "pcb"],
+    left: Path,
+    right: Path,
+    out: Path,
+    *,
+    format: DiffFormat = "json",
+) -> DiffReport:
     _require_input(left, "left input")
     _require_input(right, "right input")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -454,7 +620,7 @@ def diff(kind: Literal["sch", "pcb"], left: Path, right: Path, out: Path) -> Dif
             kind,
             "diff",
             "--format",
-            "json",
+            format,
             "--output",
             str(out),
             str(left),
@@ -463,19 +629,21 @@ def diff(kind: Literal["sch", "pcb"], left: Path, right: Path, out: Path) -> Dif
     )
     if result.returncode not in {0, 5}:
         raise KicadCliError(result.stderr.strip() or f"kicad-cli {kind} diff failed")
-    if not out.is_file():
+    if not out.is_file() or out.stat().st_size == 0:
         raise KicadCliError("kicad-cli produced no diff report")
-    try:
-        with out.open(encoding="utf-8") as handle:
-            value: object = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise KicadCliError(f"could not parse {kind} diff report {out}: {exc}") from exc
-    if not isinstance(value, dict):
-        raise KicadCliError(f"{kind} diff report has no changes list")
-    diff_data = cast(dict[str, Any], value)
-    if not isinstance(diff_data.get("changes"), list):
-        raise KicadCliError(f"{kind} diff report has no changes list")
-    changes = cast(list[dict[str, object]], diff_data["changes"])
+    changes: list[dict[str, object]] = []
+    if format == "json":
+        try:
+            with out.open(encoding="utf-8") as handle:
+                value: object = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise KicadCliError(f"could not parse {kind} diff report {out}: {exc}") from exc
+        if not isinstance(value, dict):
+            raise KicadCliError(f"{kind} diff report has no changes list")
+        diff_data = cast(dict[str, Any], value)
+        if not isinstance(diff_data.get("changes"), list):
+            raise KicadCliError(f"{kind} diff report has no changes list")
+        changes = cast(list[dict[str, object]], diff_data["changes"])
     return DiffReport(
         kind=kind,
         left=left,
@@ -483,6 +651,7 @@ def diff(kind: Literal["sch", "pcb"], left: Path, right: Path, out: Path) -> Dif
         identical=result.returncode == 0,
         exit_code=result.returncode,
         output=out,
+        format=format,
         changes=changes,
     )
 

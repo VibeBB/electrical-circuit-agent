@@ -12,6 +12,8 @@ from circuit.kicad_cli import (
     export_netlist,
     jobset_run,
     render,
+    render_layers,
+    render_schematic,
     reports_equivalent,
 )
 
@@ -228,6 +230,160 @@ def test_render_uses_requested_view_and_requires_nonempty_output(
     output = render(pcb, tmp_path / "render.png", side="bottom")
     assert output.read_bytes() == b"PNG"
     assert calls[0][-2:] == ["bottom", str(pcb)]
+
+
+def test_render_passes_camera_controls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pcb = tmp_path / "board.kicad_pcb"
+    pcb.write_text("(kicad_pcb)", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object):
+        calls.append(args)
+        Path(args[args.index("--output") + 1]).write_bytes(b"PNG")
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    render(
+        pcb,
+        tmp_path / "render.png",
+        side="left",
+        rotate="-45,0,45",
+        zoom=2.5,
+        pan="3,0,0",
+        pivot="-10,2,0",
+        perspective=True,
+        floor=True,
+        background="opaque",
+        quality="high",
+    )
+    args = calls[0]
+    assert args[args.index("--side") + 1] == "left"
+    assert args[args.index("--rotate") + 1] == "-45,0,45"
+    assert args[args.index("--zoom") + 1] == "2.5"
+    assert args[args.index("--pan") + 1] == "3,0,0"
+    assert args[args.index("--pivot") + 1] == "-10,2,0"
+    assert "--perspective" in args
+    assert "--floor" in args
+    assert args[args.index("--background") + 1] == "opaque"
+    assert args[args.index("--quality") + 1] == "high"
+
+
+@pytest.mark.parametrize("bad", ["1,2", "a,b,c", "1,2,3,4", "1..0,2,3"])
+def test_render_rejects_malformed_xyz_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    pcb = tmp_path / "board.kicad_pcb"
+    pcb.write_text("(kicad_pcb)", encoding="utf-8")
+
+    def fake_run(_args: list[str], **_: object):
+        raise AssertionError("kicad-cli must not run for malformed args")
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    with pytest.raises(KicadCliError, match="X,Y,Z"):
+        render(pcb, tmp_path / "render.png", rotate=bad)
+
+
+def test_render_schematic_collects_pages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sch = tmp_path / "board.kicad_sch"
+    sch.write_text("(kicad_sch)", encoding="utf-8")
+    out_dir = tmp_path / "sch-png"
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object):
+        calls.append(args)
+        (out_dir / "board-1.png").write_bytes(b"PNG")
+        (out_dir / "board-2.png").write_bytes(b"PNG")
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    images = render_schematic(sch, out_dir, pages="1,2", dpi=150, black_and_white=True)
+    assert [path.name for path in images] == ["board-1.png", "board-2.png"]
+    args = calls[0]
+    assert args[:3] == ["sch", "export", "png"]
+    assert args[args.index("--pages") + 1] == "1,2"
+    assert args[args.index("--dpi") + 1] == "150"
+    assert "--black-and-white" in args
+
+
+def test_render_schematic_fails_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sch = tmp_path / "board.kicad_sch"
+    sch.write_text("(kicad_sch)", encoding="utf-8")
+
+    def fake_run(args: list[str], **_: object):
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    with pytest.raises(KicadCliError, match="no PNG output"):
+        render_schematic(sch, tmp_path / "sch-png")
+
+
+def test_render_layers_builds_expected_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pcb = tmp_path / "board.kicad_pcb"
+    pcb.write_text("(kicad_pcb)", encoding="utf-8")
+    out_dir = tmp_path / "layers"
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object):
+        calls.append(args)
+        (out_dir / "board-F_Cu.png").write_bytes(b"PNG")
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    images = render_layers(
+        pcb,
+        out_dir,
+        layers="F.Cu,B.Cu",
+        common_layers="Edge.Cuts",
+        mirror=True,
+        scale=0,
+        sketch_pads_on_fab_layers=True,
+        sketch_pad_numbers=True,
+        black_and_white=True,
+        include_border_title=True,
+        dpi=150,
+    )
+    assert [path.name for path in images] == ["board-F_Cu.png"]
+    args = calls[0]
+    assert args[:3] == ["pcb", "export", "png"]
+    assert args[args.index("--layers") + 1] == "F.Cu,B.Cu"
+    assert args[args.index("--common-layers") + 1] == "Edge.Cuts"
+    assert "--mirror" in args
+    assert args[args.index("--scale") + 1] == "0"
+    assert "--sketch-pads-on-fab-layers" in args
+    assert "--sketch-pad-numbers" in args
+    assert "--black-and-white" in args
+    assert "--include-border-title" in args
+
+
+def test_render_layers_requires_layers(tmp_path: Path) -> None:
+    pcb = tmp_path / "board.kicad_pcb"
+    pcb.write_text("(kicad_pcb)", encoding="utf-8")
+    with pytest.raises(KicadCliError, match="layers"):
+        render_layers(pcb, tmp_path / "out", layers="  ")
+
+
+def test_export_fp_svg_builds_expected_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    footprint = tmp_path / "SOIC-8.kicad_mod"
+    footprint.write_text("(footprint)", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object):
+        calls.append(args)
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    export("fp_svg", footprint, tmp_path / "out")
+    args = calls[0]
+    assert args[:3] == ["fp", "export", "svg"]
+    assert "--sketch-pads-on-fab-layers" in args
+    assert "--sketch-pad-numbers" in args
+    assert args[-1] == str(footprint)
 
 
 @pytest.mark.parametrize("returncode, identical", [(0, True), (5, False)])
