@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `skills/circuit-brief-rules`: path-triggered rule (`*.brief.json`,
   `*.intake.json`) injecting design-brief contract and intake-provenance
   reminders deterministically — the same PathTrigger mechanism mech uses.
+- `circuit-brief` and `circuit-review` declare the `record-vision-tool-event`
+  post hook in frontmatter (plugin hooks do not propagate to task sub-agents).
 
 ### Fixed
 
