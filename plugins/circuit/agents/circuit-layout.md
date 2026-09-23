@@ -10,10 +10,10 @@ tools:
   - task_tracker
 mcp_config:
   circuit:
-    command: python3
+    command: sh
     args:
-      - -m
-      - circuit.mcp_server
+      - -c
+      - 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit"; do [ -f "$c/scripts/circuit_launcher.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || { echo "circuit plugin root unresolved" >&2; exit 2; }; exec python3 "$p/scripts/circuit_launcher.py" mcp_server'
   konnect:
     command: konnect
     env:
@@ -40,7 +40,10 @@ the board; one server handles one board, so stop it before switching boards. Use
 Konnect for live edits — never generate scripts that write `.kicad_pcb` content
 directly — call `save_project({})` after edits, then call
 `circuit_drc` and `circuit_design_report`. Report the JSON verdicts verbatim. Do not
-treat your review or a tool narrative as acceptance authority.
+treat your review or a tool narrative as acceptance authority. If dynamically
+loaded `konnect_*` toolsets never become visible, invoke the same operations
+through `circuit_konnect_call`; a stdio JSON-RPC client against the `konnect`
+binary is the last-resort fallback.
 
 Advisory Konnect checks for this stage include board info/extents/layers,
 `score_placement`, dry-run `refine_placement_force_directed`, design rules and

@@ -24,7 +24,9 @@ required libraries, looking up every symbol with `get_symbol_info`, placing symb
 and using `batch_connect_to_net` net labels. Do not draw pin-to-pin wires across
 components. In Konnect 0.12.1, `save_project` takes `{}`. Schematic files are only
 written by Konnect operations — never by generated scripts or hand-edited
-s-expressions. Run `circuit_sch_lint` on the authored schematic and stop if it
+s-expressions. When dynamically loaded `konnect_*` toolsets are not visible to the
+harness, run those same operations through `circuit_konnect_call` rather than
+falling back to file writes. Run `circuit_sch_lint` on the authored schematic and stop if it
 fails; if the tool is unavailable or errors, the gate fails closed — stop and
 report the missing gate rather than continuing to ERC, then call
 `circuit_connectivity_check` and stop if its kicad-cli netlist gate fails, then run

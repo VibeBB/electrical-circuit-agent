@@ -6,7 +6,7 @@
         {
           "type": "command",
           "name": "circuit-doctor",
-          "command": "python3 -m circuit.doctor --warn"
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/scripts/circuit_launcher.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || { echo \"circuit plugin root unresolved\" >&2; exit 1; }; exec python3 \"$p/scripts/circuit_launcher.py\" doctor --warn"
         }
       ]
     }

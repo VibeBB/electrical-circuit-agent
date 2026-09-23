@@ -17,6 +17,17 @@ toolsets, call `get_symbol_info`, place symbols with `batch_place_components`, a
 connect every brief net with `batch_connect_to_net` labels. Do not draw pin-to-pin
 wires across components. In v0.12.1 call `save_project` with `{}`.
 
+Konnect loads most authoring operations through `load_toolset`, and some
+harnesses never re-fetch `tools/list` after that call, so the operations never
+appear as visible `konnect_*` tools. Do not loop on `get_active_toolsets` when
+that happens. Invoke the operation through `circuit_konnect_call` instead:
+`{"tool": "batch_place_components", "arguments": {...}}` spawns a managed
+Konnect stdio session and returns its result verbatim. As a fallback, drive
+the same ops with a small stdio JSON-RPC client (the repository's
+`scripts/konnect_client.py` pattern) against the `konnect` binary with
+`KICAD_API_SOCKET` set; record such terminal invocations in the summary since
+they are less visible to policy than `circuit_konnect_call` events.
+
 Set `KICAD_API_SOCKET=ipc:///tmp/circuit-kicad.sock` and start the circuit API
 server for the selected board first. Load the PCB toolset as needed, then use
 `update_pcb_from_schematic`, `set_component_placements`, `route_pad_to_pad`, and
