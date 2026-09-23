@@ -8,10 +8,6 @@
 | [`architecture.md`](architecture.md) | Responsibility boundaries and execution sequence |
 | [`operations.md`](operations.md) | Build, smoke, dependency updates |
 | [`konnect-tools.md`](konnect-tools.md) | Konnect v0.12.1 complete tool coverage matrix |
-| [`adr/ADR-0010-brief-intake-provenance-and-library-gate.md`](adr/ADR-0010-brief-intake-provenance-and-library-gate.md) | Brief intake provenance and library gate |
-| [`adr/ADR-0012-kicad-cli-jobset-render-diff.md`](adr/ADR-0012-kicad-cli-jobset-render-diff.md) | Adoption of kicad-cli jobset, render, and diff |
-| [`adr/ADR-0008-cicd-ghcr-digest-lock.md`](adr/ADR-0008-cicd-ghcr-digest-lock.md) | GHCR publishing and digest lock |
-| [`adr/ADR-0021-openj9-freerouting-runtime.md`](adr/ADR-0021-openj9-freerouting-runtime.md) | Semeru OpenJ9 and FreeRouting runtime in the tools image |
 
 ## Accepted ADR list
 

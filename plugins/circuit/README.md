@@ -1,7 +1,7 @@
 # circuit plugin
 
 `circuit` is a lightweight OpenHands plugin that uses KiCad 11 nightly.
-The planned install source is:
+The install source is:
 
 ```text
 github:VibeBB/electrical-circuit-agent
