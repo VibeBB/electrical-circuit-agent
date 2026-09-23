@@ -49,6 +49,8 @@ _PROPERTY_ON_BODY_MM = 2.5
 _LABELED_PROPERTIES = {"Reference", "Value"}
 _TITLE_BLOCK_FIELDS = ("title", "date", "rev")
 _MIN_SHEET_USAGE = 0.30
+_WIRE_ITEMS = {"wire", "bus"}
+_LABEL_ITEMS = {"label", "global_label", "hierarchical_label"}
 _POSITIONED_ITEMS = {
     "label",
     "global_label",
@@ -121,10 +123,17 @@ def lint_schematic(path: Path) -> SchLintReport:
     findings: list[SchLintFinding] = []
     page_width, page_height = _paper_size(root)
     symbols = 0
+    non_power_symbols = 0
+    wires = 0
+    labels = 0
     item_positions: list[tuple[float, float]] = []
     for node in root[1:]:
         if not isinstance(node, list) or not node or not isinstance(node[0], str):
             continue
+        if node[0] in _WIRE_ITEMS:
+            wires += 1
+        if node[0] in _LABEL_ITEMS:
+            labels += 1
         if node[0] != "symbol" and node[0] not in _POSITIONED_ITEMS:
             continue
         position = _position(node)
@@ -146,6 +155,14 @@ def lint_schematic(path: Path) -> SchLintReport:
         if node[0] != "symbol":
             continue
         symbols += 1
+        lib_id = _first_child(node, "lib_id")
+        if not (
+            lib_id is not None
+            and len(lib_id) > 1
+            and isinstance(lib_id[1], str)
+            and lib_id[1].startswith("power:")
+        ):
+            non_power_symbols += 1
         uuid = next(
             (
                 child[1]
@@ -235,6 +252,19 @@ def lint_schematic(path: Path) -> SchLintReport:
                     ),
                 )
             )
+
+    if non_power_symbols >= 2 and wires == 0 and labels > 0:
+        findings.append(
+            SchLintFinding(
+                type="label_only_connectivity",
+                severity="warning",
+                description=(
+                    f"{labels} net labels carry all connectivity with no wires; "
+                    "wire the main signal chain and reserve labels for power "
+                    "rails and crossing nets"
+                ),
+            )
+        )
 
     errors = sum(1 for f in findings if f.severity == "error")
     warnings = sum(1 for f in findings if f.severity == "warning")

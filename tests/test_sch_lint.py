@@ -143,3 +143,47 @@ def test_lint_no_underutilized_warning_for_spread_placement(tmp_path: Path) -> N
     path = _write_sch(tmp_path, _SYMBOL_OK + " " + second)
     report = lint_schematic(path)
     assert not any(f.type == "sheet_underutilized" for f in report.findings)
+
+
+_SYMBOL_TWO = (
+    _SYMBOL_OK.replace("(at 100 100 0)", "(at 200 100 0)")
+    .replace("(at 101 97 0)", "(at 201 97 0)")
+    .replace("(at 101 103 0)", "(at 201 103 0)")
+    .replace(
+        'uuid "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"',
+        'uuid "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"',
+    )
+)
+_LABEL = '(label "N1" (at 150 100 0) (effects (font (size 1.27 1.27))))'
+_WIRE = (
+    "(wire (pts (xy 105 100) (xy 195 100)) "
+    '(stroke (width 0) (type default)) (uuid "cccccccc-dddd-eeee-ffff-000000000000"))'
+)
+
+
+def test_lint_warns_when_labels_carry_all_connectivity(tmp_path: Path) -> None:
+    path = _write_sch(tmp_path, _SYMBOL_OK + " " + _SYMBOL_TWO + " " + _LABEL)
+    report = lint_schematic(path)
+    assert report.verdict == "pass"
+    finding = next(f for f in report.findings if f.type == "label_only_connectivity")
+    assert finding.severity == "warning"
+
+
+def test_lint_no_label_only_warning_when_wires_present(tmp_path: Path) -> None:
+    path = _write_sch(tmp_path, _SYMBOL_OK + " " + _SYMBOL_TWO + " " + _WIRE + " " + _LABEL)
+    report = lint_schematic(path)
+    assert not any(f.type == "label_only_connectivity" for f in report.findings)
+
+
+def test_lint_no_label_only_warning_with_single_symbol(tmp_path: Path) -> None:
+    path = _write_sch(tmp_path, _SYMBOL_OK + " " + _LABEL)
+    report = lint_schematic(path)
+    assert not any(f.type == "label_only_connectivity" for f in report.findings)
+
+
+def test_lint_no_label_only_warning_for_power_symbols(tmp_path: Path) -> None:
+    power = _SYMBOL_OK.replace('lib_id "Device:R"', 'lib_id "power:GND"')
+    power_two = _SYMBOL_TWO.replace('lib_id "Device:R"', 'lib_id "power:VDD"')
+    path = _write_sch(tmp_path, power + " " + power_two + " " + _LABEL)
+    report = lint_schematic(path)
+    assert not any(f.type == "label_only_connectivity" for f in report.findings)
