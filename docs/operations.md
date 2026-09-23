@@ -301,6 +301,19 @@ and `OpenQuestion` records may bind such a file with an `evidence` field
 (`kind`, `path`, `sha256`, `note`); `check_intake` verifies existence and
 hash — fail-closed.
 
+### Visual review records and image observation provenance
+
+A vision-capable review writes `circuit-reports/review-visual-<slug>.advisory.json`
+per inspected image: `tool: "vision_review"`, `stage: "review"`, and `detail`
+following `VisualReviewDetail` (`image_path`, `image_sha256`, `model`,
+`checklist`, `findings[]` with a fixed category vocabulary and optional
+normalized `bbox`; ADR-0018). Records are advisory and aggregate into the
+design report like any advisory file. Separately, the `record-image-observation`
+hook logs every image the model saw — `circuit_render`, `circuit_diff`, and
+`file_editor view` calls — to `.openhands/circuit/image-observations.jsonl`
+(path + sha256; override `$CIRCUIT_IMAGE_OBSERVATIONS`), complementing the
+`vision-tool-events.jsonl` log of delegated `inspect_image_with_vision` calls.
+
 ### Schematic readability lint
 
 `circuit_sch_lint` is a deterministic gate on the authored `.kicad_sch`:
