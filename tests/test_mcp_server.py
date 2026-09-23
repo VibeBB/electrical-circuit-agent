@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import os
 from pathlib import Path
 from typing import Any, cast
@@ -9,6 +10,11 @@ from mcp.client.stdio import stdio_client
 from mcp.types import ImageContent, TextContent
 
 from circuit import mcp_server
+from circuit.advisory import AdvisoryResult
+from circuit.kicad_cli import DiffReport, JobsetResult
+from circuit.netlist import ConnectivityReport
+from circuit.report import DesignReport
+from circuit.sch_lint import SchLintReport
 
 
 def test_mcp_server_lists_expected_tools() -> None:
@@ -158,5 +164,136 @@ def test_render_result_text_only_when_png_missing(tmp_path: Path, monkeypatch: A
         assert result.isError is False
         assert len(result.content) == 1
         assert isinstance(result.content[0], TextContent)
+
+    asyncio.run(exercise())
+
+
+def _write_gate_reports(project: Path) -> Path:
+    reports = project / "circuit-reports"
+    reports.mkdir(parents=True)
+    brief_path = Path(__file__).parent / "data" / "brief_led_loop.json"
+    connectivity = ConnectivityReport(
+        brief_path=brief_path,
+        netlist_path=project / "circuit-reports" / "board.net",
+        brief_sha256="0" * 64,
+        expected={"VIN": ["J1.1", "R1.1"]},
+        actual={"VIN": ["J1.1", "R1.1"]},
+        missing_nets=[],
+        mismatched_nets={},
+        unexpected_nets=[],
+        missing_parts=[],
+        footprint_mismatches={},
+        verdict="pass",
+    )
+    (reports / "board.connectivity.json").write_text(
+        connectivity.model_dump_json(), encoding="utf-8"
+    )
+    sch_lint_report = SchLintReport(
+        source=project / "board.kicad_sch",
+        verdict="pass",
+        errors=0,
+        warnings=0,
+        symbols_checked=1,
+    )
+    (reports / "board.sch_lint.json").write_text(
+        sch_lint_report.model_dump_json(), encoding="utf-8"
+    )
+    (reports / "board.erc.json").write_text(
+        json.dumps(
+            {
+                "$schema": "https://schemas.kicad.org/erc.v1.json",
+                "kicad_version": "11.0",
+                "sheets": [{"path": "/", "violations": []}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (reports / "board.drc.json").write_text(
+        json.dumps(
+            {
+                "$schema": "https://schemas.kicad.org/drc.v1.json",
+                "kicad_version": "11.0",
+                "unconnected_items": [],
+                "violations": [],
+                "schematic_parity": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return reports
+
+
+def test_design_report_collects_pipeline_sections(tmp_path: Path) -> None:
+    brief_path = Path(__file__).parent / "data" / "brief_led_loop.json"
+    project = tmp_path
+    (project / "board.kicad_sch").write_text("()", encoding="utf-8")
+    (project / "board.kicad_pcb").write_text("()", encoding="utf-8")
+    reports = _write_gate_reports(project)
+
+    gerber = project / "exports" / "gerbers" / "board-F_Cu.gtl"
+    gerber.parent.mkdir(parents=True)
+    gerber.write_text("gerber", encoding="utf-8")
+    (reports / "render-top.png").write_bytes(b"\x89PNG")
+    advisory = AdvisoryResult(
+        tool="run_erc",
+        stage="schematic",
+        status="ok",
+        summary="konnect erc clean",
+    )
+    (reports / "erc.advisory.json").write_text(advisory.model_dump_json(), encoding="utf-8")
+    (reports / "advisory.jsonl").write_text(advisory.model_dump_json() + "\n", encoding="utf-8")
+    diff = DiffReport(
+        kind="pcb",
+        left=project / "board.kicad_pcb",
+        right=project / "board.kicad_pcb",
+        identical=True,
+        exit_code=0,
+        output=reports / "board.pcb.diff.json",
+        changes=[],
+    )
+    (reports / "board.pcb.diff.json").write_text(diff.model_dump_json(), encoding="utf-8")
+    jobset_erc = reports / "jobset-erc.json"
+    jobset_erc.write_text(
+        (reports / "board.erc.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    jobset = JobsetResult(
+        jobset=Path("default.kicad_jobset"),
+        project=project / "board.kicad_pro",
+        output_dir=project / "jobset",
+        exit_code=0,
+        outputs=[jobset_erc],
+        erc_report=jobset_erc,
+        drc_report=None,
+    )
+    (reports / "board.jobset.json").write_text(jobset.model_dump_json(), encoding="utf-8")
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_design_report",
+                {
+                    "brief_path": str(brief_path),
+                    "schematic_path": str(project / "board.kicad_sch"),
+                    "board_path": str(project / "board.kicad_pcb"),
+                },
+            ),
+        )
+        assert result.isError is False
+        report_path = reports / "board.design-report.json"
+        assert report_path.is_file()
+        design = DesignReport.model_validate_json(report_path.read_text(encoding="utf-8"))
+        assert design.verdict == "pass"
+        assert design.connectivity is not None
+        assert design.sch_lint is not None
+        assert design.erc is not None and design.erc.verdict == "pass"
+        assert design.drc is not None and design.drc.verdict == "pass"
+        assert design.exports == {"gerbers": [str(gerber)]}
+        assert [str(reports / "render-top.png")] == design.renders
+        assert len(design.advisory) == 2
+        assert design.jobset is not None
+        assert design.jobset_consistent is True
+        assert "board.pcb" in design.diffs
+        assert design.diffs["board.pcb"].identical is True
 
     asyncio.run(exercise())
