@@ -13,7 +13,7 @@ via GitHub's private vulnerability reporting on this repository, or by
 contacting the maintainer directly. Include:
 
 - the affected version/commit,
-- a minimal reproduction (design brief JSON, command, or payload),
+- a minimal reproduction (design brief, command, or payload),
 - impact assessment if known.
 
 You can expect an acknowledgement within a few days. We will coordinate a
@@ -21,13 +21,8 @@ fix and disclosure with you before publishing details.
 
 ## Scope notes
 
-circuit executes KiCad, Konnect, and FreeRouting inside a Docker image and
-exposes deterministic tools over a stdio MCP server. The container and the
-fail-closed gates protect verdict integrity but are not a sandbox: do not
-process untrusted KiCad projects, design briefs, or imported drawings in
-environments where a crafted file could reach other tooling — EDA binaries
-parse external CAD data as native code. The MCP server speaks stdio only
-and never opens network listeners.
-
-Secrets must never be written to logs, inputs, or commits; see the
-invariants in [AGENTS.md](AGENTS.md).
+circuit executes KiCad CLI verification and authoring locally; Konnect runs
+as an unmodified subprocess. The fail-closed gates defend verdict integrity
+but are not a sandbox: do not run untrusted briefs or library files in
+environments where crafted EDA assets could reach other tooling. The MCP
+server speaks stdio only and never opens network listeners.

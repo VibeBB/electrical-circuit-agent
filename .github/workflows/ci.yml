@@ -70,7 +70,7 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --locked
       - run: uv run python scripts/verify_all.py --stage docs
       - run: uv run python scripts/verify_all.py --stage fast
 
@@ -115,7 +115,23 @@ jobs:
           -v "$PWD/fixtures/smoke-board:/work:ro"
           circuit-tools:ci
           python3 /opt/circuit/bin/smoke_kicad11_konnect.py
-      - run: uv sync
+      - run: uv sync --locked
       - run: uv run python scripts/verify_all.py --stage standard
         env:
           CIRCUIT_TOOLS_IMAGE: circuit-tools:ci
+
+  plugin-load:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.12"
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Check plugin loads via SDK
+        run: uv run python scripts/check_plugin_load.py

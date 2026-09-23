@@ -33,14 +33,18 @@ def read_mcp_response(
 
 
 def request(
-    process: subprocess.Popen[str], message_id: int, method: str, params: dict[str, Any]
+    process: subprocess.Popen[str],
+    message_id: int,
+    method: str,
+    params: dict[str, Any],
+    timeout: float = 30.0,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if process.stdin is None:
         raise RuntimeError("Konnect stdin is unavailable")
     payload = {"jsonrpc": "2.0", "id": message_id, "method": method, "params": params}
     process.stdin.write(json.dumps(payload) + "\n")
     process.stdin.flush()
-    return read_mcp_response(process, message_id)
+    return read_mcp_response(process, message_id, timeout)
 
 
 def notify(
@@ -77,7 +81,13 @@ def tool_body(response: dict[str, Any]) -> Any:
 
 
 def call_tool(
-    process: subprocess.Popen[str], next_id: int, name: str, arguments: dict[str, Any]
+    process: subprocess.Popen[str],
+    next_id: int,
+    name: str,
+    arguments: dict[str, Any],
+    timeout: float = 30.0,
 ) -> tuple[Any, int]:
-    response, _ = request(process, next_id, "tools/call", {"name": name, "arguments": arguments})
+    response, _ = request(
+        process, next_id, "tools/call", {"name": name, "arguments": arguments}, timeout
+    )
     return tool_body(response), next_id + 1

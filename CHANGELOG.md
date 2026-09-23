@@ -5,7 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [Unreleased]
+
+### Added
+
+- `skills/circuit-brief-rules`: path-triggered rule (`*.brief.json`,
+  `*.intake.json`) injecting design-brief contract and intake-provenance
+  reminders deterministically — the same PathTrigger mechanism mech uses.
+- `circuit-brief` and `circuit-review` declare the `record-vision-tool-event`
+  post hook in frontmatter (plugin hooks do not propagate to task sub-agents).
+
+### Fixed
+
+- `scripts/check_plugin_load.py` renders the OK summary from the actual
+  expected asset sets instead of a hardcoded string that could drift.
+
+
+### Added
+
+- MCP tool metadata: every `circuit_*` tool now carries
+  `annotations.title` plus `readOnlyHint` / `destructiveHint` /
+  `idempotentHint` / `openWorldHint` so MCP clients (including
+  AgentCanvas) can gate calls on honest write semantics.
+  `circuit_konnect_call` is the only `destructiveHint: true` tool
+  (arbitrary Konnect ops mutate the live board).
+
+### Changed
+
+- `openhands-sdk` / `openhands-tools` pins `1.49.4` → `1.49.5`.
+- `kicad-nightly-symbols` pin `202609221218+1565b6644~12~ubuntu26.04.1`
+  → `202609231218+2ad44fc37~12~ubuntu26.04.1` (librarian URL + SHA-256;
+  `_cvpcb.kiface` ERC re-test verified, see `docs/operations.md`).
+
 ## [0.1.0] — unreleased
+
 
 First public release (in preparation; no git tag published yet).
 

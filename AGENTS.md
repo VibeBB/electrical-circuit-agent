@@ -2,7 +2,7 @@
 
 ## Scope
 
-- OpenHands Software Agent SDK v1.49.4
+- OpenHands Software Agent SDK v1.49.5
 - Python 3.12 or later, uv, ruff, pyright strict, pytest
 - KiCad 11 nightly (Ubuntu 26.04 `ppa:kicad/kicad-dev-nightly`)
 - Konnect v0.12.1 (AGPL-3.0-only, separate process)
@@ -56,6 +56,11 @@ AgentDefinition's frontmatter.
 `DelegateTool`. Do not build custom tool, event, history, task, or executor
 infrastructure; delegate to the OpenHands SDK.
 
+Skills use `triggers:` (`KeywordTrigger`). A `paths:` glob list makes a skill a
+path-triggered rule instead (deterministic injection when a matching file is
+touched); the two mechanisms are exclusive — keyword skills stay
+model-invocable, rules live in their own `skills/` entries.
+
 ## Dependencies
 
 PyPI dependencies are pinned in `pyproject.toml` and `uv.lock`. Dated package
@@ -67,8 +72,7 @@ new external source (anything other than PyPI: another Git repository, an
 apt/PPA, a release download, etc.), update the target definitions in
 `scripts/check_dependency_updates.py`, its tests, and the corresponding
 section of `docs/operations.md` in the same change. Dependency candidates are
-aggregated by the weekly workflow into the "依存アップデート確認レポート"
-(dependency update report) Issue. For deferred candidates, record the reason
+aggregated by the weekly workflow into the "Dependency update check report" Issue. For deferred candidates, record the reason
 and a re-check deadline in `scripts/dependency_update_deferrals.json`.
 
 ## Verification
