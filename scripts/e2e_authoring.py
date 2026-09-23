@@ -20,6 +20,10 @@ from circuit import apiserver, brief, intake, kicad_cli, libraries, netlist, rep
 from circuit.advisory import AdvisoryResult, merge_detail
 from konnect_client import call_tool, notify, request
 
+# Cold-start toolset loads can exceed the default 30s MCP timeout while
+# Konnect brings the KiCad session up; keep them on a longer budget.
+LOAD_TOOLSET_TIMEOUT = 120.0
+
 TOOLSETS = [
     "project",
     "library",
@@ -242,9 +246,10 @@ def _call(
     name: str,
     arguments: Mapping[str, object],
     log: TextIO,
+    timeout: float = 30.0,
 ) -> tuple[object, int]:
     try:
-        raw_result, next_id = call_tool(process, next_id, name, dict(arguments))
+        raw_result, next_id = call_tool(process, next_id, name, dict(arguments), timeout)
         result = raw_result
     except Exception as exc:
         _record(
@@ -379,7 +384,14 @@ def _start_konnect(
         notify(process, "notifications/initialized")
         _record(log, {"method": "notifications/initialized", "payload": {}})
         for toolset in TOOLSETS:
-            _, next_id = _call(process, next_id, "load_toolset", {"name": toolset}, log)
+            _, next_id = _call(
+                process,
+                next_id,
+                "load_toolset",
+                {"name": toolset},
+                log,
+                LOAD_TOOLSET_TIMEOUT,
+            )
         return process, next_id
     except Exception:
         process.kill()

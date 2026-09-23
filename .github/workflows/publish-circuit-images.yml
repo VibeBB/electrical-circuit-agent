@@ -167,6 +167,17 @@ jobs:
           SKIP_TOOLS: ${{ inputs.skip_tools }}
         run: |
           set -euo pipefail
+          retry() {
+            # Transient GitHub API/server errors (HTTP 5xx, TLS resets,
+            # truncated responses) should not hard-fail a multi-minute
+            # publish: retry gh/git calls with backoff before giving up.
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              "$@" && return 0
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
           dispatch_workflow() {
             # GITHUB_TOKEN-driven push/pull_request events never produce a real gate:
             # at most a stillborn pull_request run is recorded (cancelled before merge
@@ -179,11 +190,11 @@ jobs:
             DISPATCH_RUN_URL=""
             DISPATCH_CONCLUSION=""
             started=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$ref" "$@"
+            retry gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$ref" "$@"
             for _ in $(seq 1 30); do
               sleep 10
-              run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$ref" \
-                --event workflow_dispatch --created ">=$started" --json databaseId --jq '.[0].databaseId // empty')
+              run_id=$(retry gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$ref" \
+                --event workflow_dispatch --created ">=$started" --json databaseId --jq '.[0].databaseId // empty' || true)
               [ -n "$run_id" ] && break
             done
             if [ -z "$run_id" ]; then
@@ -192,9 +203,17 @@ jobs:
             fi
             DISPATCH_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "$workflow run for $ref: ${DISPATCH_RUN_URL}"
-            gh run watch --repo "$GITHUB_REPOSITORY" "$run_id" || true
-            DISPATCH_CONCLUSION=$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" \
-              --json conclusion --jq '.conclusion // "unknown"')
+            gh run watch --repo "$GITHUB_REPOSITORY" "$run_id" --interval 30 || true
+            # An empty conclusion is a transient API failure, not a run
+            # verdict: re-query until the API reports the conclusion.
+            DISPATCH_CONCLUSION=""
+            for _ in $(seq 1 6); do
+              DISPATCH_CONCLUSION=$(retry gh run view --repo "$GITHUB_REPOSITORY" "$run_id" \
+                --json conclusion --jq '.conclusion // empty' || true)
+              [ -n "$DISPATCH_CONCLUSION" ] && break
+              sleep 10
+            done
+            DISPATCH_CONCLUSION="${DISPATCH_CONCLUSION:-unknown}"
             echo "$workflow conclusion for $ref: ${DISPATCH_CONCLUSION}"
             [ "$DISPATCH_CONCLUSION" = "success" ]
           }
@@ -220,7 +239,9 @@ jobs:
             --tag "$SERVER_TAG" --digest "$SERVER_DIGEST" --published-at "$published_at" \
             --workflow-run "$workflow_run" --dockerfile "sdk:openhands-agent-server/v${SDK_VERSION}" \
             --tools-json "$RUNNER_TEMP/circuit-server.json"
-          if git diff --quiet -- docker/image-digests.json; then
+          # status --porcelain (not diff --quiet) also catches an untracked
+          # lock file, matching the other agent publish workflows.
+          if [ -z "$(git status --porcelain -- docker/image-digests.json)" ]; then
             echo "Image digest lock is unchanged; no pull request is needed."
             exit 0
           fi
@@ -228,7 +249,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docker/image-digests.json
           git commit -m "Update circuit image digest lock"
-          git push --set-upstream origin "$branch"
+          retry git push --set-upstream origin "$branch"
           if [ "${SKIP_TOOLS:-false}" = true ]; then
             tools_line="tools: locked image (not rebuilt)"
           else
@@ -240,7 +261,16 @@ jobs:
             "$tools_line" \
             "server: ghcr.io/${IMAGE_OWNER}/circuit-server@${SERVER_DIGEST}" \
             "workflow run: ${workflow_run}")
-          pr_url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+          # A stale bot PR from an earlier publish is superseded by this
+          # run's digest: close it and delete its branch so it cannot
+          # linger for manual review.
+          for old_pr in $(retry gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+            --json number,headRefName --jq '.[] | select(.headRefName | startswith("bot/update")) | .number' || true); do
+            retry gh pr close "$old_pr" --repo "$GITHUB_REPOSITORY" \
+              --comment "Superseded by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --delete-branch || true
+          done
+          pr_url=$(retry gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
             --title "Update circuit image digest lock" --body "$body")
           # A pull_request-triggered ci.yml run is also recorded for the bot
           # PR. Its check suite becomes the newest github-actions suite on the
@@ -251,14 +281,14 @@ jobs:
           # write) so it can run alongside the dispatched gate below.
           pr_ci_run=""
           for _ in $(seq 1 6); do
-            pr_ci_run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=${branch}&event=pull_request&per_page=10" \
+            pr_ci_run=$(retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=${branch}&event=pull_request&per_page=10" \
               --jq '.workflow_runs[0].id // empty' || true)
             [ -n "$pr_ci_run" ] && break
             sleep 5
           done
           if [ -n "$pr_ci_run" ] && \
-             [ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}" --jq '.conclusion // ""')" = "action_required" ]; then
-            gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}/approve" || true
+             [ "$(retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}" --jq '.conclusion // ""' || true)" = "action_required" ]; then
+            retry gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}/approve" || true
           fi
           if ! dispatch_workflow ci.yml "$branch" -f "base_sha=$base_sha"; then
             echo "lock PR checks failed; the lock PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
@@ -273,27 +303,43 @@ jobs:
           if [ -n "$pr_ci_run" ]; then
             pr_ci_real=false
             for _ in $(seq 1 18); do
-              pr_ci_conclusion=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}" \
+              pr_ci_conclusion=$(retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}" \
                 --jq '.conclusion // ""' || true)
               if [ "$pr_ci_conclusion" = "action_required" ]; then
-                gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}/approve" || true
+                retry gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}/approve" || true
               elif [ -n "$pr_ci_conclusion" ]; then
                 break
               fi
-              pr_ci_jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}/jobs?per_page=1" \
+              pr_ci_jobs=$(retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${pr_ci_run}/jobs?per_page=1" \
                 --jq '.total_count // 0' || echo 0)
               [ "$pr_ci_jobs" -gt 0 ] && pr_ci_real=true && break
               sleep 10
             done
             if [ "$pr_ci_real" = true ]; then
-              gh run watch --repo "$GITHUB_REPOSITORY" "$pr_ci_run" || true
+              gh run watch --repo "$GITHUB_REPOSITORY" "$pr_ci_run" --interval 30 || true
             else
-              gh run cancel --repo "$GITHUB_REPOSITORY" "$pr_ci_run" || true
+              retry gh run cancel --repo "$GITHUB_REPOSITORY" "$pr_ci_run" || true
             fi
           fi
-          if ! gh pr merge --repo "$GITHUB_REPOSITORY" --squash --delete-branch "$pr_url"; then
+          # --auto arms auto-merge so required checks that are still
+          # registering do not fail the merge call; when every required
+          # check is already green it merges at once.
+          if ! retry gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch "$pr_url"; then
             echo "lock PR merge was blocked; the lock PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
             exit 1
+          fi
+          # The merge may only be armed: wait for it to land before the
+          # observational post-merge dispatches. A still-pending PR after the
+          # wait merges on its own once checks pass, so that is not a failure.
+          merged=false
+          for _ in $(seq 1 36); do
+            merged_at=$(retry gh api "repos/$GITHUB_REPOSITORY/pulls/${pr_url##*/}" --jq '.merged_at // empty' || true)
+            [ -n "$merged_at" ] && { merged=true; break; }
+            sleep 10
+          done
+          if [ "$merged" != true ]; then
+            echo "auto-merge is armed on $pr_url but the merge did not land within the wait; post-merge checks skipped" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           # The post-merge checks are observational: their conclusions (including
           # 'cancelled' when a newer main push supersedes them via concurrency

@@ -19,6 +19,10 @@ from pathlib import Path
 
 from konnect_client import call_tool, notify, request
 
+# Cold-start toolset loads can exceed the default 30s MCP timeout while
+# Konnect brings the KiCad session up; keep them on a longer budget.
+LOAD_TOOLSET_TIMEOUT = 120.0
+
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -117,7 +121,13 @@ def main() -> int:
                 if "pcb" in item["name"] or item["name"] in {"verification", "integration"}
             ]
             for toolset in toolsets:
-                _, next_id = call_tool(konnect, next_id, "load_toolset", {"name": toolset})
+                _, next_id = call_tool(
+                    konnect,
+                    next_id,
+                    "load_toolset",
+                    {"name": toolset},
+                    LOAD_TOOLSET_TIMEOUT,
+                )
             _, next_id = call_tool(konnect, next_id, "check_kicad_ui", {"timeout_seconds": 2})
             freerouting, next_id = call_tool(konnect, next_id, "check_freerouting", {})
             if not (

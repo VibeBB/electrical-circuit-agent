@@ -53,6 +53,17 @@ jobs:
           SET_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          retry() {
+            # Transient GitHub API/server errors (HTTP 5xx, TLS resets,
+            # truncated responses) should not hard-fail the release: retry
+            # gh/git calls with backoff before giving up.
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              "$@" && return 0
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
           SET_VERSION="${SET_VERSION#v}"
           CURRENT=$(python3 -c 'import tomllib,sys;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
           SKIP_COMMIT=false
@@ -79,7 +90,7 @@ jobs:
             git add plugins/circuit/.plugin/plugin.json pyproject.toml \
               plugins/circuit/skills/*/SKILL.md uv.lock
             git commit -m "Release v${VERSION}: update version files"
-            if git push origin HEAD:main; then
+            if retry git push origin HEAD:main; then
               echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
             else
               # No bypass actor is configured, so the pull_request rule
@@ -88,13 +99,13 @@ jobs:
               # auto-merge flow as bard-agent.
               echo "::warning::direct push to main rejected; routing the version bump through a pull request"
               branch="bot/release-bump-v${VERSION}-${GITHUB_RUN_ID}"
-              git push origin "HEAD:refs/heads/${branch}"
+              retry git push origin "HEAD:refs/heads/${branch}"
               body=$(printf '%s\n' \
                 "Automated version bump for the Release workflow." \
                 "" \
                 "version: v${VERSION}" \
                 "workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")
-              pr_url=$(gh pr create \
+              pr_url=$(retry gh pr create \
                 --repo "$GITHUB_REPOSITORY" \
                 --base main \
                 --head "$branch" \
@@ -108,8 +119,8 @@ jobs:
               gated_seen=0
               empty_streak=0
               for _ in $(seq 1 10); do
-                batch=$(gh run list --repo "$GITHUB_REPOSITORY" --branch "$branch" \
-                  --event pull_request --status action_required --json databaseId --jq '.[].databaseId')
+                batch=$(retry gh run list --repo "$GITHUB_REPOSITORY" --branch "$branch" \
+                  --event pull_request --status action_required --json databaseId --jq '.[].databaseId' || true)
                 if [ -z "$batch" ]; then
                   empty_streak=$((empty_streak + 1))
                   if { [ "$gated_seen" -eq 0 ] && [ "$empty_streak" -ge 3 ]; } || \
@@ -122,19 +133,19 @@ jobs:
                 empty_streak=0
                 gated_seen=1
                 for gated in $batch; do
-                  gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$gated/approve" || true
+                  retry gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$gated/approve" || true
                 done
                 sleep 10
               done
               started=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-              gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+              retry gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
               failed=0
               for wf in ci.yml; do
                 run_id=""
                 for _ in $(seq 1 30); do
                   sleep 10
-                  run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch "$branch" \
-                    --event workflow_dispatch --created ">=$started" --json databaseId --jq '.[0].databaseId // empty')
+                  run_id=$(retry gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch "$branch" \
+                    --event workflow_dispatch --created ">=$started" --json databaseId --jq '.[0].databaseId // empty' || true)
                   [ -n "$run_id" ] && break
                 done
                 if [ -z "$run_id" ]; then
@@ -143,8 +154,16 @@ jobs:
                 fi
                 echo "$wf run for $branch: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 gh run watch --repo "$GITHUB_REPOSITORY" "$run_id" --interval 30 || true
-                conclusion=$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" \
-                  --json conclusion --jq '.conclusion // "unknown"')
+                # An empty conclusion is a transient API failure, not a run
+                # verdict: re-query until the API reports the conclusion.
+                conclusion=""
+                for _ in $(seq 1 6); do
+                  conclusion=$(retry gh run view --repo "$GITHUB_REPOSITORY" "$run_id" \
+                    --json conclusion --jq '.conclusion // empty' || true)
+                  [ -n "$conclusion" ] && break
+                  sleep 10
+                done
+                conclusion="${conclusion:-unknown}"
                 echo "$wf conclusion for $branch: $conclusion"
                 if [ "$conclusion" != "success" ]; then
                   failed=1
@@ -157,7 +176,7 @@ jobs:
               # Arm auto-merge on the version-bump PR. Checks are already
               # green here so the merge lands immediately; arming failure
               # leaves the PR open for manual merge.
-              gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch "$pr_url" || {
+              retry gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch "$pr_url" || {
                 echo "version-bump PR auto-merge could not be armed; the PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
                 echo "::error::version-bump PR $pr_url was not auto-merged; merge it, then re-run Release with version=${VERSION}."
                 exit 1
@@ -166,7 +185,7 @@ jobs:
               # real main tip, not the branch head.
               merged=false
               for _ in $(seq 1 40); do
-                merged_at=$(gh api "repos/$GITHUB_REPOSITORY/pulls/${pr_url##*/}" --jq '.merged_at // empty')
+                merged_at=$(retry gh api "repos/$GITHUB_REPOSITORY/pulls/${pr_url##*/}" --jq '.merged_at // empty' || true)
                 [ -n "$merged_at" ] && { merged=true; break; }
                 sleep 30
               done
@@ -230,6 +249,15 @@ jobs:
       - name: Create release and tag
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release create "v${VERSION}" --target "$SHA"
-          --title "circuit v${VERSION}" --generate-notes dist/*.zip
+        run: |
+          set -euo pipefail
+          retry() {
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              "$@" && return 0
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+          retry gh release create "v${VERSION}" --target "$SHA" \
+            --title "circuit v${VERSION}" --generate-notes dist/*.zip

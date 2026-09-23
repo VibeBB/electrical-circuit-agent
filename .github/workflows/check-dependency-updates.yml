@@ -43,17 +43,17 @@ jobs:
           OUTDATED: ${{ steps.report.outputs.outdated }}
         run: |
           set -euo pipefail
-          gh label create dependencies --repo "$GITHUB_REPOSITORY" --color 0366d6 \
+          gh label create dependency-updates --repo "$GITHUB_REPOSITORY" --color 0366d6 \
             --description "Dependency update report" --force
-          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label dependencies \
-            --search "in:title 依存アップデート確認レポート" --json number --jq '.[0].number // empty')
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label dependency-updates \
+            --search "in:title Dependency update check report" --json number --jq '.[0].number // empty')
           if [ -n "$number" ]; then
             gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file "$REPORT_MARKDOWN"
           else
             number=$(gh issue create --repo "$GITHUB_REPOSITORY" \
-              --title "依存アップデート確認レポート" \
-              --label dependencies --body-file "$REPORT_MARKDOWN" | sed 's#.*/##')
+              --title "Dependency update check report" \
+              --label dependency-updates --body-file "$REPORT_MARKDOWN" | sed 's#.*/##')
           fi
           if [ "$OUTDATED" = "0" ] && [ -n "$number" ]; then
-            gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "更新候補が無くなりました。"
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "No update candidates remain."
           fi
