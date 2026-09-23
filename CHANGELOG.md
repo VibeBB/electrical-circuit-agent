@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `skills/circuit-brief-rules`: path-triggered rule (`*.brief.json`,
+  `*.intake.json`) injecting design-brief contract and intake-provenance
+  reminders deterministically — the same PathTrigger mechanism mech uses.
+
+### Fixed
+
+- `scripts/check_plugin_load.py` renders the OK summary from the actual
+  expected asset sets instead of a hardcoded string that could drift.
+
+
+### Added
+
 - MCP tool metadata: every `circuit_*` tool now carries
   `annotations.title` plus `readOnlyHint` / `destructiveHint` /
   `idempotentHint` / `openWorldHint` so MCP clients (including

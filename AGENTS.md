@@ -56,6 +56,11 @@ AgentDefinition's frontmatter.
 `DelegateTool`. Do not build custom tool, event, history, task, or executor
 infrastructure; delegate to the OpenHands SDK.
 
+Skills use `triggers:` (`KeywordTrigger`). A `paths:` glob list makes a skill a
+path-triggered rule instead (deterministic injection when a matching file is
+touched); the two mechanisms are exclusive — keyword skills stay
+model-invocable, rules live in their own `skills/` entries.
+
 ## Dependencies
 
 PyPI dependencies are pinned in `pyproject.toml` and `uv.lock`. Dated package

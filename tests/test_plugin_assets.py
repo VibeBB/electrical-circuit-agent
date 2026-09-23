@@ -20,7 +20,7 @@ def test_plugin_loads_all_assets() -> None:
         "circuit-layout",
         "circuit-review",
     }
-    assert len(plugin.skills) == 6
+    assert len(plugin.skills) == 7
     assert set(plugin.mcp_config) == {"circuit", "konnect"}
     assert plugin.hooks is not None
     assert plugin.entry_slash_command == "/circuit:doctor"
@@ -29,6 +29,10 @@ def test_plugin_loads_all_assets() -> None:
     }
     assert guard_trigger_types == {PathTrigger}
     assert any(skill.name == "circuit-library-guard" for skill in plugin.skills)
+    brief_trigger_types = {
+        type(skill.trigger) for skill in plugin.skills if skill.name == "circuit-brief-rules"
+    }
+    assert brief_trigger_types == {PathTrigger}
 
     protect_command = plugin.hooks.pre_tool_use[0].hooks[0].command
     assert plugin.hooks.stop[0].hooks[0].name == "report-design-status"
