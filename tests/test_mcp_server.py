@@ -195,6 +195,80 @@ def test_konnect_call_proxies_to_managed_subprocess(tmp_path: Path, monkeypatch:
     asyncio.run(exercise())
 
 
+def _fake_konnect(tmp_path: Path, monkeypatch: Any) -> None:
+    fake = tmp_path / "kicad-cli"
+    fake.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "10.99.0"; exit 0; fi\nexit 1\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("CIRCUIT_KICAD_CLI", str(fake))
+    monkeypatch.setenv("CIRCUIT_KONNECT", "python3 -m circuit.mcp_server")
+
+
+def test_konnect_call_runs_ops_in_one_session(tmp_path: Path, monkeypatch: Any) -> None:
+    _fake_konnect(tmp_path, monkeypatch)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_konnect_call",
+                {
+                    "ops": [
+                        {"tool": "circuit_kicad_version"},
+                        {"tool": "circuit_kicad_version", "arguments": {}},
+                    ],
+                },
+            ),
+        )
+        assert result.isError is False
+        content = result.content[0]
+        assert isinstance(content, TextContent)
+        payload = json.loads(content.text)
+        assert len(payload["results"]) == 2
+        assert all("10.99.0" in entry["content"][0] for entry in payload["results"])
+
+    asyncio.run(exercise())
+
+
+def test_konnect_call_ops_propagate_errors(tmp_path: Path, monkeypatch: Any) -> None:
+    _fake_konnect(tmp_path, monkeypatch)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_konnect_call",
+                {"ops": [{"tool": "no_such_tool"}, {"tool": "circuit_kicad_version"}]},
+            ),
+        )
+        assert result.isError is True
+        content = result.content[0]
+        assert isinstance(content, TextContent)
+        payload = json.loads(content.text)
+        assert payload["results"][0]["isError"] is True
+        assert payload["results"][1]["isError"] is False
+
+    asyncio.run(exercise())
+
+
+def test_konnect_call_requires_tool_or_ops(tmp_path: Path, monkeypatch: Any) -> None:
+    _fake_konnect(tmp_path, monkeypatch)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool("circuit_konnect_call", {}),
+        )
+        assert result.isError is True
+        content = result.content[0]
+        assert isinstance(content, TextContent)
+        assert "requires" in content.text
+
+    asyncio.run(exercise())
+
+
 def _write_gate_reports(project: Path) -> Path:
     reports = project / "circuit-reports"
     reports.mkdir(parents=True)

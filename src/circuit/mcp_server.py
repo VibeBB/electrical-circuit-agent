@@ -231,16 +231,27 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
     ),
     (
         "circuit_konnect_call",
-        "Invoke a Konnect operation through a managed stdio session when "
-        "dynamically loaded toolsets are not visible to the harness",
+        "Invoke Konnect operations through a managed stdio session when "
+        "dynamically loaded toolsets are not visible to the harness; "
+        "pass ops to run several calls (including load_toolset) in one session",
         {
             "type": "object",
             "properties": {
                 "tool": {"type": "string"},
                 "arguments": {"type": "object"},
                 "socket": {"type": "string"},
+                "ops": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string"},
+                            "arguments": {"type": "object"},
+                        },
+                        "required": ["tool"],
+                    },
+                },
             },
-            "required": ["tool"],
         },
     ),
     ("circuit_kicad_version", "Get KiCad version", {"type": "object", "properties": {}}),
@@ -392,7 +403,12 @@ def _jobset_consistent(
     return all(checks) if checks else None
 
 
-async def _konnect_call(tool: str, arguments: dict[str, Any], socket: str | None) -> CallToolResult:
+async def _konnect_call(
+    tool: str,
+    arguments: dict[str, Any],
+    socket: str | None,
+    ops: list[dict[str, Any]] | None = None,
+) -> CallToolResult:
     command = shlex.split(os.environ.get("CIRCUIT_KONNECT", "konnect"))
     env = {
         **os.environ,
@@ -404,7 +420,32 @@ async def _konnect_call(tool: str, arguments: dict[str, Any], socket: str | None
         ClientSession(read_stream, write_stream) as session,
     ):
         await session.initialize()
-        return await session.call_tool(tool, arguments)
+        if ops is None:
+            return await session.call_tool(tool, arguments)
+        results: list[dict[str, Any]] = []
+        for op in ops:
+            op_tool = str(op.get("tool", ""))
+            op_arguments_value = op.get("arguments")
+            op_arguments: dict[str, Any] = (
+                cast(dict[str, Any], op_arguments_value)
+                if isinstance(op_arguments_value, dict)
+                else {}
+            )
+            op_result = await session.call_tool(op_tool, op_arguments)
+            results.append(
+                {
+                    "tool": op_tool,
+                    "isError": bool(op_result.isError),
+                    "content": [
+                        getattr(block, "text", None) or block.model_dump(mode="json")
+                        for block in op_result.content
+                    ],
+                }
+            )
+        return CallToolResult(
+            content=[TextContent(type="text", text=_json({"results": results}))],
+            isError=any(item["isError"] for item in results),
+        )
 
 
 @server.list_tools()
@@ -581,8 +622,23 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             )
         elif name == "circuit_konnect_call":
             konnect_arguments = args.get("arguments")
+            ops = args.get("ops")
+            if ops is not None:
+                if not isinstance(ops, list) or not all(
+                    isinstance(item, dict) for item in cast(list[Any], ops)
+                ):
+                    raise ValueError("circuit_konnect_call 'ops' must be a list of objects")
+                return await _konnect_call(
+                    "",
+                    {},
+                    _optional_string(args.get("socket")),
+                    ops=cast(list[dict[str, Any]], ops),
+                )
+            tool = args.get("tool")
+            if not isinstance(tool, str) or not tool:
+                raise ValueError("circuit_konnect_call requires 'tool' or 'ops'")
             return await _konnect_call(
-                str(args["tool"]),
+                tool,
                 cast(dict[str, Any], konnect_arguments)
                 if isinstance(konnect_arguments, dict)
                 else {},
