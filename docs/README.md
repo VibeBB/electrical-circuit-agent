@@ -38,3 +38,4 @@
 | [0019](adr/ADR-0019-existing-drawings-ingestion-and-rasterizer-deps.md) | Existing-drawings ingestion, rasterizer dependencies, and the stackup section diagram |
 | [0020](adr/ADR-0020-vision-lane-diagnostics.md) | Vision-lane diagnostics in doctor |
 | [0021](adr/ADR-0021-openj9-freerouting-runtime.md) | Semeru OpenJ9 and FreeRouting runtime in the tools image |
+| [0022](adr/ADR-0022-tscircuit-not-adopted.md) | tscircuit evaluated and not adopted |
