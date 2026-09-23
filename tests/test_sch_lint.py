@@ -2,7 +2,10 @@ from pathlib import Path
 
 from circuit.sch_lint import SchLintError, lint_file, lint_schematic
 
-_HEADER = '(kicad_sch (version 20231120) (generator "eeschema") (paper "A4") (lib_symbols) '
+_HEADER = (
+    '(kicad_sch (version 20231120) (generator "eeschema") (paper "A4") (lib_symbols) '
+    '(title_block (title "fixture") (date "2026-09-23") (rev "1")) '
+)
 _FOOTER = ")"
 
 _SYMBOL_OK = (
@@ -80,3 +83,63 @@ def test_lint_rejects_non_kicad_sch_root(tmp_path: Path) -> None:
         assert "not a kicad_sch" in str(exc)
     else:
         raise AssertionError("expected SchLintError")
+
+
+def test_lint_warns_when_property_sits_on_symbol(tmp_path: Path) -> None:
+    on_body = _SYMBOL_OK.replace("(at 101 103 0)", "(at 100 100 0)")
+    path = _write_sch(tmp_path, on_body)
+    report = lint_schematic(path)
+    assert report.verdict == "pass"
+    assert any(f.type == "property_on_symbol" for f in report.findings)
+    finding = next(f for f in report.findings if f.type == "property_on_symbol")
+    assert finding.severity == "warning"
+
+
+def test_lint_warns_on_empty_title_block(tmp_path: Path) -> None:
+    body = _SYMBOL_OK
+    text = (
+        '(kicad_sch (version 20231120) (generator "eeschema") (paper "A4") '
+        '(lib_symbols) (title_block (title "") (date "") (rev "")) ' + body + ")"
+    )
+    path = tmp_path / "board.kicad_sch"
+    path.write_text(text, encoding="utf-8")
+    report = lint_schematic(path)
+    assert report.verdict == "pass"
+    assert any(f.type == "title_block_incomplete" for f in report.findings)
+
+
+def test_lint_warns_when_title_block_is_missing(tmp_path: Path) -> None:
+    text = (
+        '(kicad_sch (version 20231120) (generator "eeschema") (paper "A4") '
+        "(lib_symbols) " + _SYMBOL_OK + ")"
+    )
+    path = tmp_path / "board.kicad_sch"
+    path.write_text(text, encoding="utf-8")
+    report = lint_schematic(path)
+    assert any(f.type == "title_block_incomplete" for f in report.findings)
+
+
+def test_lint_warns_on_clustered_placement(tmp_path: Path) -> None:
+    second = _SYMBOL_OK.replace("(at 100 100 0)", "(at 110 110 0)").replace(
+        'uuid "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"',
+        'uuid "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"',
+    )
+    path = _write_sch(tmp_path, _SYMBOL_OK + " " + second)
+    report = lint_schematic(path)
+    assert report.verdict == "pass"
+    assert any(f.type == "sheet_underutilized" for f in report.findings)
+
+
+def test_lint_no_underutilized_warning_for_spread_placement(tmp_path: Path) -> None:
+    second = (
+        _SYMBOL_OK.replace("(at 100 100 0)", "(at 285 205 0)")
+        .replace("(at 101 97 0)", "(at 286 202 0)")
+        .replace("(at 101 103 0)", "(at 286 208 0)")
+        .replace(
+            'uuid "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"',
+            'uuid "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"',
+        )
+    )
+    path = _write_sch(tmp_path, _SYMBOL_OK + " " + second)
+    report = lint_schematic(path)
+    assert not any(f.type == "sheet_underutilized" for f in report.findings)
