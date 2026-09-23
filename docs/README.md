@@ -33,3 +33,4 @@
 | [0014](adr/ADR-0014-oracle-consult-tools-not-adopted.md) | Oracle and consult tools not adopted |
 | [0015](adr/ADR-0015-konnect-authoring-and-sch-lint-gate.md) | Konnect-only authoring and the schematic readability gate |
 | [0016](adr/ADR-0016-extended-render-surface-and-konnect-image-materialization.md) | Extended render surface and Konnect image materialization |
+| [0017](adr/ADR-0017-intake-attachment-materialization-and-evidence-binding.md) | Intake attachment materialization and evidence binding |

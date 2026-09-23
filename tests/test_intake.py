@@ -101,3 +101,88 @@ def test_duplicate_ids_rejected() -> None:
     value["assumptions"] = [{"id": "R1", "text": "bad", "rationale": "bad"}]
     with pytest.raises(ValidationError):
         Intake.model_validate(value)
+
+
+def _with_evidence(tmp_path: Path) -> tuple[dict[str, Any], Path, bytes]:
+    image = tmp_path / "attachments" / "sketch.png"
+    image.parent.mkdir(parents=True)
+    data = b"\x89PNG\r\n\x1a\n" + bytes(range(64))
+    image.write_bytes(data)
+    value = _fixture_value()
+    return value, image, data
+
+
+def test_evidence_sha256_match_stays_ready(tmp_path: Path) -> None:
+    value, image, data = _with_evidence(tmp_path)
+    value["assumptions"][0]["evidence"] = {
+        "kind": "image",
+        "path": str(image.relative_to(tmp_path)),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "note": "hand sketch",
+    }
+    intake_path = tmp_path / "intake.json"
+    intake_path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    brief_path = ROOT / "data" / "brief_led_loop.json"
+    result = check_intake(
+        load_brief(brief_path),
+        load_intake(intake_path),
+        brief_path=brief_path,
+        intake_path=intake_path,
+    )
+    assert result.verdict == "ready"
+    assert result.evidence_errors == []
+
+
+@pytest.mark.parametrize(
+    ("sha256", "expected"),
+    [
+        ("0" * 64, "sha256 mismatch"),
+        ("missing", "file missing"),
+    ],
+)
+def test_evidence_fail_closed(tmp_path: Path, sha256: str, expected: str) -> None:
+    value, image, data = _with_evidence(tmp_path)
+    if sha256 == "missing":
+        image.unlink()
+        digest = hashlib.sha256(data).hexdigest()
+    else:
+        digest = sha256
+    value["assumptions"][0]["evidence"] = {
+        "kind": "image",
+        "path": str(image.relative_to(tmp_path)),
+        "sha256": digest,
+    }
+    value["open_questions"] = [
+        {
+            "id": "Q1",
+            "text": "spec sheet reference?",
+            "evidence": {
+                "kind": "document",
+                "path": "no-such-file.pdf",
+                "sha256": "0" * 64,
+            },
+        }
+    ]
+    intake_path = tmp_path / "intake.json"
+    intake_path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    brief_path = ROOT / "data" / "brief_led_loop.json"
+    result = check_intake(
+        load_brief(brief_path),
+        load_intake(intake_path),
+        brief_path=brief_path,
+        intake_path=intake_path,
+    )
+    assert result.verdict == "blocked"
+    assert any(expected in error for error in result.evidence_errors)
+
+
+def test_evidence_rejects_extra_keys(tmp_path: Path) -> None:
+    value, image, data = _with_evidence(tmp_path)
+    value["assumptions"][0]["evidence"] = {
+        "kind": "image",
+        "path": str(image.relative_to(tmp_path)),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "unexpected": "x",
+    }
+    with pytest.raises(ValidationError):
+        Intake.model_validate(value)
