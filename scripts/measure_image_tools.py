@@ -21,6 +21,10 @@ def measure(image_ref: str) -> dict[str, str]:
         "kicad-cli --version; "
         "konnect --version; "
         "python3 --version; "
+        "java -version 2>&1 | "
+        "sed -n 's/.*IBM Semeru Runtime Open Edition \\([0-9.]*\\).*/semeru_jre=\\1/p' | head -1; "
+        "java -Djava.awt.headless=true -jar /opt/freerouting/freerouting.jar --version 2>&1 | "
+        "sed -n 's/.*Freerouting v\\([0-9.]*\\).*/freerouting=\\1/p' | head -1; "
         "python3 -c 'import circuit, mcp, pydantic; print(\"circuit=\" + circuit.__version__)'; "
         "cat /opt/circuit/libraries/cern-kicad-libs.commit; "
         "dpkg-query -W -f='kicad-nightly=${Version}\\n' kicad-nightly; "
@@ -47,6 +51,10 @@ def measure(image_ref: str) -> dict[str, str]:
             values["python"] = line
         elif line.startswith("circuit="):
             values["circuit"] = line.removeprefix("circuit=")
+        elif line.startswith("semeru_jre="):
+            values["semeru_jre"] = line.removeprefix("semeru_jre=")
+        elif line.startswith("freerouting="):
+            values["freerouting"] = line.removeprefix("freerouting=")
         elif re.fullmatch(r"[0-9a-f]{40}", line):
             values["cern_commit"] = line
         elif "=" in line and line.startswith("kicad-nightly"):
@@ -57,6 +65,8 @@ def measure(image_ref: str) -> dict[str, str]:
         "konnect",
         "python",
         "circuit",
+        "semeru_jre",
+        "freerouting",
         "cern_commit",
         "kicad-nightly",
         "kicad-nightly-footprints",

@@ -21,8 +21,11 @@ docker run --rm \
   python3 /opt/circuit/bin/smoke_kicad11_konnect.py
 ```
 
-The image contains the KiCad nightly PPA, the Konnect release, and the CERN
-submodule. The CERN commit is recorded in
+The image contains the KiCad nightly PPA, the Konnect release, the IBM Semeru
+Open JRE (Eclipse OpenJ9), the FreeRouting JAR, and the CERN submodule. The
+JRE is extracted to `/opt/jre` and resolved via `JAVA_HOME`/`PATH`; the JAR is
+placed at `/opt/freerouting/freerouting.jar`, which Konnect v0.12.1 discovers
+via its built-in search roots (see ADR-0021). The CERN commit is recorded in
 `/opt/circuit/libraries/cern-kicad-libs.commit` and the OCI label
 `circuit.cern.commit`. Because the SDK v1.49.4 server image build requires
 root-privileged apt/useradd on the base image, the tools image's default user is
@@ -84,12 +87,40 @@ FAIL.
    with `THIRD_PARTY_NOTICES.md` and ADR-0002 in the same change.
 3. Verify the Konnect release asset, commit, SHA-256, and LICENSE against
    primary sources.
-4. Update the CERN submodule and record the commit and fetch date in
+4. For the Semeru JRE and FreeRouting, check the latest releases of
+   `ibmruntimes/semeru<major>-binaries` and `freerouting/freerouting`, refresh
+   the version and SHA-256 ARGs together with `THIRD_PARTY_NOTICES.md` in the
+   same change, and re-verify the LICENSE asset for FreeRouting. A Semeru
+   major-series migration (a new `semeru<N>-binaries` repository) is a manual
+   decision and is not flagged by the weekly check.
+5. Update the CERN submodule and record the commit and fetch date in
    `libraries/README.md` and `THIRD_PARTY_NOTICES.md`.
-5. To change the `openhands-sdk` or `openhands-tools` PyPI pins, update
+6. To change the `openhands-sdk` or `openhands-tools` PyPI pins, update
    `pyproject.toml`, `uv.lock`, and this document.
-6. Run docs, fast, image build, and smoke, and record the results in the
+7. Run docs, fast, image build, and smoke, and record the results in the
    handoff.
+
+### FreeRouting v2.4.1 + Semeru JRE 27.0.0.0 adoption record
+
+- Checked on: 2026-09-23
+- Update: new adoption (previously deferred in `docs/konnect-tools.md`)
+- Primary sources:
+  - [FreeRouting v2.4.1 release](https://github.com/freerouting/freerouting/releases/tag/v2.4.1)
+  - [Semeru 27 binaries jdk-27.0.0.0 release](https://github.com/ibmruntimes/semeru27-binaries/releases/tag/jdk-27.0.0.0)
+- Reason for adoption: Konnect v0.12.1's Specctra/FreeRouting tool family
+  (`check_freerouting`, `export_specctra_dsn`, `route_specctra_dsn`,
+  `plan_specctra_ses_import`, `apply_specctra_ses`) requires a Java runtime
+  and the FreeRouting JAR, both previously absent from the image. The
+  deferral was lifted to enable the autorouting path.
+- Verification: container PoC confirmed `check_freerouting` reports
+  `engine_found`, `java_available`, and `native_mcp_available` against
+  `/opt/freerouting/freerouting.jar` on Semeru OpenJ9 27.0.0.0.
+- Known upstream limitation (ADR-0021): `export_specctra_dsn` fails on
+  boards saved by KiCad 11 nightly because Konnect v0.12.1 parses footprint
+  positions as `(at x y)` while KiCad 11 serializes `(transform (translate
+  ...) (rotate ...) (scale ...))`. DSN export, SES routing, and SES import
+  remain unusable until upstream parses `transform`; `check_freerouting`
+  itself is green.
 
 ### Konnect v0.12.1 adoption record
 

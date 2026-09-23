@@ -197,7 +197,7 @@
     "role": "authoring_conditional",
     "stage": "layout",
     "ipc": "unknown",
-    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy. Depends on export_specctra_dsn, which is blocked upstream on KiCad 11 `(transform ...)` footprints (ADR-0021)."
   },
   {
     "tool": "apply_template",
@@ -397,7 +397,7 @@
     "role": "authoring_conditional",
     "stage": "layout",
     "ipc": "unknown",
-    "note": "Requires fixture-specific prerequisites; FreeRouting tools require FreeRouting (Java/Semeru OpenJ9) — deferred."
+    "note": "Requires fixture-specific prerequisites; Semeru JRE and freerouting.jar are bundled in the tools image and the check is usable (ADR-0021)."
   },
   {
     "tool": "check_kicad_ui",
@@ -789,7 +789,7 @@
     "role": "authoring_conditional",
     "stage": "layout",
     "ipc": "unknown",
-    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy. Upstream export does not yet parse KiCad 11 `(transform ...)` footprint positions (ADR-0021)."
   },
   {
     "tool": "export_svg",
@@ -1421,7 +1421,7 @@
     "role": "authoring_conditional",
     "stage": "layout",
     "ipc": "unknown",
-    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy. Depends on export_specctra_dsn, which is blocked upstream on KiCad 11 `(transform ...)` footprints (ADR-0021)."
   },
   {
     "tool": "query_traces",
@@ -1581,7 +1581,7 @@
     "role": "authoring_conditional",
     "stage": "layout",
     "ipc": "unknown",
-    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy."
+    "note": "Requires matching board topology, placement, or connectivity prerequisites; run on a copy. Depends on export_specctra_dsn, which is blocked upstream on KiCad 11 `(transform ...)` footprints (ADR-0021)."
   },
   {
     "tool": "route_trace",

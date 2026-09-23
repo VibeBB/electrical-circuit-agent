@@ -2,10 +2,13 @@
 
 ## Purpose
 
-`circuit-tools.Dockerfile` bundles KiCad 11 nightly, Konnect v0.12.1, the
-official KiCad libraries, and the CERN KiCad libraries into a single execution
-environment. Konnect is launched as a separate process as an unmodified AGPL
-binary and is never imported into the Python package.
+`circuit-tools.Dockerfile` bundles KiCad 11 nightly, Konnect v0.12.1, IBM
+Semeru Open JRE (Eclipse OpenJ9), FreeRouting, the official KiCad libraries,
+and the CERN KiCad libraries into a single execution environment. Konnect is
+launched as a separate process as an unmodified AGPL binary and is never
+imported into the Python package; FreeRouting is likewise executed only as a
+`java -jar` subprocess spawned by Konnect (see ADR-0021 for the current
+upstream Specctra export limitation).
 
 ## Contents
 
@@ -16,6 +19,8 @@ binary and is never imported into the Python package.
 | KiCad footprints | `202609222017+55d9dd1a3~14~ubuntu26.04.1` |
 | KiCad symbols | `202609221218+1565b6644~12~ubuntu26.04.1` |
 | Konnect | `v0.12.1`, release commit and SHA-256 in the Dockerfile |
+| IBM Semeru Open JRE | `27.0.0.0`, release tarball SHA-256 in the Dockerfile |
+| FreeRouting | `v2.4.1`, release JAR SHA-256 in the Dockerfile |
 | CERN libraries | submodule commit of `libraries/cern-kicad-libs` (also recorded in `cern-kicad-libs.commit` inside the image and the OCI label `circuit.cern.commit`) |
 
 ## Build and smoke

@@ -12,6 +12,7 @@ from scripts.check_dependency_updates import (
     locked_versions,
     parse_kicad_packages,
     pypi_status,
+    release_version,
     request,
     version_tuple,
 )
@@ -73,6 +74,13 @@ def test_image_lock_read_fails_closed(tmp_path: Path) -> None:
 
 def test_dependency_version_parsing() -> None:
     assert version_tuple("202609190245+6d837080a5") > version_tuple("202609190000")
+
+
+def test_release_version_strips_tag_prefix() -> None:
+    assert release_version("v2.4.1", "v") == "2.4.1"
+    assert release_version("jdk-27.0.0.0", "jdk-") == "27.0.0.0"
+    with pytest.raises(ValueError, match="does not start with"):
+        release_version("2.4.1", "v")
 
 
 def test_dependency_checker_reads_resolved_versions_from_lock(tmp_path: Path) -> None:
@@ -181,6 +189,8 @@ def test_measure_image_tools_reads_cern_commit_file(monkeypatch: pytest.MonkeyPa
             "konnect 0.12.1",
             "Python 3.14.4",
             "circuit=0.0.1",
+            "semeru_jre=27.0.0.0",
+            "freerouting=2.4.1",
             "9dba1850616da7fb1a4834531a3a1f0fff7c8666",
             "kicad-nightly=202609190245+6d837080a5~189~ubuntu26.04.1",
             "kicad-nightly-footprints=202609171319+1df46f29b~14~ubuntu26.04.1",
@@ -205,6 +215,8 @@ def test_measure_image_tools_rejects_unknown_cern_commit(
             "konnect 0.12.1",
             "Python 3.14.4",
             "circuit=0.0.1",
+            "semeru_jre=27.0.0.0",
+            "freerouting=2.4.1",
             "unknown",
             "kicad-nightly=202609190245+6d837080a5~189~ubuntu26.04.1",
             "kicad-nightly-footprints=202609171319+1df46f29b~14~ubuntu26.04.1",

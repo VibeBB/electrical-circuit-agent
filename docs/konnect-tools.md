@@ -132,19 +132,19 @@ source of truth. Konnect output is advisory and never changes `kicad-cli` JSON v
 | `add_junction` | schematic | schematic | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
 | `add_no_connect` | schematic | schematic | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
 | `add_power_symbol` | schematic | schematic | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
-| `apply_specctra_ses` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
+| `apply_specctra_ses` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. Depends on export_specctra_dsn, which is blocked upstream on KiCad 11 `(transform ...)` footprints (ADR-0021). |
 | `apply_template` | templates | schematic | file | alternative to create_project when a brief matches a template; brief remains authoritative |
 | `check_clearance` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
-| `check_freerouting` | pcb | layout | unknown | Requires fixture-specific prerequisites; FreeRouting tools require FreeRouting (Java/Semeru OpenJ9) — deferred. |
+| `check_freerouting` | pcb | layout | unknown | Requires fixture-specific prerequisites; Semeru JRE and freerouting.jar are bundled in the tools image and the check is usable (ADR-0021). |
 | `enrich_datasheets` | integration | intake | unknown | Requires network access; deferred under the pinned-library policy. |
-| `export_specctra_dsn` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
+| `export_specctra_dsn` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. Upstream export does not yet parse KiCad 11 `(transform ...)` footprint positions (ADR-0021). |
 | `get_datasheet_url` | integration | intake | unknown | Requires network access; deferred under the pinned-library policy. |
 | `place_decoupling_caps` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
 | `plan_bga_fanout` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
-| `plan_specctra_ses_import` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
+| `plan_specctra_ses_import` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. Depends on export_specctra_dsn, which is blocked upstream on KiCad 11 `(transform ...)` footprints (ADR-0021). |
 | `refill_zones` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
 | `route_differential_pair` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
-| `route_specctra_dsn` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. |
+| `route_specctra_dsn` | pcb | layout | unknown | Requires matching board topology, placement, or connectivity prerequisites; run on a copy. Depends on export_specctra_dsn, which is blocked upstream on KiCad 11 `(transform ...)` footprints (ADR-0021). |
 
 ## advisory
 

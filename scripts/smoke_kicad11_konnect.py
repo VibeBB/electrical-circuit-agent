@@ -114,11 +114,18 @@ def main() -> int:
             toolsets = [
                 item["name"]
                 for item in boxes["toolsets"]
-                if "pcb" in item["name"] or item["name"] == "verification"
+                if "pcb" in item["name"] or item["name"] in {"verification", "integration"}
             ]
             for toolset in toolsets:
                 _, next_id = call_tool(konnect, next_id, "load_toolset", {"name": toolset})
             _, next_id = call_tool(konnect, next_id, "check_kicad_ui", {"timeout_seconds": 2})
+            freerouting, next_id = call_tool(konnect, next_id, "check_freerouting", {})
+            if not (
+                freerouting.get("engine_found")
+                and freerouting.get("java_available")
+                and freerouting.get("native_mcp_available")
+            ):
+                raise RuntimeError(f"freerouting runtime not usable: {freerouting}")
             board_info, next_id = call_tool(
                 konnect, next_id, "get_board_info", {"board": str(board)}
             )
@@ -177,6 +184,7 @@ def main() -> int:
             summary = {
                 "initialize": initialize.get("result", {}),
                 "board_info": board_info,
+                "check_freerouting": freerouting,
                 "move_component": moved,
                 "route_trace": routed,
                 "add_via": via,
