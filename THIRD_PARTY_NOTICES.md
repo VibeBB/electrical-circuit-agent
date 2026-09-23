@@ -1,97 +1,102 @@
-# 第三者コンポーネント notices
+# Third-Party Notices
 
-本書は本プロジェクトに同梱または実行時に利用する第三者コンポーネントの
-ライセンス、取得元、pin、再配布境界を記録する。本書は法的助言ではない。
+circuit is licensed BSD-3-Clause (see LICENSE). This file records the
+licenses, sources, pins, and redistribution boundaries of the third-party
+components the project bundles or runs at execution time. This file is not
+legal advice.
 
 ## Konnect
 
-- ライセンス: AGPL-3.0-only
-- バージョン: v0.12.1
-- release commit: `fa62e1ccb9eba359519bf8e3eab53a6cffeee33c`
-- asset: `konnect-v0.12.1-x86_64-unknown-linux-gnu.tar.gz`
+- License: AGPL-3.0-only
+- Version: v0.12.1
+- Release commit: `fa62e1ccb9eba359519bf8e3eab53a6cffeee33c`
+- Asset: `konnect-v0.12.1-x86_64-unknown-linux-gnu.tar.gz`
 - SHA-256: `8a546fc949d11edbb55096a9b1f2c8f9147b26a9916b47a5c4990ee9e9441fb6`
-- 取得元: <https://github.com/mixelpixx/Konnect/releases/tag/v0.12.1>
+- Source: <https://github.com/mixelpixx/Konnect/releases/tag/v0.12.1>
 - LICENSE: <https://raw.githubusercontent.com/mixelpixx/Konnect/fa62e1ccb9eba359519bf8e3eab53a6cffeee33c/LICENSE>
-- 再配布: release binaryを無改変で取得し、別プロセスのMCP stdio serverとして実行する。
-- image内のLICENSE配置: `/usr/share/doc/konnect/LICENSE`
+- Redistribution: the release binary is fetched unmodified and executed as a
+  separate-process MCP stdio server.
+- In-image LICENSE location: `/usr/share/doc/konnect/LICENSE`
 
-## KiCad と kicad-cli
+## KiCad and kicad-cli
 
-- ライセンス: GPL-3.0-or-later
-- 取得元: <https://ppa.launchpadcontent.net/kicad/kicad-dev-nightly/>
-- package: `kicad-nightly`
-- version: `202609230242+3f88267300~189~ubuntu26.04.1`
-- package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609230242+3f88267300~189~ubuntu26.04.1_amd64.deb)
-- package SHA-256: `53b8d21ff77ff759bfc05fb39de9ebad43a9b9efb8513baae19250303e105006`
-- 実行ファイル: `/usr/lib/kicad-nightly/bin/kicad-cli`
+- License: GPL-3.0-or-later
+- Source: <https://ppa.launchpadcontent.net/kicad/kicad-dev-nightly/>
+- Package: `kicad-nightly`
+- Version: `202609230242+3f88267300~189~ubuntu26.04.1`
+- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609230242+3f88267300~189~ubuntu26.04.1_amd64.deb)
+- Package SHA-256: `53b8d21ff77ff759bfc05fb39de9ebad43a9b9efb8513baae19250303e105006`
+- Executable: `/usr/lib/kicad-nightly/bin/kicad-cli`
 
-## KiCad公式 symbol / footprint libraries
+## KiCad official symbol / footprint libraries
 
-- ライセンス: CC-BY-SA-4.0 with KiCad library exception
-- ライセンスページ: <https://www.kicad.org/libraries/license/>
-- 例外の要約: Licensed Materialを使う電子設計と生成ファイルがAdapted Materialに
-  あたる範囲について、権利者はCC-BY-SA第3条を放棄する。
-- package: `kicad-nightly-symbols`,
-  `kicad-nightly-footprints`
-- version:
+- License: CC-BY-SA-4.0 with the KiCad library exception
+- License page: <https://www.kicad.org/libraries/license/>
+- Exception summary: to the extent that electronic designs and generated
+  files using Licensed Material constitute Adapted Material, the licensor
+  waives Section 3 of CC-BY-SA.
+- Packages: `kicad-nightly-symbols`, `kicad-nightly-footprints`
+- Versions:
   - symbols `202609221218+1565b6644~12~ubuntu26.04.1`
   - footprints `202609222017+55d9dd1a3~14~ubuntu26.04.1`
 
 ## CERN KiCad libraries
 
-- ライセンス: CERN-OHL-P-2.0
-- 取得元: <https://gitlab.com/ohwr/cern-kicad-libs>
-- commit: `8139735c9fd5db6b2b4e77b036d58072f689554b`
-- commit日: 2026-09-23 UTC
-- 配置: `libraries/cern-kicad-libs`
-- upstreamのLICENSEをsubmodule内で維持する。
+- License: CERN-OHL-P-2.0
+- Source: <https://gitlab.com/ohwr/cern-kicad-libs>
+- Commit: `8139735c9fd5db6b2b4e77b036d58072f689554b`
+- Commit date: 2026-09-23 UTC
+- Location: `libraries/cern-kicad-libs`
+- The upstream LICENSE is preserved inside the submodule.
 
 ## FreeRouting
 
-- ライセンス: GPL-3.0
-- バージョン: v2.4.1
-- asset: `freerouting-2.4.1.jar`
+- License: GPL-3.0
+- Version: v2.4.1
+- Asset: `freerouting-2.4.1.jar`
 - SHA-256: `251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9`
-- 取得元: <https://github.com/freerouting/freerouting/releases/tag/v2.4.1>
+- Source: <https://github.com/freerouting/freerouting/releases/tag/v2.4.1>
 - LICENSE: <https://raw.githubusercontent.com/freerouting/freerouting/v2.4.1/LICENSE>
-- 再配布: release JARを無改変で `/opt/freerouting/freerouting.jar` に配置し、
-  Konnectが `java -jar` で別プロセス起動する。Pythonへのimport/linkは行わない。
-- image内のLICENSE配置: `/usr/share/doc/freerouting/LICENSE`
+- Redistribution: the release JAR is placed unmodified at
+  `/opt/freerouting/freerouting.jar` and launched by Konnect as a separate
+  `java -jar` process. It is not imported or linked into Python.
+- In-image LICENSE location: `/usr/share/doc/freerouting/LICENSE`
 
 ## IBM Semeru Runtime Open Edition (Eclipse OpenJ9)
 
-- ライセンス: EPL-2.0 / Apache-2.0 / GPL-2.0-with-classpath-exception
-  （tarball内 `/opt/jre/legal/` にモジュール毎のライセンスを同梱）
-- バージョン: 27.0.0.0 (OpenJ9 0.62.0)
-- asset: `ibm-semeru-open-jre_x64_linux_27.0.0.0.tar.gz`
+- License: EPL-2.0 / Apache-2.0 / GPL-2.0-with-classpath-exception
+  (per-module licenses ship inside the tarball at `/opt/jre/legal/`)
+- Version: 27.0.0.0 (OpenJ9 0.62.0)
+- Asset: `ibm-semeru-open-jre_x64_linux_27.0.0.0.tar.gz`
 - SHA-256: `9e6d9c1131da124bd08eb4183f7787a9f90111fc3d62c1231976c2d37372d59e`
-- 取得元: <https://github.com/ibmruntimes/semeru27-binaries/releases/tag/jdk-27.0.0.0>
-- 再配布: release tarballを無改変で `/opt/jre` に展開し、`JAVA_HOME`/`PATH` で
-  FreeRouting実行JREとして解決する。
-- image内のprovenance: `/usr/share/doc/semeru-jre/SOURCE`
+- Source: <https://github.com/ibmruntimes/semeru27-binaries/releases/tag/jdk-27.0.0.0>
+- Redistribution: the release tarball is extracted unmodified to `/opt/jre`
+  and resolved as the FreeRouting execution JRE via `JAVA_HOME`/`PATH`.
+- In-image provenance: `/usr/share/doc/semeru-jre/SOURCE`
 
 ## Ubuntu base image
 
-- image: `ubuntu:26.04`
-- 配布元: <https://hub.docker.com/_/ubuntu>
-- Ubuntuの著作権表示とライセンスはbase imageに従う。
+- Image: `ubuntu:26.04`
+- Source: <https://hub.docker.com/_/ubuntu>
+- Ubuntu copyright notices and licenses follow the base image.
 
 ## OpenHands Software Agent SDK
 
-- ライセンス: MIT
-- package: `openhands-sdk==1.49.4`, `openhands-tools==1.49.4`
-- 取得元: <https://pypi.org/project/openhands-sdk/1.49.4/>
-- 本プロジェクトはSDKを依存関係として利用し、SDKコードをvendorしない。
+- License: MIT
+- Packages: `openhands-sdk==1.49.4`, `openhands-tools==1.49.4`
+- Source: <https://pypi.org/project/openhands-sdk/1.49.4/>
+- The project uses the SDK as a dependency and does not vendor SDK code.
 
 ## Python runtime dependencies
 
-tools imageには`uv.lock`のruntime dependencyをインストールします。主な直接依存は
-以下です。
+The tools image installs the runtime dependencies from `uv.lock`. The main
+direct dependencies are:
 
-- `mcp>=1.29,<2`: MIT、<https://pypi.org/project/mcp/>
-- `pydantic>=2`: MIT、<https://pypi.org/project/pydantic/>
-- `openhands-sdk==1.49.4`: MIT、<https://pypi.org/project/openhands-sdk/1.49.4/>
-- `openhands-tools==1.49.4`: MIT、<https://pypi.org/project/openhands-tools/1.49.4/>
+- `mcp>=1.29,<2`: MIT — <https://pypi.org/project/mcp/>
+- `pydantic>=2`: MIT — <https://pypi.org/project/pydantic/>
+- `openhands-sdk==1.49.4`: MIT — <https://pypi.org/project/openhands-sdk/1.49.4/>
+- `openhands-tools==1.49.4`: MIT — <https://pypi.org/project/openhands-tools/1.49.4/>
 
-間接依存（anyio、httpx、starlette等）のpinとライセンスは`uv.lock`および各PyPI
-distributionのmetadataに従います。本書は法的助言ではありません。
+Transitive dependencies (anyio, httpx, starlette, etc.) follow the pins in
+`uv.lock` and each PyPI distribution's own metadata. This file is not legal
+advice.
