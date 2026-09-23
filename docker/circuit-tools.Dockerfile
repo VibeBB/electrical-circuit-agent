@@ -37,6 +37,8 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
+        librsvg2-bin \
+        poppler-utils \
         python3 \
         software-properties-common \
         xz-utils \
@@ -115,6 +117,8 @@ RUN if [ -f /usr/share/doc/kicad-nightly-symbols/LICENSE.md ]; then \
     && uv pip install --system --break-system-packages --no-deps /opt/circuit \
     && kicad-cli --version | grep -E '^10\.99\.' \
     && kicad-cli api-server --help \
+    && pdftoppm -v 2>&1 | grep -i poppler \
+    && rsvg-convert --version | grep -i rsvg \
     && konnect --version | grep -F "${KONNECT_VERSION}" \
     && python3 -c "import circuit, mcp, pydantic; print(circuit.__version__)" \
     && python3 -m circuit.doctor --warn \

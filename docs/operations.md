@@ -314,6 +314,20 @@ hook logs every image the model saw — `circuit_render`, `circuit_diff`, and
 (path + sha256; override `$CIRCUIT_IMAGE_OBSERVATIONS`), complementing the
 `vision-tool-events.jsonl` log of delegated `inspect_image_with_vision` calls.
 
+### Existing-drawings ingestion and rasterizers
+
+`circuit_import` wraps `kicad-cli sch import`/`pcb import` for foreign CAD
+sources (Altium/Eagle/CADSTAR/EasyEDA(+Pro)/LTspice/PADS/DipTrace/PCAD/OrCAD
+schematics; PADS/Altium/Eagle/CADSTAR/Fabmaster/PCAD/SolidWorks boards); the
+importer's JSON report is written next to the output as
+`<output>.import.json`. `circuit_rasterize` turns `.pdf` (pdftoppm, per-page
+PNG) and `.svg` (rsvg-convert) into PNGs for the vision lane — the tools
+image installs `poppler-utils` + `librsvg2-bin` (unpinned Ubuntu 26.04 apt;
+override binaries via `$CIRCUIT_PDFTOPPM`/`$CIRCUIT_RSVG_CONVERT`;
+ADR-0019). `circuit_stackup` writes `<stem>-stackup.json` plus a
+deterministic section-diagram `<stem>-stackup.svg` (stdlib generator) — the
+cross-section approximation of record; rasterize it for the vision lane.
+
 ### Schematic readability lint
 
 `circuit_sch_lint` is a deterministic gate on the authored `.kicad_sch`:

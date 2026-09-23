@@ -27,7 +27,19 @@ from mcp.types import (
 )
 from pydantic import BaseModel, ValidationError
 
-from . import __version__, apiserver, brief, intake, kicad_cli, libraries, netlist, report, sch_lint
+from . import (
+    __version__,
+    apiserver,
+    brief,
+    intake,
+    kicad_cli,
+    libraries,
+    netlist,
+    raster,
+    report,
+    sch_lint,
+    stackup,
+)
 from .advisory import AdvisoryResult
 from .paths import KONNECT_SOCKET_URL
 
@@ -303,6 +315,54 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "output_dir": {"type": "string"},
             },
             "required": ["kind", "source_path", "output_dir"],
+        },
+    ),
+    (
+        "circuit_import",
+        "Import a non-KiCad schematic or PCB (Altium/Eagle/CADSTAR/EasyEDA(+Pro)/"
+        "LTspice/PADS/DipTrace/PCAD/OrCAD schematics; PADS/Altium/Eagle/CADSTAR/"
+        "Fabmaster/PCAD/SolidWorks boards); writes the converted KiCad file plus "
+        "the importer's JSON report next to it as <output>.import.json",
+        {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["sch", "pcb"]},
+                "source_path": {"type": "string"},
+                "output_path": {"type": "string"},
+                "format": {
+                    "type": "string",
+                    "description": "input format hint; default auto",
+                    "default": "auto",
+                },
+            },
+            "required": ["kind", "source_path", "output_path"],
+        },
+    ),
+    (
+        "circuit_stackup",
+        "Export the board stackup and write a deterministic section-diagram SVG "
+        "plus the stackup JSON into output_dir",
+        {
+            "type": "object",
+            "properties": {
+                "board_path": {"type": "string"},
+                "output_dir": {"type": "string"},
+            },
+            "required": ["board_path", "output_dir"],
+        },
+    ),
+    (
+        "circuit_rasterize",
+        "Rasterize a .pdf (pdftoppm, one PNG per page) or .svg (rsvg-convert) "
+        "intake file to PNG for visual review; attaches up to 4 images inline",
+        {
+            "type": "object",
+            "properties": {
+                "source_path": {"type": "string"},
+                "output_dir": {"type": "string"},
+                "dpi": {"type": "integer", "default": 150},
+            },
+            "required": ["source_path", "output_dir"],
         },
     ),
     (
@@ -854,6 +914,34 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 Path(str(args["source_path"])),
                 Path(str(args["output_dir"])),
             )
+        elif name == "circuit_import":
+            result = kicad_cli.import_file(
+                cast(kicad_cli.ImportKind, str(args["kind"])),
+                Path(str(args["source_path"])),
+                Path(str(args["output_path"])),
+                format=str(args.get("format", "auto")),
+            )
+        elif name == "circuit_stackup":
+            board = Path(str(args["board_path"]))
+            out_dir = Path(str(args["output_dir"]))
+            json_path = out_dir / f"{board.stem}-stackup.json"
+            data = kicad_cli.export_stackup(board, json_path)
+            svg_path = stackup.write_stackup_diagram(data, out_dir / f"{board.stem}-stackup.svg")
+            result = {
+                "json_path": str(json_path),
+                "svg_path": str(svg_path),
+            }
+        elif name == "circuit_rasterize":
+            images = raster.rasterize(
+                Path(str(args["source_path"])),
+                Path(str(args["output_dir"])),
+                dpi=int(args.get("dpi", 150)),
+            )
+            result = {
+                "output_dir": str(Path(str(args["output_dir"]))),
+                "images": [str(path) for path in images],
+            }
+            image_paths = images
         elif name == "circuit_konnect_call":
             konnect_arguments = args.get("arguments")
             ops = args.get("ops")

@@ -16,7 +16,7 @@ _DRIVER = """
 import json
 import sys
 from pathlib import Path
-from circuit import kicad_cli
+from circuit import kicad_cli, stackup
 
 work = Path(sys.argv[1])
 board = work / "board.kicad_pcb"
@@ -50,6 +50,20 @@ out["fp_svg"] = [
     str(p) for p in kicad_cli.export("fp_svg", work / "fp-lib.pretty", work / "fp-svg")
 ]
 
+imported = kicad_cli.import_file(
+    "sch", work / "test.asc", work / "imported.kicad_sch", format="ltspice"
+)
+out["import"] = {
+    "output": str(imported.output),
+    "report": imported.report,
+    "report_path": str(imported.report_path),
+}
+
+stackup_data = kicad_cli.export_stackup(board, work / "board-stackup.json")
+out["stackup_svg"] = str(
+    stackup.write_stackup_diagram(stackup_data, work / "board-stackup.svg")
+)
+
 (work / "render-surface.json").write_text(json.dumps(out), encoding="utf-8")
 """
 
@@ -71,6 +85,11 @@ def test_extended_render_surface_in_tools_image(tmp_path: Path) -> None:
     (lib / "test_pad.kicad_mod").write_text(
         '(footprint "test_pad" (version 20241229) (generator "test") (layer "F.Cu")\n'
         '  (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask")))\n',
+        encoding="utf-8",
+    )
+    (workdir / "test.asc").write_text(
+        "Version 4\nSHEET 1 880 680\nWIRE 208 144 208 176\n"
+        "SYMBOL res 224 176 R0\nSYMATTR InstName R1\nSYMATTR Value 1k\nFLAG 208 144 0\n",
         encoding="utf-8",
     )
     result = subprocess.run(
@@ -117,3 +136,9 @@ def test_extended_render_surface_in_tools_image(tmp_path: Path) -> None:
         + [Path(p) for value in expected_counts for p in produced[value]]
     )
     assert all(path.is_file() and path.stat().st_size > 0 for path in all_paths)
+    imported = produced["import"]
+    assert Path(imported["output"]).is_file()
+    assert Path(imported["report_path"]).is_file()
+    assert imported["report"]["source_format"] == "LTspice"
+    stackup_svg = Path(produced["stackup_svg"])
+    assert stackup_svg.read_text(encoding="utf-8").startswith("<svg")

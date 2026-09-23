@@ -22,7 +22,7 @@ from typing import Any, cast
 
 EVENTS_ENV = "CIRCUIT_IMAGE_OBSERVATIONS"
 EVENTS_RELATIVE_PATH = Path(".openhands/circuit/image-observations.jsonl")
-OBSERVED_TOOLS = {"circuit_render", "circuit_diff", "file_editor"}
+OBSERVED_TOOLS = {"circuit_render", "circuit_diff", "circuit_rasterize", "file_editor"}
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 _IMAGE_PATH = re.compile(r"[^\s\"'<>]+?\.(?:png|jpe?g)", re.IGNORECASE)
 
