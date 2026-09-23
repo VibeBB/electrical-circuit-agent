@@ -14,7 +14,10 @@ triggers:
 
 For schematic authoring, validate a design brief first, load the project/library
 toolsets, call `get_symbol_info`, place symbols with `batch_place_components`, and
-connect every brief net with `batch_connect_to_net` labels. Do not draw pin-to-pin
+wire the schematic like a hand-drawn one: connect the main signal chain and serial
+paths with `add_wire`/`batch_add_wire` (or `connect_pins`/`batch_connect_pins`)
+plus `add_junction` at T-junctions, reserving `batch_connect_to_net` labels for
+power rails (VCC/GND) and nets that would otherwise cross. Do not draw pin-to-pin
 wires across components. In v0.12.1 call `save_project` with `{}`.
 
 Konnect loads most authoring operations through `load_toolset`, and some
@@ -22,7 +25,11 @@ harnesses never re-fetch `tools/list` after that call, so the operations never
 appear as visible `konnect_*` tools. Do not loop on `get_active_toolsets` when
 that happens. Invoke the operation through `circuit_konnect_call` instead:
 `{"tool": "batch_place_components", "arguments": {...}}` spawns a managed
-Konnect stdio session and returns its result verbatim. As a fallback, drive
+Konnect stdio session and returns its result verbatim. Because toolset state is
+session-scoped, batch related calls in the `ops` array so `load_toolset` and the
+real ops share one session: `{"ops": [{"tool": "load_toolset", "arguments":
+{"name": "schematic"}}, {"tool": "batch_edit_schematic_components",
+"arguments": {...}}]}` — the call reports `isError` when any op fails. As a fallback, drive
 the same ops with a small stdio JSON-RPC client (the repository's
 `scripts/konnect_client.py` pattern) against the `konnect` binary with
 `KICAD_API_SOCKET` set; record such terminal invocations in the summary since

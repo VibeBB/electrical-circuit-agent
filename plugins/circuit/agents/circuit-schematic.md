@@ -46,8 +46,15 @@ Author the schematic only through Konnect operations
 (`create_schematic`, `register_symbol_library`, `get_symbol_info`,
 `add_schematic_component` / `batch_place_components`, `connect_to_net` /
 `batch_connect_to_net`, `add_schematic_net_label`, `add_wire`, `save_project`).
+Wire it like a hand-drawn schematic: connect the main signal chain and serial
+paths with `add_wire`/`batch_add_wire` (or `connect_pins`/`batch_connect_pins`)
+and drop `add_junction` at every T-junction. Reserve net labels for power rails
+(VCC/GND) and for nets that would otherwise force wires to cross — connectivity
+expressed only through labels is electrically valid but unreadable, and
+`circuit_sch_lint` reports it as `label_only_connectivity`.
 If dynamically loaded `konnect_*` toolsets never become visible, invoke the same
-operations through `circuit_konnect_call` (`{"tool": ..., "arguments": {...}}`),
+operations through `circuit_konnect_call` (`{"tool": ..., "arguments": {...}}`,
+or `{"ops": [{...}, ...]}` to run `load_toolset` and the real ops in one session),
 or as a last resort through a stdio JSON-RPC client against the `konnect` binary;
 never write the file another way. Never hand-write `.kicad_sch` s-expressions and
 never generate scripts that write
@@ -56,6 +63,11 @@ coordinates computed by KiCad-aware tooling, not offsets you can guess, and
 unparseable or mislabeled schematics waste the run budget. After authoring, run
 `circuit_sch_lint` on the schematic and fix every error-severity finding before
 ERC; do not re-run gates on inputs that have not changed since their last report.
+Repair warning-severity findings too and re-run the lint until it is quiet:
+`property_on_symbol` and misplaced labels via `reset_schematic_field_positions`,
+`batch_edit_schematic_components`, `list_schematic_labels`,
+`move_labels_by_offset`, or `batch_rotate_labels`; empty title-block fields via
+`edit_sheet`; a cramped sheet via `bulk_move_schematic_components`.
 
 Konnect analysis is advisory; the
 `circuit_connectivity_check` JSON from the kicad-cli netlist is authoritative before
@@ -68,7 +80,9 @@ Advisory Konnect checks for this stage include `audit_connections`,
 `find_single_pin_nets`, `find_orphan_items`, `get_schematic_layout`,
 `export_netlist_summary`, dry-run annotation/library-position checks, BOM health and
 exports, `run_erc`, schematic renders, and `snapshot_project`. These are advisory —
-record them in the design report, never promote them to a verdict.
+record each outcome as a `circuit-reports/schematic-<slug>.advisory.json` file
+following the AdvisoryResult contract (`tool`, `stage`="schematic", `status`,
+`summary`, `artifacts`, `detail`), never promote them to a verdict.
 
 When the model is vision-capable, inspect schematic renders
 (`render_schematic_png`, `export_schematic_svg`, or `get_schematic_view`
