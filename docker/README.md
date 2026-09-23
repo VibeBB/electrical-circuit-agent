@@ -12,9 +12,9 @@ binary and is never imported into the Python package.
 | Content | Pin |
 |---|---|
 | Ubuntu | `26.04` |
-| KiCad | `202609190245+6d837080a5~189~ubuntu26.04.1` |
-| KiCad footprints | `202609171319+1df46f29b~14~ubuntu26.04.1` |
-| KiCad symbols | `202609181937+a82391d3d~12~ubuntu26.04.1` |
+| KiCad | `202609230242+3f88267300~189~ubuntu26.04.1` |
+| KiCad footprints | `202609222017+55d9dd1a3~14~ubuntu26.04.1` |
+| KiCad symbols | `202609221218+1565b6644~12~ubuntu26.04.1` |
 | Konnect | `v0.12.1`, release commit and SHA-256 in the Dockerfile |
 | CERN libraries | submodule commit of `libraries/cern-kicad-libs` (also recorded in `cern-kicad-libs.commit` inside the image and the OCI label `circuit.cern.commit`) |
 
@@ -40,7 +40,7 @@ publishes the tools/server images to GHCR and records the actual digests in
 ## GHCR publishing and lock
 
 Publishing is done by `.github/workflows/publish-circuit-images.yml`. After the
-tools image is verified, the OpenHands SDK v1.49.2 server image is built, with
+tools image is verified, the OpenHands SDK v1.49.4 server image is built, with
 the immutable tags `<commit>-tools` and `<commit>-latest-source` plus the
 `latest` alias. Lock updates are separated into bot PRs that auto-merge only
 when that PR's CI succeeds.

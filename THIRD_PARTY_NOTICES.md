@@ -20,9 +20,9 @@
 - ライセンス: GPL-3.0-or-later
 - 取得元: <https://ppa.launchpadcontent.net/kicad/kicad-dev-nightly/>
 - package: `kicad-nightly`
-- version: `202609210241+6e93fd642e~189~ubuntu26.04.1`
-- package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609210241+6e93fd642e~189~ubuntu26.04.1_amd64.deb)
-- package SHA-256: `ca1c9e940092d606555e745c827c2b73e941249dbed9adb13a5afdc6c138bb19`
+- version: `202609230242+3f88267300~189~ubuntu26.04.1`
+- package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609230242+3f88267300~189~ubuntu26.04.1_amd64.deb)
+- package SHA-256: `53b8d21ff77ff759bfc05fb39de9ebad43a9b9efb8513baae19250303e105006`
 - 実行ファイル: `/usr/lib/kicad-nightly/bin/kicad-cli`
 
 ## KiCad公式 symbol / footprint libraries
@@ -34,15 +34,15 @@
 - package: `kicad-nightly-symbols`,
   `kicad-nightly-footprints`
 - version:
-  - symbols `202609211218+422f3fe0e~12~ubuntu26.04.1`
-  - footprints `202609171319+1df46f29b~14~ubuntu26.04.1`
+  - symbols `202609221218+1565b6644~12~ubuntu26.04.1`
+  - footprints `202609222017+55d9dd1a3~14~ubuntu26.04.1`
 
 ## CERN KiCad libraries
 
 - ライセンス: CERN-OHL-P-2.0
 - 取得元: <https://gitlab.com/ohwr/cern-kicad-libs>
-- commit: `9dba1850616da7fb1a4834531a3a1f0fff7c8666`
-- commit日: 2026-09-19 UTC
+- commit: `8139735c9fd5db6b2b4e77b036d58072f689554b`
+- commit日: 2026-09-23 UTC
 - 配置: `libraries/cern-kicad-libs`
 - upstreamのLICENSEをsubmodule内で維持する。
 
@@ -55,8 +55,8 @@
 ## OpenHands Software Agent SDK
 
 - ライセンス: MIT
-- package: `openhands-sdk==1.49.3`, `openhands-tools==1.49.3`
-- 取得元: <https://pypi.org/project/openhands-sdk/1.49.3/>
+- package: `openhands-sdk==1.49.4`, `openhands-tools==1.49.4`
+- 取得元: <https://pypi.org/project/openhands-sdk/1.49.4/>
 - 本プロジェクトはSDKを依存関係として利用し、SDKコードをvendorしない。
 
 ## Python runtime dependencies
@@ -66,8 +66,8 @@ tools imageには`uv.lock`のruntime dependencyをインストールします。
 
 - `mcp>=1.29,<2`: MIT、<https://pypi.org/project/mcp/>
 - `pydantic>=2`: MIT、<https://pypi.org/project/pydantic/>
-- `openhands-sdk==1.49.3`: MIT、<https://pypi.org/project/openhands-sdk/1.49.3/>
-- `openhands-tools==1.49.3`: MIT、<https://pypi.org/project/openhands-tools/1.49.3/>
+- `openhands-sdk==1.49.4`: MIT、<https://pypi.org/project/openhands-sdk/1.49.4/>
+- `openhands-tools==1.49.4`: MIT、<https://pypi.org/project/openhands-tools/1.49.4/>
 
 間接依存（anyio、httpx、starlette等）のpinとライセンスは`uv.lock`および各PyPI
 distributionのmetadataに従います。本書は法的助言ではありません。
