@@ -67,8 +67,7 @@ new external source (anything other than PyPI: another Git repository, an
 apt/PPA, a release download, etc.), update the target definitions in
 `scripts/check_dependency_updates.py`, its tests, and the corresponding
 section of `docs/operations.md` in the same change. Dependency candidates are
-aggregated by the weekly workflow into the "依存アップデート確認レポート"
-(dependency update report) Issue. For deferred candidates, record the reason
+aggregated by the weekly workflow into the "Dependency update check report" Issue. For deferred candidates, record the reason
 and a re-check deadline in `scripts/dependency_update_deferrals.json`.
 
 ## Verification

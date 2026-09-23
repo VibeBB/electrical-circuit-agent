@@ -1,0 +1,11 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+  # The uv ecosystem is intentionally absent: Dependabot's bundled uv
+  # (currently 0.12.15) cannot satisfy [tool.uv] required-version in
+  # pyproject.toml, so every uv update run failed with
+  # tool_version_not_supported on the other agent repos. Python dependency
+  # updates stay covered by the weekly check-dependency-updates.yml report.

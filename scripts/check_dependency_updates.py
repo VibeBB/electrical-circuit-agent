@@ -420,24 +420,24 @@ def report(
 
 def markdown(payload: dict[str, Any]) -> str:
     lines = [
-        "# 依存アップデート確認レポート",
+        "# Dependency update check report",
         "",
-        "| 対象 | 現在 | 最新 | 判定 | 出所 |",
+        "| dependency | current | latest | state | reference |",
         "|---|---|---|---|---|",
     ]
     for item in payload["statuses"]:
-        state = item["decision"] or ("更新あり" if item["outdated"] else "一致/保留")
+        state = item["decision"] or ("update available" if item["outdated"] else "up to date")
         lines.append(
             f"| {item['name']} | `{item['current']}` | `{item['latest']}` | "
             f"{state} | {item['source']} |"
         )
         if item["note"]:
-            lines.append(f"| 注記 | {item['note']} |  |  |  |")
+            lines.append(f"| note | {item['note']} |  |  |  |")
     lines.extend(
         [
             "",
-            "KiCad nightly更新時は、`docs/operations.md`に記録された"
-            "`_cvpcb.kiface` ERC障害を再テストすること。",
+            "When the KiCad nightly package updates, re-test the "
+            "`_cvpcb.kiface` ERC failure recorded in `docs/operations.md`.",
         ]
     )
     return "\n".join(lines) + "\n"

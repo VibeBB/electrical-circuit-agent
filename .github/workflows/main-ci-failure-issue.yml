@@ -29,17 +29,17 @@ jobs:
         run: |
           set -euo pipefail
           gh label create ci-main-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
-            --description "mainのCIまたはimage検証が失敗している" --force || true
+            --description "Main CI or image verification is failing" --force || true
           issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label ci-main-failure \
             --json number --jq '.[0].number // empty')
           if [ "$CONCLUSION" = success ]; then
-            if [ -n "$issue" ]; then gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --comment "緑に戻りました: $RUN_URL"; fi
+            if [ -n "$issue" ]; then gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --comment "Back to green: $RUN_URL"; fi
             exit 0
           fi
           if [ "$CONCLUSION" = cancelled ] || [ "$CONCLUSION" = skipped ]; then exit 0; fi
           jobs=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
             --jq '[.jobs[] | select(.conclusion=="failure") | .name] | join(", ")')
-          body=$(printf '%s\n\n- run: %s\n- failed jobs: %s\n' "mainのCI/image検証が失敗しました。" "$RUN_URL" "${jobs:-不明}")
+          body=$(printf '%s\n\n- run: %s\n- failed jobs: %s\n' "Main CI/image verification failed." "$RUN_URL" "${jobs:-unknown}")
           if [ -n "$issue" ]; then gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"; else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "main CI失敗レポート" --label ci-main-failure --body "$body"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Main CI failure report" --label ci-main-failure --body "$body"
           fi
