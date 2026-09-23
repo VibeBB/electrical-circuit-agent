@@ -425,11 +425,13 @@ async def _konnect_call(
         results: list[dict[str, Any]] = []
         for op in ops:
             op_tool = str(op.get("tool", ""))
-            op_arguments = op.get("arguments")
-            op_result = await session.call_tool(
-                op_tool,
-                op_arguments if isinstance(op_arguments, dict) else {},
+            op_arguments_value = op.get("arguments")
+            op_arguments: dict[str, Any] = (
+                cast(dict[str, Any], op_arguments_value)
+                if isinstance(op_arguments_value, dict)
+                else {}
             )
+            op_result = await session.call_tool(op_tool, op_arguments)
             results.append(
                 {
                     "tool": op_tool,
@@ -622,7 +624,9 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             konnect_arguments = args.get("arguments")
             ops = args.get("ops")
             if ops is not None:
-                if not isinstance(ops, list) or not all(isinstance(item, dict) for item in ops):
+                if not isinstance(ops, list) or not all(
+                    isinstance(item, dict) for item in cast(list[Any], ops)
+                ):
                     raise ValueError("circuit_konnect_call 'ops' must be a list of objects")
                 return await _konnect_call(
                     "",
