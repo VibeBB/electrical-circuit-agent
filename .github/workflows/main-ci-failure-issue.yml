@@ -3,13 +3,12 @@ name: Main CI failure issue
 on:
   # zizmor: ignore[dangerous-triggers] files a tracking Issue on completed main runs; no code is checked out
   workflow_run:
-    workflows: ["CI", "Publish circuit images", "Locked image check"]
+    workflows: ["CI", "Publish circuit images", "Locked image check", "Workflow lint"]
     types: [completed]
     branches: [main]
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: main-ci-failure-issue
@@ -19,6 +18,9 @@ jobs:
   report:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    permissions:
+      contents: read # list runs and jobs for the failed workflow
+      issues: write # file and close the main CI failure tracking Issue
     steps:
       - name: Update tracking issue
         env:

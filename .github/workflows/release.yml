@@ -28,9 +28,9 @@ jobs:
     # checks + merge wait.
     timeout-minutes: 45
     permissions:
-      actions: write
-      contents: write
-      pull-requests: write
+      actions: write # approve gated pull_request runs and dispatch ci.yml checks
+      contents: write # push the version bump to main or a bot branch
+      pull-requests: write # open and merge the version-bump PR fallback
     outputs:
       version: ${{ steps.bump.outputs.version }}
       tag: ${{ steps.bump.outputs.tag }}
@@ -233,7 +233,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
-      contents: write
+      contents: write # create the release tag and GitHub release
     env:
       VERSION: ${{ needs.bump-version.outputs.version }}
       SHA: ${{ needs.bump-version.outputs.sha }}

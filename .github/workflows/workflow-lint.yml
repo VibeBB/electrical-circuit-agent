@@ -15,7 +15,10 @@ on:
 
 permissions:
   contents: read
-  security-events: write
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   zizmor:
@@ -24,11 +27,31 @@ jobs:
     if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'bot/')
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    permissions:
+      contents: read # check out the workflow files under audit
+      security-events: write # upload the zizmor SARIF report to code scanning
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.12"
+      - name: actionlint
+        # Catches YAML structural errors (e.g. duplicate keys) that zizmor
+        # does not check. The release tarball is verified against the pinned
+        # checksum before extraction.
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl --fail --location --silent --show-error --retry 5 --retry-delay 10 \
+            --output actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" \
+            | sha256sum --check
+          tar -xzf actionlint.tar.gz
+          cd "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/actionlint" -oneline .github/workflows/*.yml
       - name: Zizmor
         env:
           # GH_TOKEN enables zizmor's online audits (advisory DB lookups,
