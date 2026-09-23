@@ -27,7 +27,7 @@ JRE is extracted to `/opt/jre` and resolved via `JAVA_HOME`/`PATH`; the JAR is
 placed at `/opt/freerouting/freerouting.jar`, which Konnect v0.12.1 discovers
 via its built-in search roots (see ADR-0021). The CERN commit is recorded in
 `/opt/circuit/libraries/cern-kicad-libs.commit` and the OCI label
-`circuit.cern.commit`. Because the SDK v1.49.4 server image build requires
+`circuit.cern.commit`. Because the SDK v1.49.5 server image build requires
 root-privileged apt/useradd on the base image, the tools image's default user is
 root. For standalone runs specify `--user circuit`; in the server image use the
 `openhands` user created by the SDK. Docker itself does not guarantee
@@ -202,6 +202,40 @@ FAIL.
     on the SDK tag; `docker/image-digests.json` is updated by that bot flow,
     not by hand.
   - mcp 2.x remains deferred: v1.49.4 keeps the `fastmcp<4`
+    (`fastmcp-slim: mcp<2.0`) constraint; see
+    `scripts/dependency_update_deferrals.json`.
+
+### OpenHands SDK v1.49.5 adoption record
+
+- Checked on: 2026-09-23
+- Update: v1.49.4 → v1.49.5
+- Primary source: [v1.49.5 release](https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.49.5)
+- Release delta:
+  - `openhands/sdk/utils/masking.py` adds `PreserveDataUrls` /
+    `SkipSecretMasking`; `message.py` `image_urls` and `openhands-tools`
+    `browser_use` `screenshot_data` now keep image `data:` URLs intact
+    under secret masking — beneficial for the render/vision path.
+  - `mcp/tool.py` normalizes mcp 2.x snake_case ↔ camelCase wire keys
+    (forward-compat only; `fastmcp<4` still caps `mcp<2.0`).
+  - `model_features.py` adds the `gpt-6` family and `gpt-5.2-codex`;
+    `telemetry.py` adds `UsageSnapshot`; extensions metadata utf-8 fix.
+- Reason for adoption: pin alignment to the latest patch; the plugin
+  boundary (AgentDefinition, skills, hooks, `.mcp.json`) is unchanged.
+- Feature evaluation (checked against the plugin boundary):
+  - MCP `ToolAnnotations` adopted: every `circuit_*` tool now declares
+    `annotations.title` plus `readOnlyHint`/`destructiveHint`/
+    `idempotentHint`/`openWorldHint` so MCP clients (including
+    AgentCanvas) can gate calls on honest write semantics.
+    `circuit_konnect_call` is the only `destructiveHint: true` tool
+    (arbitrary Konnect ops mutate the live board).
+  - MCP tool `outputSchema`/`structuredContent` not adopted: tools return
+    a `CallToolResult` JSON text envelope; a typed output schema
+    duplicates contracts already documented in the input schemas.
+  - `prompt`/`agent` hook types not adopted: hooks stay stdlib `command`
+    only (deterministic/fail-closed invariant).
+  - plugin.json `$schema` not adopted: tolerated-but-unenforced by the
+    SDK loader (`extra="allow"`).
+  - mcp 2.x remains deferred: v1.49.5 keeps the `fastmcp<4`
     (`fastmcp-slim: mcp<2.0`) constraint; see
     `scripts/dependency_update_deferrals.json`.
 
@@ -493,6 +527,15 @@ On 2026-09-23 the pins moved to the 09-23 core
 re-tested on the built image: `kicad-cli sch erc` and the docker integration
 tests pass, so the update was adopted. The librarian + SHA-256 mechanism stays
 in place.
+
+Later on 2026-09-23 the symbols pin moved to the 09-23 symbols build
+`202609231218+2ad44fc37~12~ubuntu26.04.1` (core and footprints unchanged;
+the PPA dropped the previous symbols build once the newer one published).
+The `_cvpcb.kiface` ERC failure was re-tested on a minimal image built with
+the updated symbol set: `kicad-cli sch erc` on
+`fixtures/smoke-board/board.kicad_sch` returns a clean report
+(`kicad_version 10.99.0`, no violations), so the update was adopted. The
+librarian + SHA-256 mechanism stays in place.
 
 ## Sockets and permissions
 

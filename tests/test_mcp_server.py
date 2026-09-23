@@ -77,6 +77,17 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
             await session.initialize()
             tools = await session.list_tools()
             assert len(tools.tools) == 23
+            for tool in tools.tools:
+                assert tool.annotations is not None
+                assert tool.annotations.title
+                assert tool.annotations.openWorldHint is False
+            annotations_by_name = {tool.name: tool.annotations for tool in tools.tools}
+            konnect = annotations_by_name["circuit_konnect_call"]
+            doctor = annotations_by_name["circuit_doctor"]
+            erc = annotations_by_name["circuit_erc"]
+            assert konnect is not None and konnect.destructiveHint is True
+            assert doctor is not None and doctor.readOnlyHint is True
+            assert erc is not None and erc.readOnlyHint is False
             result = await session.call_tool("circuit_kicad_version", {})
             assert result.isError is False
             content = result.content[0]

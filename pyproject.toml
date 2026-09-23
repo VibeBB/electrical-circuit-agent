@@ -6,8 +6,8 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2",
     "mcp>=1.29,<2",
-    "openhands-sdk==1.49.4",
-    "openhands-tools==1.49.4",
+    "openhands-sdk==1.49.5",
+    "openhands-tools==1.49.5",
 ]
 
 [dependency-groups]
