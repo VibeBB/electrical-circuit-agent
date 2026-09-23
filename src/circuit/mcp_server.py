@@ -20,9 +20,10 @@ from mcp.types import (
     Tool,
     ToolsCapability,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from . import __version__, apiserver, brief, intake, kicad_cli, libraries, netlist, report, sch_lint
+from .advisory import AdvisoryResult
 
 server = Server("circuit", version=__version__)
 
@@ -99,7 +100,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
     ),
     (
         "circuit_design_report",
-        "Build a fail-closed design report from existing gate reports",
+        "Build a fail-closed design report from gate reports, exports, renders, jobset and diffs",
         {
             "type": "object",
             "properties": {
@@ -279,6 +280,99 @@ def _load_report(path: Path, *, kind: str, source: Path) -> kicad_cli.Report:
     )
 
 
+def _reports_dirs(schematic: Path, board: Path) -> list[Path]:
+    directories: list[Path] = []
+    for source in (schematic, board):
+        directory = source.parent / "circuit-reports"
+        if directory.is_dir() and directory not in directories:
+            directories.append(directory)
+    return directories
+
+
+def _collect_exports(project_dirs: list[Path]) -> dict[str, list[str]]:
+    exports: dict[str, list[str]] = {}
+    for project_dir in project_dirs:
+        root = project_dir / "exports"
+        if not root.is_dir():
+            continue
+        for child in sorted(root.iterdir()):
+            if child.is_dir():
+                files = [str(p) for p in sorted(child.rglob("*")) if p.is_file()]
+                if files:
+                    exports[child.name] = files
+            elif child.is_file():
+                exports.setdefault("exports", []).append(str(child))
+    return exports
+
+
+def _collect_advisory(directories: list[Path]) -> list[AdvisoryResult]:
+    results: list[AdvisoryResult] = []
+    for directory in directories:
+        for path in sorted(directory.glob("*.advisory.json")):
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+                results.append(AdvisoryResult.model_validate(value))
+            except (OSError, json.JSONDecodeError, ValidationError):
+                continue
+        journal = directory / "advisory.jsonl"
+        if not journal.is_file():
+            continue
+        try:
+            lines = journal.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                results.append(AdvisoryResult.model_validate_json(line))
+            except ValidationError:
+                continue
+    return results
+
+
+def _collect_renders(directories: list[Path]) -> list[str]:
+    return [str(path) for directory in directories for path in sorted(directory.glob("*.png"))]
+
+
+def _collect_diffs(directories: list[Path]) -> dict[str, kicad_cli.DiffReport]:
+    diffs: dict[str, kicad_cli.DiffReport] = {}
+    for directory in directories:
+        for path in sorted(directory.glob("*.diff.json")):
+            try:
+                diffs[path.name[: -len(".diff.json")]] = kicad_cli.DiffReport.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValidationError):
+                continue
+    return diffs
+
+
+def _collect_jobset(directories: list[Path]) -> kicad_cli.JobsetResult | None:
+    for directory in directories:
+        for path in sorted(directory.glob("*.jobset.json"), reverse=True):
+            try:
+                return kicad_cli.JobsetResult.model_validate_json(path.read_text(encoding="utf-8"))
+            except (OSError, ValidationError):
+                continue
+    return None
+
+
+def _jobset_consistent(
+    jobset: kicad_cli.JobsetResult | None,
+    erc_report: kicad_cli.Report | None,
+    drc_report: kicad_cli.Report | None,
+) -> bool | None:
+    if jobset is None:
+        return None
+    checks: list[bool] = []
+    if jobset.erc_report is not None and erc_report is not None:
+        checks.append(kicad_cli.reports_equivalent(jobset.erc_report, erc_report.report_path))
+    if jobset.drc_report is not None and drc_report is not None:
+        checks.append(kicad_cli.reports_equivalent(jobset.drc_report, drc_report.report_path))
+    return all(checks) if checks else None
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     return [
@@ -380,6 +474,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             drc_report = (
                 _load_report(drc_path, kind="drc", source=board) if drc_path.is_file() else None
             )
+            reports_dirs = _reports_dirs(schematic, board)
+            jobset = _collect_jobset(reports_dirs)
             result = report.build_design_report(
                 brief.load_brief(brief_path),
                 brief_path=brief_path,
@@ -394,7 +490,12 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 sch_lint=sch_lint_report,
                 erc=erc_report,
                 drc=drc_report,
-                exports={},
+                exports=_collect_exports([schematic.parent, board.parent]),
+                advisory=_collect_advisory(reports_dirs),
+                renders=_collect_renders(reports_dirs),
+                jobset=jobset,
+                jobset_consistent=_jobset_consistent(jobset, erc_report, drc_report),
+                diffs=_collect_diffs(reports_dirs),
             )
             output = (
                 Path(str(args["output_path"]))
@@ -430,11 +531,14 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             )
         elif name == "circuit_jobset_run":
             jobset_arg = args.get("jobset_path")
+            project = Path(str(args["project_path"]))
             result = kicad_cli.jobset_run(
-                Path(str(args["project_path"])),
+                project,
                 Path(str(args["output_dir"])),
                 Path(str(jobset_arg)) if isinstance(jobset_arg, str) else None,
             )
+            record = _output_path(project, None, "jobset")
+            record.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         elif name == "circuit_export":
             result = kicad_cli.export(
                 cast(kicad_cli.ExportKind, str(args["kind"])),

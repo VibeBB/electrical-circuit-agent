@@ -25,12 +25,21 @@ and using `batch_connect_to_net` net labels. Do not draw pin-to-pin wires across
 components. In Konnect 0.12.1, `save_project` takes `{}`. Schematic files are only
 written by Konnect operations — never by generated scripts or hand-edited
 s-expressions. Run `circuit_sch_lint` on the authored schematic and stop if it
-fails, then call
+fails; if the tool is unavailable or errors, the gate fails closed — stop and
+report the missing gate rather than continuing to ERC, then call
 `circuit_connectivity_check` and stop if its kicad-cli netlist gate fails, then run
-`circuit_erc`. Do not re-run a gate whose inputs have not changed. Start the KiCad
-api-server, update the PCB, place and route it, save,
-run `circuit_drc`, export artifacts, and finish with `circuit_design_report`.
+`circuit_erc`. Do not re-run a gate whose inputs have not changed.
 
-The design report also contains an advisory Konnect section with coverage results and
-export comparisons. Treat that section as supplemental evidence only: the verdict
-continues to come exclusively from kicad-cli connectivity, ERC, and DRC JSON.
+For the layout stage, start the KiCad api-server, update the PCB, place and route
+it, save, then run `circuit_drc`. The design is not complete until the pipeline
+tail has also run: `circuit_render` for top and bottom views (place the PNGs under
+`circuit-reports/`), `circuit_export` with each kind under `<project>/exports/<kind>/`,
+`circuit_jobset_run` for the manufacturing outputs, and `circuit_diff` whenever a
+baseline or snapshot exists (write `*.diff.json` under `circuit-reports/`).
+Record advisory Konnect results as `*.advisory.json` files or `advisory.jsonl`
+lines under `circuit-reports/`, then finish with `circuit_design_report`.
+
+The design report collects exports, renders, diffs, the jobset record, and the
+advisory Konnect section from these conventional paths. Treat that section as
+supplemental evidence only: the verdict continues to come exclusively from
+kicad-cli connectivity, ERC, and DRC JSON.
