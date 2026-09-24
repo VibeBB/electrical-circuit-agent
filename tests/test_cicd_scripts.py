@@ -385,3 +385,33 @@ def test_apply_deferrals_skips_version_mismatch(tmp_path: Path) -> None:
     applied = apply_deferrals(statuses, deferrals)
     assert applied[0].outdated
     assert applied[0].decision == ""
+
+
+def test_e2e_authoring_fails_closed_on_bad_brief(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    repo = Path(__file__).parents[1]
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"bad": 1', encoding="utf-8")
+    workdir = tmp_path / "work"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(repo / "scripts" / "e2e_authoring.py"),
+            "--brief",
+            str(bad),
+            "--workdir",
+            str(workdir),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    out = json.loads(proc.stdout)
+    assert out["verdict"] == "fail"
+    assert out["stage"] == "load"
+    written = json.loads((workdir / "e2e-authoring.json").read_text(encoding="utf-8"))
+    assert written["verdict"] == "fail"
+    assert written["error"]["step"] == "load"

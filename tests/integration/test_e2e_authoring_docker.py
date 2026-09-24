@@ -57,8 +57,16 @@ def test_e2e_authoring_in_tools_image(tmp_path: Path) -> None:
     assert value["diffs"]["schematic"]["identical"] is True
     assert value["diffs"]["pcb"]["identical"] is True
     result = json.loads((workdir / "e2e-authoring.json").read_text(encoding="utf-8"))
+    assert result["verdict"] == "pass"
     assert result["intake"]["verdict"] == "ready"
     assert result["libraries"]["verdict"] == "pass"
+    provenance = json.loads(Path(result["provenance"]).read_text(encoding="utf-8"))
+    assert provenance["schema_version"] == 1
+    assert provenance["license"] == "BSD-3-Clause"
+    assert provenance["generator"].startswith("circuit-agent/")
+    assert provenance["brief_sha256"]
+    assert provenance["intake_sha256"]
+    assert "python" in provenance["tool_versions"]
     assert result["advisory_counts"]["ok"] == 53
     assert result["advisory_counts"]["error"] == 0
     assert result["advisory_counts"]["not_applicable"] == 0

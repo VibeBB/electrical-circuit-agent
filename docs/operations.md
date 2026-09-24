@@ -9,6 +9,30 @@ uv run python scripts/verify_all.py --stage fast
 python3 -m circuit.doctor
 ```
 
+## Command line
+
+`python -m circuit` is the unified dispatcher matching the sibling repos'
+`python -m wire` / `python -m mech` convention; every subcommand prints a JSON
+verdict to stdout and the verdict is fail-closed:
+
+```text
+python -m circuit doctor [--warn]
+python -m circuit intake --brief BRIEF --intake INTAKE
+python -m circuit sch-lint SCHEMATIC [--output PATH]
+python -m circuit connectivity --brief BRIEF --out PATH [--netlist NETLIST]
+python -m circuit author --brief BRIEF --workdir DIR [--intake INTAKE]
+```
+
+`author` execs `scripts/e2e_authoring.py` and reports a JSON verdict; the e2e
+script itself also fails closed — a bad brief, an intake block, or any step
+error writes `{"verdict": "fail", "stage", "detail"}` to
+`e2e-authoring.json` and stdout instead of a traceback. On success the run
+also writes `workdir/provenance.json` (schema_version 1, license, generator
+version, brief/intake SHA-256, tool versions) — the same provenance record
+shape the sibling repos emit. `circuit_launcher.py` forwards `author`,
+`intake`, and `sch-lint` to the dispatcher inside the tools image; other
+first arguments still exec `python3 -m circuit.<arg>`.
+
 ## Docker image
 
 ```bash
@@ -496,6 +520,15 @@ renders carry document metadata and the `title_block_incomplete` sch_lint
 warning does not fire. The sch_lint gate verdict, warning count, and full
 findings are also recorded under the `sch_lint` key in
 `e2e-authoring.json` so warnings stay visible in the run summary.
+
+Two similarly named JSON artifacts are easy to confuse:
+`<name>.connectivity.json` is the netlist-vs-brief **gate report**
+(`ConnectivityReport`, written under `circuit-reports/` by e2e authoring),
+while `<name>.connectivity-source.json` is the wire-agent **`ConnectivitySource`
+import contract** emitted by `circuit_connectivity_export` /
+`python -m circuit connectivity`. The gate report is a verdict; the export is
+a data contract — they share no schema. New exports should keep the
+`-source` suffix so readers and glob rules can tell them apart.
 
 All 234 Konnect v0.12.1 tools are managed in `docs/konnect-tools.md` and
 `plugins/circuit/skills/circuit-konnect/references/konnect-tools.json`.

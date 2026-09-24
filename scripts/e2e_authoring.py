@@ -4,18 +4,20 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
+import platform
 import shutil
 import subprocess
-import sys
 import time
 from collections.abc import Callable, Mapping
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal, TextIO, cast
 
+from circuit import __version__ as _circuit_version
 from circuit import (
     apiserver,
     brief,
@@ -446,6 +448,62 @@ def _wait_socket(path: Path, process: subprocess.Popen[str], timeout: float = 30
         raise StepFailure("circuit_api_server_start", "timed out waiting for API socket")
 
 
+def _write_failure(
+    output_path: Path,
+    result: dict[str, object],
+    stage: str,
+    exc: BaseException,
+) -> int:
+    """Record a structured JSON failure and return exit code 1 (fail-closed)."""
+    result["verdict"] = "fail"
+    result["stage"] = stage
+    result["detail"] = str(exc)
+    result["error"] = {"step": stage, "message": str(exc)}
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        json.dumps(
+            {"verdict": "fail", "stage": stage, "detail": str(exc)},
+            ensure_ascii=False,
+        )
+    )
+    return 1
+
+
+def _write_provenance(
+    workdir: Path,
+    brief_path: Path,
+    intake_path: Path | None,
+    *,
+    version_about: str | None,
+) -> Path:
+    """Emit the shared provenance.json record (inputs + tool versions)."""
+    tool_versions = {"python": platform.python_version()}
+    if version_about:
+        tool_versions["kicad"] = version_about.splitlines()[0].strip()
+    provenance = {
+        "schema_version": 1,
+        "license": "BSD-3-Clause",
+        "generator": f"circuit-agent/{_circuit_version}",
+        "brief_sha256": hashlib.sha256(brief_path.read_bytes()).hexdigest(),
+        "intake_sha256": (
+            hashlib.sha256(intake_path.read_bytes()).hexdigest()
+            if intake_path is not None
+            else None
+        ),
+        "tool_versions": tool_versions,
+    }
+    path = workdir / "provenance.json"
+    path.write_text(
+        json.dumps(provenance, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--brief", type=Path, required=True)
@@ -455,15 +513,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", type=Path)
     args = parser.parse_args(argv)
 
-    loaded_brief = brief.load_brief(args.brief)
     args.workdir.mkdir(parents=True, exist_ok=True)
+    output_path = args.json or args.workdir / "e2e-authoring.json"
+    result: dict[str, object] = {
+        "verdict": "fail",
+        "brief": str(args.brief),
+        "workdir": str(args.workdir),
+    }
+    try:
+        loaded_brief = brief.load_brief(args.brief)
+    except (ValueError, OSError) as exc:
+        return _write_failure(output_path, result, "load", exc)
     reports_dir = args.workdir / "circuit-reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     log_path = args.workdir / "authoring.jsonl"
     project = args.workdir / f"{loaded_brief.name}.kicad_pro"
     schematic = args.workdir / f"{loaded_brief.name}.kicad_sch"
     board = args.workdir / f"{loaded_brief.name}.kicad_pcb"
-    output_path = args.json or args.workdir / "e2e-authoring.json"
     socket_path = Path("/tmp/circuit-kicad.sock")
     socket_path.unlink(missing_ok=True)
 
@@ -482,7 +548,6 @@ def main(argv: list[str] | None = None) -> int:
     jobset_consistent: bool | None = None
     diffs: dict[str, kicad_cli.DiffReport] = {}
     version_about: str | None = None
-    result: dict[str, object] = {"brief": str(args.brief), "workdir": str(args.workdir)}
     try:
         with log_path.open("w", encoding="utf-8") as log:
             konnect_exports = args.workdir / "konnect-exports"
@@ -1375,9 +1440,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         report_path = reports_dir / "design-report.json"
         report.write_report(design_report, report_path)
+        provenance_path = _write_provenance(
+            args.workdir,
+            args.brief,
+            args.intake,
+            version_about=version_about,
+        )
         result.update(
             {
+                "verdict": design_report.verdict,
                 "design_report": str(report_path),
+                "provenance": str(provenance_path),
                 "intake": (
                     intake_result.model_dump(mode="json") if intake_result is not None else None
                 ),
@@ -1407,6 +1480,7 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "result": str(output_path),
                     "design_report": str(report_path),
+                    "provenance": str(provenance_path),
                     "sch_lint_verdict": sch_lint_result.verdict,
                     "sch_lint_warnings": sch_lint_result.warnings,
                     "drc_verdict": drc_result.verdict,
@@ -1416,13 +1490,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0 if design_report.verdict == "pass" else 1
     except StepFailure as exc:
-        result["error"] = {"step": exc.step, "message": str(exc)}
-        output_path.write_text(
-            json.dumps(result, ensure_ascii=False, indent=2, default=str) + "\n",
-            encoding="utf-8",
-        )
-        print(f"e2e authoring failed at {exc.step}: {exc}", file=sys.stderr)
-        return 1
+        return _write_failure(output_path, result, exc.step, exc)
+    except Exception as exc:
+        return _write_failure(output_path, result, "unexpected", exc)
     finally:
         _stop_konnect(process)
         if server is not None and server.poll() is None:
