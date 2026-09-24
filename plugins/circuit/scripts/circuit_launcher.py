@@ -22,10 +22,12 @@ Image resolution order (first hit wins):
   3. local build of the repo-cache docker/circuit-tools.Dockerfile,
      tagged openhands-circuit-tools:<dockerfile sha256[:12]>
 
-Usage: mcp_server | doctor | connectivity | prewarm | <module args...>.
-Any other first argument is execed as `python3 -m circuit.<arg>` inside the
-container. When `--warn` is present (SessionStart doctor mode), a failed
-image resolution prints a warning and exits 0.
+Usage: mcp_server | doctor | connectivity | author | intake | sch-lint |
+prewarm | <module args...>. `author`, `intake`, and `sch-lint` exec the
+unified `python3 -m circuit` dispatcher; any other first argument is execed
+as `python3 -m circuit.<arg>` inside the container. When `--warn` is present
+(SessionStart doctor mode), a failed image resolution prints a warning and
+exits 0.
 """
 
 from __future__ import annotations
@@ -44,6 +46,10 @@ _MODULES = {
     "doctor": "circuit.doctor",
     "connectivity": "circuit.connectivity",
 }
+
+# Subcommands handled by the unified `python -m circuit` dispatcher rather
+# than a same-named module (they contain a dash or have no module entry point).
+_CLI_SUBCOMMANDS = {"author", "intake", "sch-lint"}
 
 _CONTAINER_SRC = "/plugin-src"
 _ENV_PREFIXES = ("OPENHANDS_", "CIRCUIT_")
@@ -266,7 +272,8 @@ def main() -> int:
     argv = sys.argv[1:]
     if not argv:
         print(
-            "usage: circuit_launcher.py {mcp_server|doctor|connectivity|prewarm|<module>}",
+            "usage: circuit_launcher.py {mcp_server|doctor|connectivity|"
+            "author|intake|sch-lint|prewarm|<module>}",
             file=sys.stderr,
         )
         return 2
@@ -281,7 +288,9 @@ def main() -> int:
         return 0
 
     source = resolve_source(plugin_root)
-    if argv[0] in _MODULES:
+    if argv[0] in _CLI_SUBCOMMANDS:
+        inner = ["python3", "-m", "circuit", *argv]
+    elif argv[0] in _MODULES:
         inner = ["python3", "-m", _MODULES[argv[0]], *argv[1:]]
     elif _MODULE_NAME.match(argv[0]):
         inner = ["python3", "-m", f"circuit.{argv[0]}", *argv[1:]]
