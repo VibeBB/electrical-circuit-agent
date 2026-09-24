@@ -69,13 +69,23 @@ integration in addition to the fast checks.
 For direct PyPI dependencies, the resolved version in `uv.lock` is reported as
 the current value rather than the specifier in `pyproject.toml`. For specifiers
 with an upper bound, the latest release within the range is compared and the
-latest release outside the range is noted. Candidates deferred due to
-constraints such as the SDK are recorded with a reason and a re-check deadline
+latest release outside the range is noted. Transitive drift is reported from
+`uv lock --upgrade --dry-run` (`Update`/`Add`/`Remove` lines for packages that
+are not direct dependencies). Candidates deferred due to constraints such as
+the SDK are recorded with a reason and a re-check deadline
 in `scripts/dependency_update_deferrals.json`, and until the deadline they are
 counted as `保留（記録済み）` (deferred, recorded) rather than as updates.
 Candidates past their deadline return to the update candidates as
 `保留期限切れ` (deferral expired). Malformed JSON is fail-closed and reported as
 FAIL.
+
+The check also covers the `[tool.uv] required-version` pin (compared to the
+latest `uv` release on PyPI), Python minor pins (`requires-python`, any
+`PYTHON_VERSION` ARG or `uv python install` lines in the Dockerfile, and
+`python-version:` entries in workflows — all compared to the latest stable
+CPython minor from `git ls-remote --tags`), and the Dockerfile `FROM` images:
+`ubuntu` tags from the Docker Hub tags API and the `ghcr.io/astral-sh/uv`
+image tag against the latest `uv` release.
 
 ## Updating pins
 
@@ -475,6 +485,13 @@ final decision is saved to `circuit-reports/design-report.json` as UTF-8 JSON.
 Connectivity compares the output of `kicad-cli sch export netlist --format
 kicadsexpr` against the design brief; Konnect's analysis results are treated as
 advisory evidence, including short detection.
+
+Before ERC, `e2e_authoring.py` injects the schematic title block (`title`,
+`date`, `rev`) with `circuit.titleblock.inject_title_block`, so generated
+renders carry document metadata and the `title_block_incomplete` sch_lint
+warning does not fire. The sch_lint gate verdict, warning count, and full
+findings are also recorded under the `sch_lint` key in
+`e2e-authoring.json` so warnings stay visible in the run summary.
 
 All 234 Konnect v0.12.1 tools are managed in `docs/konnect-tools.md` and
 `plugins/circuit/skills/circuit-konnect/references/konnect-tools.json`.

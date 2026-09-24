@@ -11,7 +11,7 @@ import re
 import subprocess
 import tomllib
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, cast
@@ -23,10 +23,18 @@ from packaging.version import InvalidVersion, Version
 
 Fetch = Callable[[str], bytes]
 FetchJson = Callable[[str], Any]
+RunUv = Callable[[list[str], Path], str]
+ListRemoteTags = Callable[[str], list[str]]
 
 _ACTION = re.compile(r"uses:\s*([\w.-]+/[\w.-]+)@([0-9a-f]{40})(?:\s*#\s*(v[\w.-]+))?")
 _ARG = re.compile(r"^\s*ARG\s+([A-Z0-9_]+)=(\S+)\s*$", re.MULTILINE)
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_FROM = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
+_PYTHON_TAG = re.compile(r"v(\d+)\.(\d+)\.\d+")
+_DOCKERHUB_TAGS = (
+    "https://hub.docker.com/v2/repositories/library/{image}/tags"
+    "?page_size=100&ordering=last_updated"
+)
 
 
 @dataclass(frozen=True)
@@ -259,7 +267,258 @@ def _docker_args(root: Path) -> dict[str, str]:
     return dict(_ARG.findall(text))
 
 
-def _statuses(root: Path, fetch: Fetch, fetch_json: FetchJson) -> list[Status]:
+def _default_run_uv(command: list[str], cwd: Path) -> str:
+    result = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=cwd,
+    )
+    return result.stdout
+
+
+def _default_list_remote_tags(url: str) -> list[str]:
+    result = subprocess.run(
+        ["git", "ls-remote", "--tags", url],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    return [
+        line.rsplit("\t", 1)[-1].removeprefix("refs/tags/").removesuffix("^{}")
+        for line in result.stdout.splitlines()
+    ]
+
+
+def _pypi_latest(name: str, fetch_json: FetchJson) -> str:
+    payload = fetch_json(f"https://pypi.org/pypi/{name}/json")
+    if not isinstance(payload, dict):
+        raise ValueError(f"PyPI response is malformed for {name}")
+    info = cast(dict[str, Any], payload).get("info")
+    version = cast(dict[str, Any], info).get("version") if isinstance(info, dict) else None
+    if not isinstance(version, str):
+        raise ValueError(f"PyPI response is malformed for {name}")
+    return version
+
+
+def uv_version_pin(root: Path) -> str:
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    tool = data.get("tool")
+    uv = cast(dict[str, Any], tool).get("uv") if isinstance(tool, dict) else None
+    if not isinstance(uv, dict):
+        return ""
+    value = cast(dict[str, Any], uv).get("required-version")
+    return value.removeprefix("==") if isinstance(value, str) else ""
+
+
+def check_uv_pin(root: Path, *, fetch_json: FetchJson = _default_json) -> list[Status]:
+    current = uv_version_pin(root)
+    try:
+        latest = _pypi_latest("uv", fetch_json)
+    except (ValueError, OSError):
+        latest = "?"
+    outdated = latest != "?" and bool(current) and latest != current
+    return [
+        Status(
+            "uv",
+            current or "-",
+            latest,
+            "pyproject.toml [tool.uv] required-version",
+            outdated,
+            "" if latest != "?" else "fetch failed",
+        )
+    ]
+
+
+_LOCK_PATTERNS = (
+    (re.compile(r"^Update (\S+) v(\S+) -> v(\S+)$"), "update"),
+    (re.compile(r"^Add (\S+) v(\S+)$"), "add"),
+    (re.compile(r"^Remove (\S+) v(\S+)$"), "remove"),
+)
+
+
+def check_pypi_lock(
+    root: Path,
+    direct_names: set[str],
+    *,
+    run_uv: RunUv = _default_run_uv,
+) -> list[Status]:
+    """Transitive drift per `uv lock --upgrade --dry-run` (Update/Add/Remove lines)."""
+    output = run_uv(["uv", "lock", "--upgrade", "--dry-run"], root)
+    statuses: list[Status] = []
+    for line in output.splitlines():
+        for pattern, kind in _LOCK_PATTERNS:
+            match = pattern.fullmatch(line.strip())
+            if match is None:
+                continue
+            groups = match.groups()
+            name = groups[0].lower().replace("_", "-")
+            if name in direct_names:
+                break
+            if kind == "update":
+                current, latest, note = groups[1], groups[2], ""
+            elif kind == "add":
+                current, latest, note = "-", groups[1], "would be added"
+            else:
+                current, latest, note = groups[1], "-", "would be removed"
+            statuses.append(Status(f"{name} (transitive)", current, latest, "uv.lock", True, note))
+            break
+    return statuses
+
+
+def check_python_versions(
+    root: Path,
+    *,
+    list_remote_tags: ListRemoteTags = _default_list_remote_tags,
+) -> list[Status]:
+    """Compare the repo's Python minor pins against the latest stable CPython minor."""
+    values: list[tuple[str, str]] = []
+    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    project = data.get("project")
+    requires_python = (
+        cast(dict[str, Any], project).get("requires-python") if isinstance(project, dict) else None
+    )
+    if not isinstance(requires_python, str):
+        raise ValueError("pyproject.toml has no requires-python")
+    requires_match = re.search(r"(\d+)\.(\d+)", requires_python)
+    if requires_match is None:
+        raise ValueError(f"invalid requires-python: {requires_python}")
+    values.append((f"{requires_match.group(1)}.{requires_match.group(2)}", "pyproject.toml"))
+    dockerfile = root / "docker" / "circuit-tools.Dockerfile"
+    if dockerfile.is_file():
+        text = dockerfile.read_text(encoding="utf-8")
+        for arg, arg_value in _ARG.findall(text):
+            if arg == "PYTHON_VERSION":
+                values.append((arg_value, "circuit-tools.Dockerfile"))
+        for minor in re.findall(r"uv\s+python\s+install\s+(\d+\.\d+)", text):
+            values.append((minor, "circuit-tools.Dockerfile"))
+    for workflow in sorted((root / ".github" / "workflows").glob("*.yml")):
+        for minor in re.findall(
+            r'python-version:\s*"?(\d+\.\d+)"?',
+            workflow.read_text(encoding="utf-8"),
+        ):
+            values.append((minor, workflow.name))
+    tags = list_remote_tags("https://github.com/python/cpython")
+    stable_minors = sorted(
+        {
+            (int(match.group(1)), int(match.group(2)))
+            for tag in tags
+            if (match := _PYTHON_TAG.fullmatch(tag))
+        }
+    )
+    if not stable_minors:
+        raise ValueError("no stable CPython minor series found")
+    latest = ".".join(str(part) for part in stable_minors[-1])
+    statuses: list[Status] = []
+    seen: set[tuple[str, str]] = set()
+    for value, source in values:
+        key = (value, source)
+        if key in seen:
+            continue
+        seen.add(key)
+        value_match = re.search(r"(\d+)\.(\d+)", value)
+        if value_match is None:
+            raise ValueError(f"unparseable python version {value!r} in {source}")
+        minor = (int(value_match.group(1)), int(value_match.group(2)))
+        statuses.append(
+            Status(
+                f"Python minor ({source})",
+                value,
+                latest,
+                source,
+                minor < stable_minors[-1],
+            )
+        )
+    return statuses
+
+
+def _ubuntu_lts_tags(fetch_json: FetchJson) -> list[str]:
+    url: str | None = _DOCKERHUB_TAGS.format(image="ubuntu")
+    tags: list[str] = []
+    for _page in range(10):
+        if url is None:
+            break
+        try:
+            data = fetch_json(url)
+        except (ValueError, OSError):
+            return []
+        results = cast(dict[str, Any], data).get("results") if isinstance(data, dict) else None
+        items = cast(list[Any], results) if isinstance(results, list) else []
+        for item in items:
+            name = cast(dict[str, Any], item).get("name") if isinstance(item, dict) else None
+            if isinstance(name, str) and re.fullmatch(r"\d{2}\.\d{2}", name):
+                tags.append(name)
+        next_url = cast(dict[str, Any], data).get("next") if isinstance(data, dict) else None
+        url = next_url if isinstance(next_url, str) and next_url else None
+    return tags
+
+
+def check_docker_base(root: Path, *, fetch_json: FetchJson = _default_json) -> list[Status]:
+    dockerfile = root / "docker" / "circuit-tools.Dockerfile"
+    if not dockerfile.is_file():
+        return []
+    statuses: list[Status] = []
+    for reference in _FROM.findall(dockerfile.read_text(encoding="utf-8")):
+        if ":" not in reference or "$" in reference:
+            continue
+        image, _, tag = reference.rpartition(":")
+        if image == "ubuntu":
+            lts_tags = [t for t in _ubuntu_lts_tags(fetch_json) if t.endswith(".04")]
+            latest = max(
+                lts_tags,
+                key=lambda t: tuple(int(part) for part in t.split(".")),
+                default=None,
+            )
+            statuses.append(
+                Status(
+                    f"Docker base {image}",
+                    tag,
+                    latest or "?",
+                    "Docker Hub",
+                    latest is not None and latest != tag,
+                    "" if latest else "fetch failed",
+                )
+            )
+        elif image == "ghcr.io/astral-sh/uv":
+            try:
+                latest_uv = _pypi_latest("uv", fetch_json)
+            except (ValueError, OSError):
+                latest_uv = "?"
+            statuses.append(
+                Status(
+                    "uv base image",
+                    tag,
+                    latest_uv,
+                    "PyPI",
+                    latest_uv != "?" and latest_uv != tag,
+                    "" if latest_uv != "?" else "fetch failed",
+                )
+            )
+        else:
+            statuses.append(
+                Status(
+                    f"Docker base {image}",
+                    tag,
+                    "?",
+                    "circuit-tools.Dockerfile",
+                    False,
+                    "unhandled image",
+                )
+            )
+    return statuses
+
+
+def _statuses(
+    root: Path,
+    fetch: Fetch,
+    fetch_json: FetchJson,
+    *,
+    run_uv: RunUv = _default_run_uv,
+    list_remote_tags: ListRemoteTags = _default_list_remote_tags,
+) -> list[Status]:
     args = _docker_args(root)
     ppa_url = (
         "https://ppa.launchpadcontent.net/kicad/kicad-dev-nightly/ubuntu/"
@@ -372,6 +631,9 @@ def _statuses(root: Path, fetch: Fetch, fetch_json: FetchJson) -> list[Status]:
                 deferrals,
             )
         )
+    statuses.extend(check_pypi_lock(root, set(pins), run_uv=run_uv))
+    statuses.extend(check_uv_pin(root, fetch_json=fetch_json))
+    statuses.extend(check_python_versions(root, list_remote_tags=list_remote_tags))
     workflows = sorted((root / ".github" / "workflows").glob("*.yml"))
     for workflow in workflows:
         for match in _ACTION.finditer(workflow.read_text(encoding="utf-8")):
@@ -395,23 +657,64 @@ def _statuses(root: Path, fetch: Fetch, fetch_json: FetchJson) -> list[Status]:
                     current != latest,
                 )
             )
-    statuses.append(
-        Status(
-            "Ubuntu base image",
-            "ubuntu:26.04",
-            "未取得 (digestはpublish時に確認)",
-            "Docker Hub",
-            False,
-            "digest check is intentionally deferred to image publish",
-        )
-    )
-    return statuses
+    statuses.extend(check_docker_base(root, fetch_json=fetch_json))
+    return apply_deferrals(statuses, deferrals)
+
+
+def apply_deferrals(
+    statuses: list[Status],
+    deferrals: list[dict[str, str]],
+    *,
+    today: date | None = None,
+) -> list[Status]:
+    """Apply deferral entries to non-PyPI statuses.
+
+    `target` matches a status name exactly or as the prefix before ` (`,
+    so `python minor` covers `Python minor (ci.yml)` rows.
+    """
+    today_value = today or date.today()
+    applied: list[Status] = []
+    for status in statuses:
+        updated = status
+        for deferral in deferrals:
+            target = deferral["target"].lower().replace("_", "-")
+            name = status.name.lower()
+            if name != target and not name.startswith(f"{target} ("):
+                continue
+            if not _deferred_version(status.latest, deferral["version"]):
+                continue
+            notes = [status.note] if status.note else []
+            if today_value > date.fromisoformat(deferral["recheck_by"]):
+                notes.append("保留期限切れ")
+                updated = replace(status, outdated=True, note="、".join(notes))
+            else:
+                notes.append(f"保留理由: {deferral['reason']}")
+                updated = replace(
+                    status,
+                    outdated=False,
+                    note="、".join(notes),
+                    decision="保留\uff08記録済み\uff09",
+                )
+            break
+        applied.append(updated)
+    return applied
 
 
 def report(
-    root: Path, *, fetch: Fetch = _default_fetch, fetch_json: FetchJson = _default_json
+    root: Path,
+    *,
+    fetch: Fetch = _default_fetch,
+    fetch_json: FetchJson = _default_json,
+    run_uv: RunUv = _default_run_uv,
+    list_remote_tags: ListRemoteTags = _default_list_remote_tags,
 ) -> dict[str, Any]:
-    statuses = _statuses(root, fetch, fetch_json)
+    statuses = _statuses(
+        root,
+        fetch,
+        fetch_json,
+        run_uv=run_uv,
+        list_remote_tags=list_remote_tags,
+    )
     return {
         "outdated_count": sum(item.outdated for item in statuses),
         "statuses": [asdict(item) for item in statuses],
