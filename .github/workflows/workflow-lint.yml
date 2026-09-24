@@ -22,9 +22,6 @@ concurrency:
 
 jobs:
   zizmor:
-    # branches/branches-ignore filter the PR's base branch (always main),
-    # not its head, so bot-branch lock PRs are skipped at the job level too.
-    if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'bot/')
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
