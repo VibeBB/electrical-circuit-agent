@@ -56,7 +56,22 @@ paths with `add_wire`/`batch_add_wire` (or `connect_pins`/`batch_connect_pins`)
 and drop `add_junction` at every T-junction. Reserve net labels for power rails
 (VCC/GND) and for nets that would otherwise force wires to cross — connectivity
 expressed only through labels is electrically valid but unreadable, and
-`circuit_sch_lint` reports it as `label_only_connectivity`.
+`circuit_sch_lint` reports it as `label_only_connectivity`. A wire endpoint
+landing mid-run without a junction dot reads as a passing wire, not a tap
+(`junction_missing`); a net label floating off every wire and pin reads as a
+connection that exists nowhere (`label_off_wire`).
+
+Draw the design intent, not just the netlist: group parts into functional
+blocks (input → conditioning → conversion → output) and let the main signal
+flow read left-to-right / top-to-bottom; point ground symbols down and supply
+symbols up; place decoupling and filter parts against the pins they serve;
+make branch order and single-point/star grounds physically visible on the
+sheet rather than merely equal-potential; mark chassis/protective grounds and
+isolation boundaries distinctly from signal ground. Put what a reader cannot
+see into words: the e2e flow writes the brief `description` into the title
+block's `comment` field — when authoring by hand set it via `edit_sheet`, and
+add `add_text` notes for functional blocks, non-obvious topology, and
+assumptions (a note-free sheet reports `notes_absent`).
 If dynamically loaded `konnect_*` toolsets never become visible, invoke the same
 operations through `circuit_konnect_call` (`{"tool": ..., "arguments": {...}}`,
 or `{"ops": [{...}, ...]}` to run `load_toolset` and the real ops in one session),
@@ -72,7 +87,10 @@ Repair warning-severity findings too and re-run the lint until it is quiet:
 `property_on_symbol` and misplaced labels via `reset_schematic_field_positions`,
 `batch_edit_schematic_components`, `list_schematic_labels`,
 `move_labels_by_offset`, or `batch_rotate_labels`; empty title-block fields via
-`edit_sheet`; a cramped sheet via `bulk_move_schematic_components`.
+`edit_sheet`; a cramped sheet via `bulk_move_schematic_components`;
+`junction_missing` via `add_junction`; `label_off_wire` via
+`move_labels_by_offset` onto the wire; `notes_absent` via `edit_sheet`
+comments or `add_text`.
 
 Konnect analysis is advisory; the
 `circuit_connectivity_check` JSON from the kicad-cli netlist is authoritative before

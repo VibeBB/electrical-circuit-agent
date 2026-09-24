@@ -53,7 +53,14 @@ binary is the last-resort fallback.
 
 After rendering, fix silkscreen overlaps and illegible or upside-down reference
 designators reported by rendered views with `edit_board_footprint_graphic` before
-the final render.
+the final render. Treat the silkscreen and fab layers as drawing documentation:
+reference designators readable, consistently oriented, and clear of component
+bodies and pads; polarity and pin-1 marks visible next to the part they mark;
+connector pin-1 and keyed features indicated for the assembler. When the brief
+or orchestrator carries fabrication constraints (impedance-controlled nets,
+stack-up expectations, finish, assembly notes), write them into board text on a
+documentation layer rather than leaving them implied — a fab drawing that only
+shows copper communicates half the intent.
 
 Advisory Konnect checks for this stage include board info/extents/layers,
 `score_placement`, dry-run `refine_placement_force_directed`, design rules and

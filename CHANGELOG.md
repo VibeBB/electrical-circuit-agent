@@ -31,6 +31,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reviewer's subjective reading of the drawing — and four shared
   categories: `ambiguous_notation`, `missing_dimension`,
   `missing_manufacturing_info`, `design_intent`.
+- Generated sheets now carry design intent, not just connectivity:
+  `inject_title_block` accepts `comments=` (numbered KiCad
+  `(comment N "...")` fields), and e2e authoring writes the brief
+  `description` into `comment 1` so the sheet explains itself to a
+  reader without the brief. `circuit-schematic` documents the intent
+  practices it should author (functional blocks, left-to-right signal
+  flow, ground-down/supply-up, decoupling proximity, single-point
+  grounds drawn as topology, notes for non-obvious decisions), and
+  `circuit-layout` covers silkscreen/fab-layer documentation.
+- `sch_lint` gains three warnings on the same axes the reviewer uses:
+  `junction_missing` (a wire endpoint taps mid-run with no junction
+  dot — reads as a pass-through), `label_off_wire` (a net label on no
+  wire and near no symbol — reads as a connection that exists nowhere),
+  and `notes_absent` (no text notes and no title-block comments — the
+  sheet explains nothing about itself).
 
 ### Fixed
 
