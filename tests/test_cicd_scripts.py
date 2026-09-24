@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 from scripts.check_dependency_updates import (
@@ -316,9 +317,10 @@ def test_check_docker_base_tracks_ubuntu_and_uv_images(tmp_path: Path) -> None:
     )
 
     def fetch_json(url: str) -> Any:
-        if "hub.docker.com" in url:
+        host = urlsplit(url).hostname
+        if host == "hub.docker.com":
             return {"results": [{"name": "26.04"}, {"name": "24.10"}], "next": None}
-        if "pypi.org" in url:
+        if host == "pypi.org":
             return {"info": {"version": "0.13.0"}}
         raise ValueError(url)
 
