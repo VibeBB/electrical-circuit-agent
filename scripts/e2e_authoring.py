@@ -752,6 +752,7 @@ def main(argv: list[str] | None = None) -> int:
                 date=time.strftime("%Y-%m-%d", time.gmtime()),
                 rev="1",
                 comments=[loaded_brief.description] if loaded_brief.description else None,
+                paper=titleblock.paper_for_part_count(len(loaded_brief.parts)),
             )
             _record(
                 log,

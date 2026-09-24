@@ -525,8 +525,9 @@ it flags Reference/Value properties placed more than 30 mm from their symbol
 fail-closed errors. Warning-severity findings cover readability defects ERC
 cannot see: hidden or on-symbol Reference/Value properties (`property_hidden`,
 `property_on_symbol`), empty title-block fields (`title_block_incomplete`),
-placement using less than 30% of the sheet (`sheet_underutilized`), and
-label-only connectivity with no wires (`label_only_connectivity`). Because
+placement using less than 30% of the sheet (`sheet_underutilized`),
+label-only connectivity with no wires (`label_only_connectivity`), and
+power flags stacked within 15 mm of each other (`power_flag_crowded`). Because
 symbol property `at` values are absolute sheet coordinates, schematics written
 by hand or by generated scripts tend to place every label at the sheet origin
 — ERC and connectivity cannot detect that defect, this gate can. Run it after
@@ -534,6 +535,10 @@ schematic authoring and before ERC (`python3 -m circuit.sch_lint file.kicad_sch`
 the design flow treats an error verdict as a stop, and the authoring prompts
 instruct the agent to repair warning findings through Konnect ops (field
 position resets, label moves, `edit_sheet`, component moves) and re-lint.
+`inject_title_block` also wraps over-long comments into consecutive
+`(comment N ...)` fields so no printed line overruns the frame, and e2e
+authoring picks the smallest `paper` size that fits the placement grid
+(`titleblock.paper_for_part_count`).
 
 ### Canvas profile scoping
 

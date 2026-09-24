@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Generated sheets fit their frame: `inject_title_block` wraps over-long
+  `comments=` into consecutive `(comment N ...)` fields so no printed
+  comment line overruns the sheet frame, and e2e authoring picks the
+  smallest `paper` size that covers the placement grid
+  (`titleblock.paper_for_part_count`, exposed also as
+  `titleblock.set_paper_size`).
+- `circuit-schematic` hardens the wiring policy — `label_only_connectivity`
+  is an authoring defect, one `power:PWR_FLAG` per driven rail at its
+  source — and documents the Konnect repair path for ERC violations
+  (undriven pins → `add_schematic_component` + `connect_to_net`, floating
+  pins → wire ops, duplicate references → `annotate_schematic`).
 - Docker-only runtime: `circuit_launcher.py` no longer falls back to a local
   `docker build` when no pinned image resolves — `$CIRCUIT_TOOLS_IMAGE` or a
   digest lock (`tools-image.json` / `docker/image-digests.json`) is now
@@ -17,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `circuit_sch_lint` gains a `power_flag_crowded` warning when two
+  `power:PWR_FLAG` symbols sit closer than 15 mm — one flag per rail at
+  its source reads as intent, a pile reads as a patch.
 - `skills/circuit-brief-rules`: path-triggered rule (`*.brief.json`,
   `*.intake.json`) injecting design-brief contract and intake-provenance
   reminders deterministically — the same PathTrigger mechanism mech uses.

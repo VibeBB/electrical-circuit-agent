@@ -147,6 +147,67 @@ def test_comment_clears_notes_absent_lint(tmp_path: Path) -> None:
     assert not any(f.type == "notes_absent" for f in report.findings)
 
 
+def test_inject_wraps_long_comments_into_numbered_fields(tmp_path: Path) -> None:
+    path = tmp_path / "board.kicad_sch"
+    path.write_text(KONNECT_STYLE, encoding="utf-8")
+    long_comment = (
+        "Single 12V rail enters at J2 and feeds the regulator; decoupling sits "
+        "at each load and the star ground ties at J1."
+    )
+    fields = titleblock.inject_title_block(
+        path, title="t", date="d", rev="r", comments=[long_comment]
+    )
+    comment_values = [v for k, v in fields.items() if k.startswith("comment_")]
+    assert len(comment_values) > 1
+    assert all(len(v) <= 50 for v in comment_values)
+    assert " ".join(comment_values) == long_comment
+    root = sexpr.parse_text(path.read_text(encoding="utf-8"))
+    block = next(n for n in root if isinstance(n, list) and n and n[0] == "title_block")
+    comments = [f for f in block[1:] if isinstance(f, list) and f and f[0] == "comment"]
+    assert len(comments) == len(comment_values)
+
+
+def test_inject_sets_paper_size(tmp_path: Path) -> None:
+    path = tmp_path / "board.kicad_sch"
+    path.write_text(KONNECT_STYLE, encoding="utf-8")
+    titleblock.inject_title_block(path, title="t", date="d", rev="r", paper="A3")
+    root = sexpr.parse_text(path.read_text(encoding="utf-8"))
+    paper = next(n for n in root if isinstance(n, list) and n and n[0] == "paper")
+    assert paper[1] == "A3"
+
+
+def test_inject_inserts_paper_when_missing(tmp_path: Path) -> None:
+    path = tmp_path / "board.kicad_sch"
+    path.write_text("(kicad_sch\n\t(version 20250610)\n)\n", encoding="utf-8")
+    titleblock.inject_title_block(path, title="t", date="d", rev="r", paper="A2")
+    root = sexpr.parse_text(path.read_text(encoding="utf-8"))
+    paper = next(n for n in root if isinstance(n, list) and n and n[0] == "paper")
+    assert paper[1] == "A2"
+
+
+def test_inject_rejects_unknown_paper_size(tmp_path: Path) -> None:
+    path = tmp_path / "board.kicad_sch"
+    path.write_text(KONNECT_STYLE, encoding="utf-8")
+    with pytest.raises(titleblock.TitleBlockError):
+        titleblock.inject_title_block(path, title="t", date="d", rev="r", paper="B5")
+
+
+def test_set_paper_size_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "board.kicad_sch"
+    path.write_text(KONNECT_STYLE, encoding="utf-8")
+    assert titleblock.set_paper_size(path, "A2") == "A2"
+    report = sch_lint.lint_file(path)
+    assert report.verdict == "pass"
+
+
+def test_paper_for_part_count_scales_with_grid() -> None:
+    assert titleblock.paper_for_part_count(0) == "A4"
+    assert titleblock.paper_for_part_count(5) == "A4"
+    assert titleblock.paper_for_part_count(8) == "A3"
+    assert titleblock.paper_for_part_count(13) == "A2"
+    assert titleblock.paper_for_part_count(60) == "A0"
+
+
 def test_unbalanced_text_fails_closed(tmp_path: Path) -> None:
     path = tmp_path / "board.kicad_sch"
     path.write_text('(kicad_sch (paper "A4"', encoding="utf-8")
