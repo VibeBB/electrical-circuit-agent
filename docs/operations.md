@@ -304,8 +304,8 @@ at its own path). The launcher resolves the tools image in order:
 1. `$CIRCUIT_TOOLS_IMAGE` (a full ref, optionally digest-pinned)
 2. `plugins/circuit/tools-image.json` or the repo cache's
    `docker/image-digests.json` (`circuit_tools` entry)
-3. a local build of the cached `docker/circuit-tools.Dockerfile`, tagged
-   `openhands-circuit-tools:<dockerfile sha256[:12]>`
+3. none resolvable, or the pinned ref cannot be pulled -> error
+   (docker-only: the launcher never falls back to a local build)
 
 and mounts the first matching source tree read-only at `/plugin-src`
 (`PYTHONPATH`):

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Docker-only runtime: `circuit_launcher.py` no longer falls back to a local
+  `docker build` when no pinned image resolves — `$CIRCUIT_TOOLS_IMAGE` or a
+  digest lock (`tools-image.json` / `docker/image-digests.json`) is now
+  required, and a failed pull is an error.
+
 ### Added
 
 - `skills/circuit-brief-rules`: path-triggered rule (`*.brief.json`,
