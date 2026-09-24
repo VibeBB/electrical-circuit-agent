@@ -5,6 +5,12 @@
       "version": "2.x",
       "reason": "openhands-sdk 1.49.5 の fastmcp<4 (fastmcp-slim: mcp<2.0) 制約により保留。SDK が mcp 2 対応した版へ更新する際に再検討。",
       "recheck_by": "2026-12-31"
+    },
+    {
+      "target": "python minor",
+      "version": "3.x",
+      "reason": "openhands-sdk が Python 3.14 を未検証のため保留（requires-python >=3.12, CI は 3.12）。SDK のサポート範囲が 3.14 を含む版へ更新する際に再検討。",
+      "recheck_by": "2027-04-01"
     }
   ]
 }
