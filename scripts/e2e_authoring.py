@@ -16,7 +16,17 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal, TextIO, cast
 
-from circuit import apiserver, brief, intake, kicad_cli, libraries, netlist, report, sch_lint
+from circuit import (
+    apiserver,
+    brief,
+    intake,
+    kicad_cli,
+    libraries,
+    netlist,
+    report,
+    sch_lint,
+    titleblock,
+)
 from circuit.advisory import AdvisoryResult, merge_detail
 from konnect_client import call_tool, notify, request
 
@@ -670,6 +680,22 @@ def main(argv: list[str] | None = None) -> int:
             )
             if _has_short(shorts):
                 raise StepFailure("find_shorted_nets", f"shorted nets detected: {shorts}")
+
+            title_fields = titleblock.inject_title_block(
+                schematic,
+                title=loaded_brief.name,
+                date=time.strftime("%Y-%m-%d", time.gmtime()),
+                rev="1",
+            )
+            _record(
+                log,
+                {
+                    "step": "circuit_title_block",
+                    "tool": "circuit.titleblock.inject_title_block",
+                    "payload": {"schematic": str(schematic)},
+                    "result": title_fields,
+                },
+            )
 
             schematic_advisories = [
                 ("audit_connections", {"schematic": str(schematic)}),
@@ -1357,6 +1383,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 "libraries": library_result.model_dump(mode="json"),
                 "connectivity": connectivity.model_dump(mode="json"),
+                "sch_lint": sch_lint_result.model_dump(mode="json"),
                 "erc": erc_result.model_dump(mode="json"),
                 "drc": drc_result.model_dump(mode="json"),
                 "renders": renders,
@@ -1380,6 +1407,8 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "result": str(output_path),
                     "design_report": str(report_path),
+                    "sch_lint_verdict": sch_lint_result.verdict,
+                    "sch_lint_warnings": sch_lint_result.warnings,
                     "drc_verdict": drc_result.verdict,
                 },
                 ensure_ascii=False,
