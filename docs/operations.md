@@ -64,7 +64,11 @@ uv run python scripts/check_dependency_updates.py --dry-run
 ```
 
 `verify_all.py --stage standard` requires `CIRCUIT_TOOLS_IMAGE` and runs Docker
-integration in addition to the fast checks.
+integration in addition to the fast checks. Within a stage, barrier-marked
+commands (currently `uv sync --locked`) run alone and consecutive non-barrier
+commands run in parallel up to `--jobs` workers; `--jobs 1` restores the
+previous sequential order and `--list` dumps the command table with barrier
+flags.
 
 For direct PyPI dependencies, the resolved version in `uv.lock` is reported as
 the current value rather than the specifier in `pyproject.toml`. For specifiers

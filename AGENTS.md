@@ -85,6 +85,12 @@ uv run python scripts/verify_all.py --stage docs
 uv run python scripts/verify_all.py --stage fast
 ```
 
+`verify_all.py` runs barrier-marked commands alone and consecutive non-barrier
+commands in parallel up to `--jobs` workers (default
+`min(os.cpu_count() or 1, 4)`); `--list` dumps the machine-readable command
+table. `standard` additionally requires `CIRCUIT_TOOLS_IMAGE` for the Docker
+integration run.
+
 ## Git
 
 Commit messages are written in English. Do not use `git add .`, amend,
