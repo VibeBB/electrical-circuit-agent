@@ -276,6 +276,79 @@ image tag against the latest `uv` release.
   - mcp 2.x remains deferred: v1.49.5 keeps the `fastmcp<4`
     (`fastmcp-slim: mcp<2.0`) constraint; see
     `scripts/dependency_update_deferrals.json`.
+- Named feature review (checked 2026-09-24 against `openhands-sdk` /
+  `openhands-tools` 1.49.5 sources plus upstream `main` —
+  `sdk/subagent/schema.py`, `sdk/subagent/registry.py`,
+  `sdk/conversation/impl/local_conversation.py`,
+  `sdk/conversation/secret_registry.py`, `sdk/security/`,
+  `sdk/llm/llm_profile_store.py`, `tools/task/manager.py`, agent-server
+  `conversation_service.py`/`conversation_router.py`):
+  - `EnsembleSecurityAnalyzer` / `LLMSecurityAnalyzer` /
+    `ToolShieldLLMSecurityAnalyzer` / `GraySwanAnalyzer` not adoptable at
+    plugin boundary: `AgentDefinition` has no `security_analyzer` field;
+    analyzers attach via `Conversation.state` or the agent-server
+    `POST /conversations/{id}/security_analyzer` route — server-side only.
+    Plugin-side substitute adopted: the `safety-rail` `pre_tool_use` hook.
+  - `permission_mode: confirm_risky` **switched to `never_confirm`**:
+    `task/manager.py` never calls `set_security_analyzer` on the child
+    `LocalConversation`, so every sub-agent action was `UNKNOWN` and
+    `ConfirmRisky(confirm_unknown=True)` auto-resumed — zero gating plus
+    status churn. All circuit sub-agents now declare `never_confirm`;
+    revisit if the SDK propagates the parent's analyzer.
+  - `SecretRegistry` adoptable via contract docs: `${VAR}` /
+    `${VAR:-default}` in `mcp_config` resolves through
+    `secret_registry.get_secret_value` before env, and the launcher
+    inherits the process env for the stdio MCP servers, so a
+    canvas-registered `CIRCUIT_*` secret reaches `circuit_*` tool code
+    end-to-end. Registry values also reach bash commands that name the
+    key.
+  - `StuckDetector` already effective: `stuck_detection=True` is the
+    `LocalConversation` default, including task sub-agents; thresholds
+    are Conversation init params (not plugin-settable), and
+    `max_iteration_per_run` remains the repo-side bound.
+  - Persistent memory (`AgentContext(load_memory=True)`) not adoptable
+    per sub-agent (the factory builds `AgentContext` without it);
+    top-level conversation only — seeded via `.openhands/memory/MEMORY.md`
+    for hosts that enable Canvas "Settings > Agent Context".
+  - Model routing adopted via profile convention: `Router` itself is
+    server-side; authoring sub-agents declare `model: vibebb-author`,
+    circuit-review `model: vibebb-review` (profiles resolved from
+    `~/.openhands/profiles/` via `LLMProfileStore`; a missing profile
+    hard-fails the `task` spawn — create profiles first or set
+    `model: inherit` locally). `profile_store_dir` stays discouraged
+    (splits provider-connections resolution).
+  - `SwitchLLMTool` / agent profiles (`mcp_server_refs`, `secret_refs`) /
+    critic not adoptable at plugin boundary — server-side scoping;
+    circuit-review already plays the critic role at L2.
+  - `condenser:` frontmatter not adopted: sub-agents get a summarizing
+    condenser by default at factory time (`default_condenser`).
+
+### OpenHands runtime surfaces
+
+Runtime policy surfaces the plugin declares but the host executes:
+
+- `permission_mode: never_confirm` on every circuit sub-agent (see the
+  v1.49.5 record above for the `confirm_risky` finding).
+- `model:` resolves through `LLMProfileStore` (`~/.openhands/profiles/`):
+  `vibebb-author` for circuit-brief/schematic/layout, `vibebb-review`
+  for circuit-review. Create the profiles (canvas LLM settings or
+  `LLMProfileStore.save`) before invoking the agents — a missing profile
+  raises `ValueError` at task spawn. Fall back with `model: inherit`.
+- Secrets: `${VAR}` / `${VAR:-default}` in `mcp_config` expands through
+  the conversation `SecretRegistry` before env; the launcher passes the
+  process env through to the stdio MCP servers, so a canvas-registered
+  `CIRCUIT_*` secret reaches `circuit_*`/`konnect_*` tool code
+  end-to-end.
+- The `safety-rail` `pre_tool_use` hook (`hooks/scripts/safety_rail.py`)
+  denies a deterministic denylist on terminal commands: root/home `rm
+  -rf`, block-device writes, power commands, and the git operations the
+  working agreement bans. Advisory depth, not a security analyzer — it
+  passes everything it does not positively recognize.
+- `.openhands/memory/MEMORY.md` seeds the project-tier persistent
+  memory loaded when the host enables `AgentContext(load_memory)`; the
+  agent maintains the index, keep the seed to durable facts only.
+- `StuckDetector` is on by default for every conversation including
+  task sub-agents.
 
 ## Plugin and tests
 

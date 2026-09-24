@@ -1,0 +1,5 @@
+- ERC/DRC verdicts come only from `kicad-cli` JSON output; LLM, Konnect, and vision output is advisory and never promoted to a verdict.
+- Missing tools, parse failures, unexecuted gates, and unknowns are fail-closed.
+- Generated schematics/boards/reports are regenerated from the brief — never hand-edit them.
+- Secrets flow via `${VAR}` expansion in `mcp_config` and process env; never log or commit them.
+- Sub-agents resolve `model: vibebb-author`/`vibebb-review` from `~/.openhands/profiles/`; create those profiles before invoking `task` agents.
