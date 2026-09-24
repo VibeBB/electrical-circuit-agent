@@ -476,6 +476,13 @@ Connectivity compares the output of `kicad-cli sch export netlist --format
 kicadsexpr` against the design brief; Konnect's analysis results are treated as
 advisory evidence, including short detection.
 
+Before ERC, `e2e_authoring.py` injects the schematic title block (`title`,
+`date`, `rev`) with `circuit.titleblock.inject_title_block`, so generated
+renders carry document metadata and the `title_block_incomplete` sch_lint
+warning does not fire. The sch_lint gate verdict, warning count, and full
+findings are also recorded under the `sch_lint` key in
+`e2e-authoring.json` so warnings stay visible in the run summary.
+
 All 234 Konnect v0.12.1 tools are managed in `docs/konnect-tools.md` and
 `plugins/circuit/skills/circuit-konnect/references/konnect-tools.json`.
 Advisory failures during authoring are recorded but do not stop the E2E; the
