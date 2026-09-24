@@ -53,15 +53,24 @@ def inject_title_block(
     date: str,
     rev: str,
     company: str | None = None,
+    comments: list[str] | None = None,
 ) -> dict[str, str]:
     """Write ``title``/``date``/``rev`` (and ``company`` when given) into the
     schematic's title block, creating the element when absent.
+
+    ``comments`` become numbered ``(comment N "...")`` fields — the design
+    intent/documentation lines printed beside the title block.
 
     Returns the field values written, for logging."""
     text = path.read_text(encoding="utf-8")
     values = {"title": title, "date": date, "rev": rev}
     if company is not None:
         values["company"] = company
+    comment_items = [
+        (f"comment_{index + 1}", comment) for index, comment in enumerate(comments or [])
+    ]
+    for key, comment in comment_items:
+        values[key] = comment
 
     match = re.search(r"\(\s*title_block\b", text)
     if match is not None:
@@ -69,9 +78,14 @@ def inject_title_block(
         block_end = _list_end(text, block_start)
         block = text[block_start:block_end]
         for name, value in values.items():
-            field_re = re.compile(r"\(\s*" + re.escape(name) + r"\b[^)]*\)")
+            if name.startswith("comment_"):
+                index = name.removeprefix("comment_")
+                field_re = re.compile(r"\(\s*comment\s+" + re.escape(index) + r"\b[^)]*\)")
+                replacement = f'(comment {index} "{_escape(value)}")'
+            else:
+                field_re = re.compile(r"\(\s*" + re.escape(name) + r"\b[^)]*\)")
+                replacement = f'({name} "{_escape(value)}")'
             field_match = field_re.search(block)
-            replacement = f'({name} "{_escape(value)}")'
             if field_match is not None:
                 block = block[: field_match.start()] + replacement + block[field_match.end() :]
             else:
@@ -79,8 +93,16 @@ def inject_title_block(
                 block = block[:insert_at] + "\t\t" + replacement + "\n\t" + block[insert_at:]
         text = text[:block_start] + block + text[block_end:]
     else:
-        fields = "\n".join(f'\t\t({name} "{_escape(value)}")' for name, value in values.items())
-        block = f"\t(title_block\n{fields}\n\t)\n"
+        lines = [
+            f'\t\t({name} "{_escape(value)}")'
+            for name, value in values.items()
+            if not name.startswith("comment_")
+        ]
+        lines.extend(
+            f'\t\t(comment {index} "{_escape(comment)}")'
+            for index, (_, comment) in enumerate(comment_items, start=1)
+        )
+        block = "\t(title_block\n" + "\n".join(lines) + "\n\t)\n"
         paper_match = re.search(r"\(\s*paper\b", text)
         if paper_match is not None:
             at = _list_end(text, paper_match.start())

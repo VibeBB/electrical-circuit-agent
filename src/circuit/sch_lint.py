@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 from pathlib import Path
 from typing import Literal
 
@@ -49,6 +50,10 @@ _PROPERTY_ON_BODY_MM = 2.5
 _LABELED_PROPERTIES = {"Reference", "Value"}
 _TITLE_BLOCK_FIELDS = ("title", "date", "rev")
 _MIN_SHEET_USAGE = 0.30
+# Tolerance for an endpoint/anchor sitting on a wire segment.
+_ON_WIRE_EPS_MM = 0.1
+# A label this close to a symbol body is assumed to sit on a pin stub.
+_LABEL_NEAR_SYMBOL_MM = 20.0
 _WIRE_ITEMS = {"wire", "bus"}
 _LABEL_ITEMS = {"label", "global_label", "hierarchical_label"}
 _POSITIONED_ITEMS = {
@@ -108,6 +113,38 @@ def _paper_size(root: list[sexpr.SExpr]) -> tuple[float, float]:
     return width, height
 
 
+def _wire_points(node: list[sexpr.SExpr]) -> list[tuple[float, float]]:
+    pts = _first_child(node, "pts")
+    if pts is None:
+        return []
+    points: list[tuple[float, float]] = []
+    for xy in _find_children(pts, "xy"):
+        if len(xy) >= 3 and isinstance(xy[1], str) and isinstance(xy[2], str):
+            try:
+                points.append((float(xy[1]), float(xy[2])))
+            except ValueError:
+                continue
+    return points
+
+
+def _point_segment_distance(
+    px: float, py: float, x1: float, y1: float, x2: float, y2: float
+) -> tuple[float, float]:
+    """Return ``(distance, t)`` of point ``p`` to segment ``(x1,y1)-(x2,y2)``.
+
+    ``t`` is the normalized projection of ``p`` onto the segment direction,
+    unclamped — ``0 < t < 1`` means the projection is strictly interior.
+    A degenerate (zero-length) segment returns ``(inf, 0)``.
+    """
+    dx, dy = x2 - x1, y2 - y1
+    length_sq = dx * dx + dy * dy
+    if length_sq == 0.0:
+        return float("inf"), 0.0
+    t = ((px - x1) * dx + (py - y1) * dy) / length_sq
+    cx, cy = x1 + min(max(t, 0.0), 1.0) * dx, y1 + min(max(t, 0.0), 1.0) * dy
+    return ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5, t
+
+
 def lint_schematic(path: Path) -> SchLintReport:
     try:
         text = path.read_text(encoding="utf-8")
@@ -127,13 +164,35 @@ def lint_schematic(path: Path) -> SchLintReport:
     wires = 0
     labels = 0
     item_positions: list[tuple[float, float]] = []
+    segments: list[tuple[float, float, float, float]] = []
+    wire_endpoints: list[tuple[float, float]] = []
+    junction_points: set[tuple[float, float]] = set()
+    net_labels: list[tuple[str, float, float]] = []
+    symbol_centers: list[tuple[float, float]] = []
+    has_text_notes = False
     for node in root[1:]:
         if not isinstance(node, list) or not node or not isinstance(node[0], str):
             continue
         if node[0] in _WIRE_ITEMS:
             wires += 1
+            points = _wire_points(node)
+            for a, b in itertools.pairwise(points):
+                segments.append((a[0], a[1], b[0], b[1]))
+            if points:
+                wire_endpoints.extend((points[0], points[-1]))
         if node[0] in _LABEL_ITEMS:
             labels += 1
+            if node[0] != "hierarchical_label":
+                label_at = _position(node)
+                if label_at is not None:
+                    name = node[1] if len(node) > 1 and isinstance(node[1], str) else "?"
+                    net_labels.append((name, label_at[0], label_at[1]))
+        if node[0] == "junction":
+            junction_at = _position(node)
+            if junction_at is not None:
+                junction_points.add(junction_at)
+        if node[0] in ("text", "text_box"):
+            has_text_notes = True
         if node[0] != "symbol" and node[0] not in _POSITIONED_ITEMS:
             continue
         position = _position(node)
@@ -155,6 +214,7 @@ def lint_schematic(path: Path) -> SchLintReport:
         if node[0] != "symbol":
             continue
         symbols += 1
+        symbol_centers.append(position)
         lib_id = _first_child(node, "lib_id")
         if not (
             lib_id is not None
@@ -235,6 +295,75 @@ def lint_schematic(path: Path) -> SchLintReport:
                 type="title_block_incomplete",
                 severity="warning",
                 description="title block fields are empty or missing: " + ", ".join(missing_fields),
+            )
+        )
+    has_comments = title_block is not None and any(
+        len(comment) >= 3 and isinstance(comment[2], str) and comment[2].strip()
+        for comment in _find_children(title_block, "comment")
+    )
+    if non_power_symbols >= 1 and not has_text_notes and not has_comments:
+        findings.append(
+            SchLintFinding(
+                type="notes_absent",
+                severity="warning",
+                description=(
+                    "schematic carries no text notes or title-block comments; "
+                    "annotate functional blocks and non-obvious topology "
+                    "(single-point grounds, decoupling intent, matching groups)"
+                ),
+            )
+        )
+
+    junctioned = {(round(jx, 2), round(jy, 2)) for jx, jy in junction_points}
+    reported_taps: set[tuple[float, float]] = set()
+    for ex, ey in wire_endpoints:
+        if (round(ex, 2), round(ey, 2)) in junctioned:
+            continue
+        for x1, y1, x2, y2 in segments:
+            distance, t = _point_segment_distance(ex, ey, x1, y1, x2, y2)
+            if distance > _ON_WIRE_EPS_MM or not (1e-9 < t < 1.0 - 1e-9):
+                continue
+            key = (round(ex, 2), round(ey, 2))
+            if key in reported_taps:
+                break
+            reported_taps.add(key)
+            findings.append(
+                SchLintFinding(
+                    type="junction_missing",
+                    severity="warning",
+                    description=(
+                        f"wire endpoint at ({ex:.2f},{ey:.2f}) taps the middle of "
+                        "another wire but has no junction dot; add_junction there "
+                        "or move the endpoint off the run"
+                    ),
+                )
+            )
+            break
+
+    off_wire: list[str] = []
+    for name, lx, ly in net_labels:
+        on_wire = any(
+            _point_segment_distance(lx, ly, x1, y1, x2, y2)[0] <= _ON_WIRE_EPS_MM
+            for x1, y1, x2, y2 in segments
+        )
+        if on_wire:
+            continue
+        near_symbol = any(
+            (lx - sx) ** 2 + (ly - sy) ** 2 <= _LABEL_NEAR_SYMBOL_MM**2 for sx, sy in symbol_centers
+        )
+        if not near_symbol:
+            off_wire.append(f'"{name}" at ({lx:.2f},{ly:.2f})')
+    if off_wire:
+        findings.append(
+            SchLintFinding(
+                type="label_off_wire",
+                severity="warning",
+                description=(
+                    f"{len(off_wire)} net label(s) sit on no wire and near no "
+                    "symbol; a floating label reads as connectivity but connects "
+                    "nothing"
+                ),
+                items=off_wire,
             )
         )
     if symbols >= 2 and item_positions:

@@ -90,6 +90,63 @@ def test_injected_block_clears_lint_warning(tmp_path: Path) -> None:
     assert not any(f.type == "title_block_incomplete" for f in after.findings)
 
 
+def test_inject_writes_numbered_comments(tmp_path: Path) -> None:
+    path = tmp_path / "board.kicad_sch"
+    path.write_text(KONNECT_STYLE, encoding="utf-8")
+    fields = titleblock.inject_title_block(
+        path,
+        title="led_loop",
+        date="2026-09-24",
+        rev="1",
+        comments=["LED loop fixture", "Star ground at J1"],
+    )
+    assert fields["comment_1"] == "LED loop fixture"
+    assert fields["comment_2"] == "Star ground at J1"
+    root = sexpr.parse_text(path.read_text(encoding="utf-8"))
+    block = next(n for n in root if isinstance(n, list) and n and n[0] == "title_block")
+    comments = [f for f in block[1:] if isinstance(f, list) and f and f[0] == "comment"]
+    assert comments == [["comment", "1", "LED loop fixture"], ["comment", "2", "Star ground at J1"]]
+
+
+def test_inject_replaces_existing_comment(tmp_path: Path) -> None:
+    path = tmp_path / "board.kicad_sch"
+    path.write_text(EMPTY_BLOCK, encoding="utf-8")
+    titleblock.inject_title_block(path, title="t", date="d", rev="r", comments=["first"])
+    titleblock.inject_title_block(path, title="t", date="d", rev="r", comments=["second"])
+    root = sexpr.parse_text(path.read_text(encoding="utf-8"))
+    block = next(n for n in root if isinstance(n, list) and n and n[0] == "title_block")
+    comments = [f for f in block[1:] if isinstance(f, list) and f and f[0] == "comment"]
+    assert comments == [["comment", "1", "second"]]
+
+
+def test_inject_comment_escapes_specials(tmp_path: Path) -> None:
+    path = tmp_path / "board.kicad_sch"
+    path.write_text(KONNECT_STYLE, encoding="utf-8")
+    titleblock.inject_title_block(path, title="t", date="d", rev="r", comments=['say "hi"\nline2'])
+    root = sexpr.parse_text(path.read_text(encoding="utf-8"))
+    block = next(n for n in root if isinstance(n, list) and n and n[0] == "title_block")
+    comments = [f for f in block[1:] if isinstance(f, list) and f and f[0] == "comment"]
+    assert comments == [["comment", "1", 'say "hi"\nline2']]
+
+
+def test_comment_clears_notes_absent_lint(tmp_path: Path) -> None:
+    symbol = (
+        '(symbol (lib_id "Device:R") (at 100 100 0) (unit 1) '
+        '(in_bom yes) (on_board yes) (uuid "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") '
+        '(property "Reference" "R1" (at 101 97 0) (effects (font (size 1.27 1.27)))) '
+        '(property "Value" "100" (at 101 103 0) (effects (font (size 1.27 1.27)))))'
+    )
+    sch = tmp_path / "board.kicad_sch"
+    sch.write_text(KONNECT_STYLE.replace("\n)\n", "\n\t" + symbol + "\n)\n"), encoding="utf-8")
+    bare = sch_lint.lint_file(sch)
+    assert any(f.type == "notes_absent" for f in bare.findings)
+    titleblock.inject_title_block(
+        sch, title="t", date="d", rev="r", comments=["design intent here"]
+    )
+    report = sch_lint.lint_file(sch)
+    assert not any(f.type == "notes_absent" for f in report.findings)
+
+
 def test_unbalanced_text_fails_closed(tmp_path: Path) -> None:
     path = tmp_path / "board.kicad_sch"
     path.write_text('(kicad_sch (paper "A4"', encoding="utf-8")

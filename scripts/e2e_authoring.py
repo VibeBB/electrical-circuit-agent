@@ -751,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
                 title=loaded_brief.name,
                 date=time.strftime("%Y-%m-%d", time.gmtime()),
                 rev="1",
+                comments=[loaded_brief.description] if loaded_brief.description else None,
             )
             _record(
                 log,
