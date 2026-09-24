@@ -27,9 +27,12 @@ deterministic gates. Supported exports are `gerbers`, `drill`, `pos`,
 
 A vision-capable review records each inspected image as a
 `circuit-reports/review-visual-<slug>.advisory.json` with `tool: "vision_review"`
-and `detail` `{image_path, image_sha256, model, checklist, findings}` —
+and `detail` `{image_path, image_sha256, model, checklist, impression,
+findings}` —
 `checklist` is the artifact kind (`board_top|board_bottom|board_side|
-board_isometric|board_layers|schematic|footprint`) and each finding is
+board_isometric|board_layers|schematic|footprint`), `impression` is a
+required free-text field (the reviewer's subjective reading of the
+drawing — a record without one is discarded), and each finding is
 `{category, severity (error|warning|info), note, bbox?}` — see
 `src/circuit/advisory.py` `VisualReviewDetail` for the contract. Findings stay
 advisory; `circuit_render`/`circuit_diff`/`file_editor view` image
