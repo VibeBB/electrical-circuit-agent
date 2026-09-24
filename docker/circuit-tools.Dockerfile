@@ -39,8 +39,16 @@ LABEL org.opencontainers.image.source="https://github.com/VibeBB/electrical-circ
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
-RUN apt-get -o Acquire::Retries=5 update \
-    && apt-get -o Acquire::Retries=5 install --no-install-recommends -y \
+RUN apt_install_retry() { \
+        for attempt in 1 2 3 4 5; do \
+            apt-get -o Acquire::Retries=5 update \
+            && apt-get -o Acquire::Retries=5 install --no-install-recommends -y "$@" \
+            && return 0; \
+            [ "$attempt" = 5 ] && return 1; \
+            sleep $((attempt * 10)); \
+        done; \
+    } \
+    && apt_install_retry \
         ca-certificates \
         curl \
         git \
@@ -71,7 +79,7 @@ RUN apt-get -o Acquire::Retries=5 update \
         "${KICAD_NIGHTLY_FOOTPRINTS_DEB_URL}" \
     && echo "${KICAD_NIGHTLY_FOOTPRINTS_DEB_SHA256}  /tmp/kicad-nightly-footprints.deb" | sha256sum --check \
     && cd /tmp \
-    && apt-get -o Acquire::Retries=5 install --no-install-recommends -y \
+    && apt_install_retry \
         ./kicad-nightly.deb \
         ./kicad-nightly-symbols.deb \
         ./kicad-nightly-footprints.deb \
