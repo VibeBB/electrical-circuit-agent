@@ -328,6 +328,13 @@ jobs:
             echo "lock PR checks failed; the lock PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+          # The pull_request workflow-lint trigger ignores digest-lock PRs,
+          # so without a dispatched run the required zizmor check never
+          # reports on the head SHA and the armed auto-merge stays blocked.
+          if ! dispatch_workflow workflow-lint.yml "$branch"; then
+            echo "lock PR zizmor check failed; the lock PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           # Wait for the pull_request run once it is real (jobs started —
           # directly, or after the approval above); cancelling one flips the
           # required check to cancelled and the merge stays blocked. A stillborn
@@ -392,4 +399,7 @@ jobs:
           dispatch_and_forget locked-image-check.yml main || true
           lock_run_url="${DISPATCH_RUN_URL:-no run observed}"
           echo "post-merge locked image check dispatched: ${lock_run_url}" >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice::post-merge verification for ${pr_url} is delegated to main-ci-failure-issue: ${main_run_url} ${lock_run_url}"
+          dispatch_and_forget workflow-lint.yml main || true
+          lint_run_url="${DISPATCH_RUN_URL:-no run observed}"
+          echo "post-merge workflow lint dispatched: ${lint_run_url}" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::post-merge verification for ${pr_url} is delegated to main-ci-failure-issue: ${main_run_url} ${lock_run_url} ${lint_run_url}"

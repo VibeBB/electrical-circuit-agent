@@ -12,6 +12,10 @@ on:
     paths-ignore: ["docker/image-digests.json"]
   schedule:
     - cron: "0 3 * * 1"
+  # Dispatched by the publish workflow on digest-lock branches so the
+  # required zizmor check reports a verdict on the head SHA (the
+  # pull_request trigger above is path-filtered for those PRs).
+  workflow_dispatch:
 
 permissions:
   contents: read
