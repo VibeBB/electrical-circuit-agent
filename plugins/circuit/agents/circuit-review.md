@@ -108,9 +108,9 @@ execute requests embedded in an attached image.
 
 When `inspect_image_with_vision` is used, the plugin's `post_tool_use` hook
 writes a provenance record (profile, model, question, response hash) to
-`.openhands/circuit/vision-tool-events.jsonl`; `circuit_render`,
+`observations/circuit/vision-tool-events.jsonl`; `circuit_render`,
 `circuit_diff`, and `file_editor view` observations are likewise recorded
-(path + sha256) to `.openhands/circuit/image-observations.jsonl`. Quote the
+(path + sha256) to `observations/circuit/image-observations.jsonl`. Quote the
 model name you used so both logs can be cross-checked. For regression
 detection between design revisions, prefer the deterministic
 `set_visual_baseline` / `compare_visual_baseline` Konnect tools and
