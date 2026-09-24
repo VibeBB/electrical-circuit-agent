@@ -56,10 +56,32 @@ paths with `add_wire`/`batch_add_wire` (or `connect_pins`/`batch_connect_pins`)
 and drop `add_junction` at every T-junction. Reserve net labels for power rails
 (VCC/GND) and for nets that would otherwise force wires to cross — connectivity
 expressed only through labels is electrically valid but unreadable, and
-`circuit_sch_lint` reports it as `label_only_connectivity`. A wire endpoint
+`circuit_sch_lint` reports it as `label_only_connectivity`. Treat
+`label_only_connectivity` as an authoring defect, not a style nit: a sheet
+where no wire is drawn anywhere has failed the drawing even when the netlist
+is correct. Every net joining two or more non-power symbols gets its serial
+path drawn; a rail enters each block through one label at the distribution
+point, not a label on every pin. A wire endpoint
 landing mid-run without a junction dot reads as a passing wire, not a tap
 (`junction_missing`); a net label floating off every wire and pin reads as a
 connection that exists nowhere (`label_off_wire`).
+
+Place `power:PWR_FLAG` symbols with intent: exactly one per driven rail, on the
+rail's source segment (next to the connector or regulator feeding it), never
+one per driven pin and never stacked — two flags closer than 15 mm read as a
+patch and the lint reports `power_flag_crowded`. When the sheet crowds, grow
+it with `edit_sheet` paper instead of compressing parts; the e2e flow sizes
+the sheet from the part count automatically.
+
+When ERC reports violations, repair them through Konnect ops and re-run ERC:
+`Pin connected to some other pins but no pin to drive it` (power pins
+undriven) means the rail lacks a `power:PWR_FLAG` — place one on the rail via
+`add_schematic_component` + `connect_to_net`/`add_wire`; `pin not connected` /
+floating pins mean the net was not wired — connect it with `connect_to_net`,
+`connect_pins`, or `add_wire` (never by editing the file); `duplicate
+reference` means annotate the sheet via `annotate_schematic`; symbol/footprint
+mismatches mean the brief and library gate diverged — stop and report instead
+of patching.
 
 Draw the design intent, not just the netlist: group parts into functional
 blocks (input → conditioning → conversion → output) and let the main signal
@@ -90,7 +112,8 @@ Repair warning-severity findings too and re-run the lint until it is quiet:
 `edit_sheet`; a cramped sheet via `bulk_move_schematic_components`;
 `junction_missing` via `add_junction`; `label_off_wire` via
 `move_labels_by_offset` onto the wire; `notes_absent` via `edit_sheet`
-comments or `add_text`.
+comments or `add_text`; `power_flag_crowded` by deleting the extras so one
+flag remains per rail at its source.
 
 Konnect analysis is advisory; the
 `circuit_connectivity_check` JSON from the kicad-cli netlist is authoritative before

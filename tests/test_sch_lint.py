@@ -262,6 +262,41 @@ def test_lint_no_off_wire_warning_for_label_on_pin_stub(tmp_path: Path) -> None:
     assert not any(f.type == "label_off_wire" for f in report.findings)
 
 
+_PWR_FLAG = (
+    '(symbol (lib_id "power:PWR_FLAG") (at {x} {y} 0) (unit 1) '
+    '(in_bom no) (on_board no) (uuid "{uuid}") '
+    '(property "Reference" "#FLG01" (at {x} {py} 0) '
+    "(effects (font (size 1.27 1.27)))) "
+    '(property "Value" "PWR_FLAG" (at {x} {py} 0) '
+    "(effects (font (size 1.27 1.27)) (justify left) hide)))"
+)
+
+
+def test_lint_warns_when_power_flags_crowd(tmp_path: Path) -> None:
+    flags = (
+        _PWR_FLAG.format(x=50, y=60, py=55, uuid="11111111-2222-3333-4444-555555555555")
+        + " "
+        + _PWR_FLAG.format(x=55, y=62, py=57, uuid="22222222-3333-4444-5555-666666666666")
+    )
+    path = _write_sch(tmp_path, _SYMBOL_OK + " " + flags + " " + _NOTE)
+    report = lint_schematic(path)
+    assert report.verdict == "pass"
+    finding = next(f for f in report.findings if f.type == "power_flag_crowded")
+    assert finding.severity == "warning"
+    assert len(finding.items) == 1
+
+
+def test_lint_no_crowd_warning_for_spaced_power_flags(tmp_path: Path) -> None:
+    flags = (
+        _PWR_FLAG.format(x=50, y=60, py=55, uuid="11111111-2222-3333-4444-555555555555")
+        + " "
+        + _PWR_FLAG.format(x=250, y=60, py=55, uuid="22222222-3333-4444-5555-666666666666")
+    )
+    path = _write_sch(tmp_path, _SYMBOL_OK + " " + flags + " " + _NOTE)
+    report = lint_schematic(path)
+    assert not any(f.type == "power_flag_crowded" for f in report.findings)
+
+
 def test_lint_warns_when_sheet_has_no_notes(tmp_path: Path) -> None:
     path = _write_sch(tmp_path, _SYMBOL_OK)
     report = lint_schematic(path)

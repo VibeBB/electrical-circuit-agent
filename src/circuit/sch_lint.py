@@ -54,6 +54,9 @@ _MIN_SHEET_USAGE = 0.30
 _ON_WIRE_EPS_MM = 0.1
 # A label this close to a symbol body is assumed to sit on a pin stub.
 _LABEL_NEAR_SYMBOL_MM = 20.0
+# Two power flags closer than this read as a redundant cluster; a rail
+# wants one flag at its source, not a pile at every driven pin.
+_PWR_FLAG_MIN_SPACING_MM = 15.0
 _WIRE_ITEMS = {"wire", "bus"}
 _LABEL_ITEMS = {"label", "global_label", "hierarchical_label"}
 _POSITIONED_ITEMS = {
@@ -169,6 +172,7 @@ def lint_schematic(path: Path) -> SchLintReport:
     junction_points: set[tuple[float, float]] = set()
     net_labels: list[tuple[str, float, float]] = []
     symbol_centers: list[tuple[float, float]] = []
+    power_flags: list[tuple[float, float]] = []
     has_text_notes = False
     for node in root[1:]:
         if not isinstance(node, list) or not node or not isinstance(node[0], str):
@@ -223,6 +227,8 @@ def lint_schematic(path: Path) -> SchLintReport:
             and lib_id[1].startswith("power:")
         ):
             non_power_symbols += 1
+        elif lib_id[1] == "power:PWR_FLAG":
+            power_flags.append(position)
         uuid = next(
             (
                 child[1]
@@ -392,6 +398,26 @@ def lint_schematic(path: Path) -> SchLintReport:
                     "wire the main signal chain and reserve labels for power "
                     "rails and crossing nets"
                 ),
+            )
+        )
+
+    crowded = [
+        (a, b)
+        for index, a in enumerate(power_flags)
+        for b in power_flags[index + 1 :]
+        if (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 < _PWR_FLAG_MIN_SPACING_MM**2
+    ]
+    if crowded:
+        findings.append(
+            SchLintFinding(
+                type="power_flag_crowded",
+                severity="warning",
+                description=(
+                    f"{len(crowded)} PWR_FLAG pair(s) sit closer than "
+                    f"{_PWR_FLAG_MIN_SPACING_MM:.0f}mm; one flag per rail, at "
+                    "its source, reads as intent — a pile reads as a patch"
+                ),
+                items=[f"({a[0]:.2f},{a[1]:.2f}) vs ({b[0]:.2f},{b[1]:.2f})" for a, b in crowded],
             )
         )
 

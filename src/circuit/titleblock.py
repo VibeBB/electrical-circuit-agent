@@ -8,12 +8,30 @@ fix only and never touches connectivity.
 
 from __future__ import annotations
 
+import math
 import re
+import textwrap
 from pathlib import Path
 
 
 class TitleBlockError(ValueError):
     """Raised when the schematic text cannot be edited safely."""
+
+
+# KiCad prints each (comment N ...) field as one line beside the title
+# block; a single over-long line runs past the sheet frame. Wrap comments
+# so every printed line stays inside the frame.
+_COMMENT_LINE_MAX = 50
+
+# Sheet names understood by the ``paper`` element (landscape sizes).
+PAPER_SIZES: dict[str, tuple[float, float]] = {
+    "A5": (210.0, 148.0),
+    "A4": (297.0, 210.0),
+    "A3": (420.0, 297.0),
+    "A2": (594.0, 420.0),
+    "A1": (841.0, 594.0),
+    "A0": (1189.0, 841.0),
+}
 
 
 def _escape(value: str) -> str:
@@ -46,6 +64,80 @@ def _list_end(text: str, start: int) -> int:
     raise TitleBlockError("unbalanced parentheses in schematic text")
 
 
+def _wrap_comments(comments: list[str]) -> list[str]:
+    """Split each comment into lines that fit inside the sheet frame.
+
+    Comments that already fit are kept verbatim; only over-long comments
+    are re-flowed into consecutive numbered fields."""
+    wrapped: list[str] = []
+    for comment in comments:
+        if len(comment) <= _COMMENT_LINE_MAX:
+            wrapped.append(comment)
+            continue
+        for line in comment.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            wrapped.extend(
+                textwrap.wrap(
+                    line,
+                    width=_COMMENT_LINE_MAX,
+                    break_long_words=True,
+                    break_on_hyphens=False,
+                )
+            )
+    return wrapped
+
+
+def paper_for_part_count(
+    count: int,
+    *,
+    x_step: float = 38.1,
+    y_step: float = 38.1,
+    columns: int = 4,
+    origin: float = 50.8,
+    margin: float = 40.0,
+) -> str:
+    """Return the smallest landscape sheet fitting the diagonal placement
+    grid used by the deterministic authoring flow (``count`` parts laid out
+    at ``x = origin + x_step*i``, ``y = origin + y_step*(i//columns)``)."""
+    if count <= 0:
+        return "A4"
+    max_x = origin + x_step * (count - 1) + margin
+    max_y = origin + y_step * math.ceil(count / columns) + margin
+    for name, (width, height) in PAPER_SIZES.items():
+        if max_x <= width and max_y <= height:
+            return name
+    return "A0"
+
+
+def _set_paper(text: str, size: str) -> str:
+    """Replace or insert the top-level ``(paper ...)`` element."""
+    if size not in PAPER_SIZES:
+        raise TitleBlockError(f"unknown paper size {size!r}")
+    element = f'\t(paper "{size}")\n'
+    match = re.search(r"\(\s*paper\b", text)
+    if match is not None:
+        end = _list_end(text, match.start())
+        return text[: match.start()] + element.rstrip("\n") + text[end:]
+    version = re.search(r"\(\s*version\b", text)
+    if version is not None:
+        at = _list_end(text, version.start())
+        return text[:at] + "\n" + element.rstrip("\n") + text[at:]
+    at = text.rfind(")")
+    if at < 0:
+        raise TitleBlockError("no root list found in schematic text")
+    return text[:at] + element + ")" + text[at + 1 :]
+
+
+def set_paper_size(path: Path, size: str) -> str:
+    """Set the schematic's ``(paper ...)`` element to ``size`` (e.g. "A3")."""
+    text = path.read_text(encoding="utf-8")
+    text = _set_paper(text, size)
+    path.write_text(text, encoding="utf-8")
+    return size
+
+
 def inject_title_block(
     path: Path,
     *,
@@ -54,20 +146,27 @@ def inject_title_block(
     rev: str,
     company: str | None = None,
     comments: list[str] | None = None,
+    paper: str | None = None,
 ) -> dict[str, str]:
     """Write ``title``/``date``/``rev`` (and ``company`` when given) into the
     schematic's title block, creating the element when absent.
 
     ``comments`` become numbered ``(comment N "...")`` fields — the design
-    intent/documentation lines printed beside the title block.
+    intent/documentation lines printed beside the title block. Each comment
+    is wrapped at ``_COMMENT_LINE_MAX`` characters into consecutive comment
+    fields so no printed line overruns the sheet frame. ``paper`` sets the
+    sheet's ``(paper ...)`` size when given.
 
     Returns the field values written, for logging."""
     text = path.read_text(encoding="utf-8")
     values = {"title": title, "date": date, "rev": rev}
     if company is not None:
         values["company"] = company
+    if paper is not None:
+        text = _set_paper(text, paper)
     comment_items = [
-        (f"comment_{index + 1}", comment) for index, comment in enumerate(comments or [])
+        (f"comment_{index + 1}", comment)
+        for index, comment in enumerate(_wrap_comments(comments or []))
     ]
     for key, comment in comment_items:
         values[key] = comment

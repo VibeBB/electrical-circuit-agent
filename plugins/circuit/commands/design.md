@@ -40,7 +40,9 @@ findings through Konnect ops and re-run the lint until it is quiet:
 `property_on_symbol` and misplaced labels via `reset_schematic_field_positions`,
 `batch_edit_schematic_components`, `list_schematic_labels`,
 `move_labels_by_offset`, or `batch_rotate_labels`; empty title-block fields via
-`edit_sheet`; a cramped sheet via `bulk_move_schematic_components`. Then call
+`edit_sheet`; a cramped sheet via `bulk_move_schematic_components` or
+`edit_sheet` paper; `power_flag_crowded` by keeping one `power:PWR_FLAG` per
+driven rail at its source. Then call
 `circuit_connectivity_check` and stop if its kicad-cli netlist gate fails, then run
 `circuit_erc`. Do not re-run a gate whose inputs have not changed.
 
