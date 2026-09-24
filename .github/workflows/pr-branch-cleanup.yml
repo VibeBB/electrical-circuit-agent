@@ -1,0 +1,60 @@
+name: PR branch cleanup
+
+# Deletes automation-owned head branches when their pull request closes, and
+# sweeps leftovers daily. The publish and release workflows merge their
+# digest-lock / version-bump pull requests via `gh pr merge --auto --squash
+# --delete-branch`; when the merge is only *armed* and lands after the
+# workflow run exits, nothing deletes the head branch (the repository's
+# "delete head branches on merge" setting stays off). This covers that gap
+# without touching human-owned branches.
+
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write # git ref deletion
+  pull-requests: read # the sweep checks for open pull requests
+
+concurrency:
+  group: pr-branch-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Delete the closed pull request's automation branch
+        if: >-
+          github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && (startsWith(github.event.pull_request.head.ref, 'bot/')
+            || startsWith(github.event.pull_request.head.ref, 'devin/')
+            || startsWith(github.event.pull_request.head.ref, 'dependabot/'))
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" \
+            || echo "branch $BRANCH is already gone"
+      - name: Sweep automation branches with no open pull request
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/branches?per_page=100" --paginate \
+            --jq '.[].name' | grep -E '^(bot/|devin/|dependabot/)' > branches.txt || true
+          while IFS= read -r branch; do
+            open=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+              --head "$branch" --json number --jq 'length')
+            if [ "$open" = "0" ]; then
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" \
+                && echo "deleted stale branch $branch" \
+                || echo "failed to delete $branch"
+            fi
+          done < branches.txt
