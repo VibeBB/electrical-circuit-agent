@@ -37,6 +37,10 @@ VisualFindingCategory = Literal[
     "label_readability",
     "wire_label_balance",
     "sheet_utilization",
+    "ambiguous_notation",
+    "missing_dimension",
+    "missing_manufacturing_info",
+    "design_intent",
     "datasheet_mismatch",
     "other",
 ]
@@ -65,6 +69,10 @@ class VisualReviewDetail(BaseModel):
     image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     model: str = Field(min_length=1)
     checklist: VisualChecklist
+    impression: str = Field(
+        min_length=1,
+        description="Subjective impression from reading the drawing; required",
+    )
     findings: list[VisualFinding] = Field(default_factory=lambda: list[VisualFinding]())
 
 

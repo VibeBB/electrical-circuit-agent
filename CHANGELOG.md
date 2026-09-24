@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reminders deterministically — the same PathTrigger mechanism mech uses.
 - `circuit-brief` and `circuit-review` declare the `record-vision-tool-event`
   post hook in frontmatter (plugin hooks do not propagate to task sub-agents).
+- Drawing-quality review: `circuit-review` now reviews every rendered sheet
+  on baseline fidelity (accurate, legible, unambiguous), manufacturing
+  completeness (title block, fab/drill/assembly notes, silkscreen as
+  assembly instruction), and design intent (functional grouping, signal
+  flow, power/ground topology, decoupling proximity).
+  `VisualReviewDetail` gains a required `impression` field — the
+  reviewer's subjective reading of the drawing — and four shared
+  categories: `ambiguous_notation`, `missing_dimension`,
+  `missing_manufacturing_info`, `design_intent`.
 
 ### Fixed
 

@@ -10,14 +10,23 @@ provenance coverage of what the model actually saw.
 
 `src/circuit/advisory.py` defines `VisualReviewDetail` — the `detail`
 payload for any `AdvisoryResult` with `tool: "vision_review"`:
-`{image_path, image_sha256, model, checklist, findings[]}`. `checklist`
+`{image_path, image_sha256, model, checklist, impression, findings[]}`.
+`checklist`
 names the artifact kind (`board_top`, `board_bottom`, `board_side`,
-`board_isometric`, `board_layers`, `schematic`, `footprint`) and each
+`board_isometric`, `board_layers`, `schematic`, `footprint`),
+`impression` is a required free-text field holding the reviewer's
+subjective reading of the drawing (a record without one is discarded),
+and each
 finding is `{category, severity (error|warning|info), note, bbox?}` with
 `category` drawn from a fixed vocabulary spanning the per-artifact
 checklists (`silkscreen_overlap`, `component_overhang`,
 `mounting_hole_collision`, `height_collision`, `label_readability`,
-`datasheet_mismatch`, … `other`). `bbox` is an optional normalized
+plus the drawing-quality set `ambiguous_notation`, `missing_dimension`,
+`missing_manufacturing_info`, `design_intent`,
+`datasheet_mismatch`, … `other`). `circuit-review` reviews every sheet
+on baseline fidelity, manufacturing completeness, and design intent
+(functional grouping, signal flow, power/ground topology, silkscreen
+as assembly instruction). `bbox` is an optional normalized
 `[x, y, w, h]` region. `circuit-review` documents which checklist applies
 to which render kind, including the part-review loop (`create_footprint`
 /`edit_footprint_pad`/`set_footprint_graphics` → `fp_svg` or render →
