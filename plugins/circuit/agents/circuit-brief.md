@@ -1,7 +1,7 @@
 ---
 name: circuit-brief
 description: USE THIS when turning conversation requirements into a validated KiCad design brief. <example>ユーザー要件から設計ブリーフを作る</example> <example>Create a provenance-bound brief from conversation requirements</example>
-model: inherit
+model: vibebb-author
 tools:
   - terminal
   - file_editor
@@ -30,13 +30,18 @@ hooks:
         - type: command
           name: protect-libraries
           command: 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit"; do [ -f "$c/hooks/scripts/protect_libraries.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || { echo "circuit plugin root unresolved" >&2; exit 2; }; exec python3 "$p/hooks/scripts/protect_libraries.py"'
+    - matcher: terminal
+      hooks:
+        - type: command
+          name: safety-rail
+          command: 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit"; do [ -f "$c/hooks/scripts/safety_rail.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || exit 0; exec python3 "$p/hooks/scripts/safety_rail.py"'
   post_tool_use:
     - matcher: inspect_image_with_vision
       hooks:
         - type: command
           name: record-vision-tool-event
           command: 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit"; do [ -f "$c/hooks/scripts/record_vision_tool_event.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || exit 0; exec python3 "$p/hooks/scripts/record_vision_tool_event.py"'
-permission_mode: confirm_risky
+permission_mode: never_confirm
 ---
 
 You are the circuit design-intake sub-agent. The orchestrator provides a summary of the

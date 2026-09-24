@@ -561,3 +561,52 @@ def test_record_image_observation_skips_non_image_and_errors(tmp_path: Path) -> 
     ):
         assert _run_observe_hook(payload).returncode == 0
     assert _observations(tmp_path) == []
+
+
+SAFETY_RAIL_SCRIPT = (
+    Path(__file__).parents[1] / "plugins" / "circuit" / "hooks" / "scripts" / "safety_rail.py"
+)
+
+
+def _run_safety_rail(command: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SAFETY_RAIL_SCRIPT)],
+        input=json.dumps({"tool_name": "terminal", "tool_input": {"command": command}}),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_safety_rail_denies_denylist() -> None:
+    for command in (
+        "rm -rf /",
+        "rm -fr ~",
+        "dd if=x of=/dev/sda",
+        "mkfs.ext4 /dev/sda1",
+        "shutdown now",
+        "git push origin main",
+        "git push --force origin feat",
+        "git reset --hard",
+        "git clean -fd",
+        "git checkout -- src/circuit/brief.py",
+        "git stash drop",
+        "git add .",
+        "git commit --amend",
+        "git commit --no-verify",
+    ):
+        assert _run_safety_rail(command).returncode == 2, command
+
+
+def test_safety_rail_allows_normal_commands() -> None:
+    for command in (
+        "rm -rf out/artifacts",
+        "git push --force-with-lease origin feat",
+        "git push origin feat",
+        "git add src/circuit/brief.py docs",
+        "git commit -m message",
+        "python -m circuit doctor",
+        "echo hi > out.txt",
+        "find . -name '*.kicad_sch'",
+    ):
+        assert _run_safety_rail(command).returncode == 0, command
