@@ -39,7 +39,14 @@ LABEL org.opencontainers.image.source="https://github.com/VibeBB/electrical-circ
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
-RUN apt_install_retry() { \
+# Serve every suite from the master archive: it carries the same -security
+# pocket, while security.ubuntu.com can briefly publish an index ahead of its
+# pool and 404 packages the index still lists.
+RUN grep -q "^URIs: http://security\.ubuntu\.com/ubuntu" \
+        /etc/apt/sources.list.d/ubuntu.sources \
+    && sed -i "s|^URIs: http://security\.ubuntu\.com/ubuntu/|URIs: http://archive.ubuntu.com/ubuntu/|" \
+        /etc/apt/sources.list.d/ubuntu.sources \
+    && apt_install_retry() { \
         for attempt in 1 2 3 4 5; do \
             apt-get -o Acquire::Retries=5 update \
             && apt-get -o Acquire::Retries=5 install --no-install-recommends -y "$@" \
