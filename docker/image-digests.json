@@ -1,10 +1,10 @@
 {
   "circuit_server": {
-    "digest": "sha256:6933dd48f4478ab269f273313f76fcff3b30f39658526b2c15ca55b10362b0cc",
+    "digest": "sha256:d16a62c7df7acdf57495790dae5d277e40f7bf3d78b0e3643797febdf4db4785",
     "dockerfile": "sdk:openhands-agent-server/v1.49.5",
     "image": "ghcr.io/vibebb/circuit-server",
-    "published_at": "2026-09-24T10:47:12Z",
-    "tag": "05ccbfa2a77976d087030273feeddca173b61b70-latest-source",
+    "published_at": "2026-09-24T13:16:28Z",
+    "tag": "65cf0d2bb0da999ccac0971e281d4a7d686029c1-latest-source",
     "tools": {
       "cern_commit": "8139735c9fd5db6b2b4e77b036d58072f689554b",
       "circuit": "0.0.1",
@@ -17,14 +17,14 @@
       "python": "Python 3.14.4",
       "semeru_jre": "27.0.0.0"
     },
-    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/35987965328"
+    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/36000524868"
   },
   "circuit_tools": {
-    "digest": "sha256:6d33f87d39e353f23088ec2e9175ad24641f65edfa64b2934aba4c4f3311dc39",
+    "digest": "sha256:b20936f1540eeb29e4c4f26d10a05f4a30bb39fd68ef1b2f0e7e49d24c7eb1a9",
     "dockerfile": "docker/circuit-tools.Dockerfile",
     "image": "ghcr.io/vibebb/circuit-tools",
-    "published_at": "2026-09-24T10:47:12Z",
-    "tag": "05ccbfa2a77976d087030273feeddca173b61b70-tools",
+    "published_at": "2026-09-24T13:16:28Z",
+    "tag": "65cf0d2bb0da999ccac0971e281d4a7d686029c1-tools",
     "tools": {
       "cern_commit": "8139735c9fd5db6b2b4e77b036d58072f689554b",
       "circuit": "0.0.1",
@@ -37,6 +37,6 @@
       "python": "Python 3.14.4",
       "semeru_jre": "27.0.0.0"
     },
-    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/35987965328"
+    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/36000524868"
   }
 }
