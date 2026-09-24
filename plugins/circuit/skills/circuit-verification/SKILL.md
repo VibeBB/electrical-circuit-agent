@@ -34,4 +34,4 @@ board_isometric|board_layers|schematic|footprint`) and each finding is
 `src/circuit/advisory.py` `VisualReviewDetail` for the contract. Findings stay
 advisory; `circuit_render`/`circuit_diff`/`file_editor view` image
 observations are provenance-logged to
-`.openhands/circuit/image-observations.jsonl`.
+`observations/circuit/image-observations.jsonl`.

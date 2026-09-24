@@ -18,7 +18,7 @@ reach workspace renders.
 
 A `post_tool_use` hook records every successful `inspect_image_with_vision`
 call (profile, model, question, response hash) to
-`.openhands/circuit/vision-tool-events.jsonl` for provenance cross-checking.
+`observations/circuit/vision-tool-events.jsonl` for provenance cross-checking.
 
 Visual observations are advisory for human judgement only: they are never
 promoted to connectivity, ERC, or DRC verdicts (ADR-0011, ADR-0012), and a

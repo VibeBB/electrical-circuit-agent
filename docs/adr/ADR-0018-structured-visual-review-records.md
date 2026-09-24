@@ -30,7 +30,7 @@ provenance gap (G9 in the plan): previously only
 `inspect_image_with_vision` calls were logged. Now `circuit_render`,
 `circuit_diff`, and `file_editor view` executions also append
 `{sequence, event_id, tool_name, image_path, image_sha256, recorded_at,
-session_id}` to `.openhands/circuit/image-observations.jsonl` (override
+session_id}` to `observations/circuit/image-observations.jsonl` (override
 `$CIRCUIT_IMAGE_OBSERVATIONS`) — every image the model saw has a record,
 not just delegated vision calls. Image paths are extracted from the tool
 result (any string containing a `.png`/`.jpg`/`.jpeg` path that resolves

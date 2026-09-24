@@ -384,7 +384,7 @@ vision-capable saved profile exists) only inspects images in the latest user
 message — the path for user-attached board photos or screenshots, not
 workspace renders. A plugin `post_tool_use` hook records each
 `inspect_image_with_vision` call's profile, model, question, and response hash
-to `.openhands/circuit/vision-tool-events.jsonl` for cross-checking. All
+to `observations/circuit/vision-tool-events.jsonl` for cross-checking. All
 visual evidence is advisory for human judgement (ADR-0012): it must never be
 promoted to an ERC/DRC verdict, and when no vision path is available the
 review records `advisory visual review skipped` and continues.
@@ -425,7 +425,7 @@ following `VisualReviewDetail` (`image_path`, `image_sha256`, `model`,
 normalized `bbox`; ADR-0018). Records are advisory and aggregate into the
 design report like any advisory file. Separately, the `record-image-observation`
 hook logs every image the model saw — `circuit_render`, `circuit_diff`, and
-`file_editor view` calls — to `.openhands/circuit/image-observations.jsonl`
+`file_editor view` calls — to `observations/circuit/image-observations.jsonl`
 (path + sha256; override `$CIRCUIT_IMAGE_OBSERVATIONS`), complementing the
 `vision-tool-events.jsonl` log of delegated `inspect_image_with_vision` calls.
 
