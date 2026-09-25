@@ -1,0 +1,20 @@
+{
+  "digest": "sha256:482182d1ba7eb7609b14a6f54d95fa2acd94b21991d02780ed6e71a7a4acc84f",
+  "dockerfile": "docker/circuit-tools.Dockerfile",
+  "image": "ghcr.io/vibebb/circuit-tools",
+  "published_at": "2026-09-25T03:33:31Z",
+  "tag": "35a96049be255a1db45f24b938afbac87f11003b-tools",
+  "tools": {
+    "cern_commit": "8139735c9fd5db6b2b4e77b036d58072f689554b",
+    "circuit": "0.0.1",
+    "freerouting": "2.4.1",
+    "kicad-cli": "10.99.0",
+    "kicad-nightly": "202609230242+3f88267300~189~ubuntu26.04.1",
+    "kicad-nightly-footprints": "202609222017+55d9dd1a3~14~ubuntu26.04.1",
+    "kicad-nightly-symbols": "202609231218+2ad44fc37~12~ubuntu26.04.1",
+    "konnect": "0.12.1",
+    "python": "Python 3.14.4",
+    "semeru_jre": "27.0.0.0"
+  },
+  "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/36090229095"
+}

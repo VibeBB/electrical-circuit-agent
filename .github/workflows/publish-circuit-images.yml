@@ -17,6 +17,9 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "!docker/image-digests.json"
+      # The plugin pin is written by this workflow itself; exclude it so a
+      # merged pin PR does not trigger another publish.
+      - "!plugins/circuit/skills/circuit-workflow/tools-image.json"
       - "!docker/README.md"
   workflow_dispatch:
     inputs:
@@ -273,15 +276,27 @@ jobs:
             --tag "$SERVER_TAG" --digest "$SERVER_DIGEST" --published-at "$published_at" \
             --workflow-run "$workflow_run" --dockerfile "sdk:openhands-agent-server/v${SDK_VERSION}" \
             --tools-json "$RUNNER_TEMP/circuit-server.json"
+          # Ship the same pin inside the plugin so an installed plugin can
+          # resolve the tools image without the extension cache (the
+          # launcher reads <plugin>/skills/*/tools-image.json first).
+          python3 - <<'PY'
+          import json
+
+          entry = json.load(open("docker/image-digests.json"))["circuit_tools"]
+          pin = "plugins/circuit/skills/circuit-workflow/tools-image.json"
+          with open(pin, "w", encoding="utf-8") as out:
+              json.dump(entry, out, indent=2)
+              out.write("\n")
+          PY
           # status --porcelain (not diff --quiet) also catches an untracked
           # lock file, matching the other agent publish workflows.
-          if [ -z "$(git status --porcelain -- docker/image-digests.json)" ]; then
+          if [ -z "$(git status --porcelain -- docker/image-digests.json plugins/circuit/skills/circuit-workflow/tools-image.json)" ]; then
             echo "Image digest lock is unchanged; no pull request is needed."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docker/image-digests.json
+          git add docker/image-digests.json plugins/circuit/skills/circuit-workflow/tools-image.json
           git commit -m "Update circuit image digest lock"
           retry git push --set-upstream origin "$branch"
           if [ "${SKIP_TOOLS:-false}" = true ]; then
