@@ -13,6 +13,13 @@ from circuit.advisory import (
     write_review_record,
 )
 
+LONG_IMPRESSION = (
+    "The top view reads like an assembly guide: silkscreen references sit "
+    "clear of courtyards, the return path through the ground pour is legible "
+    "at a glance, and mounting holes carry their keep-outs. What remains unsaid "
+    "is the connector keying, which only the mating drawing can confirm."
+)
+
 
 def _vision_result() -> AdvisoryResult:
     return AdvisoryResult(
@@ -26,7 +33,7 @@ def _vision_result() -> AdvisoryResult:
             "image_sha256": "a" * 64,
             "model": "kimi-k3",
             "checklist": "board_top",
-            "impression": "silkscreen reads like an assembly guide; return path is legible",
+            "impression": LONG_IMPRESSION,
             "findings": [
                 {
                     "category": "silkscreen_overlap",
@@ -50,7 +57,7 @@ def test_parse_visual_review_round_trip() -> None:
     assert detail is not None
     assert detail.checklist == "board_top"
     assert detail.model == "kimi-k3"
-    assert detail.impression.startswith("silkscreen reads like")
+    assert detail.impression.startswith("The top view reads like an assembly guide")
     assert len(detail.findings) == 3
     assert detail.findings[0].bbox == [0.1, 0.2, 0.05, 0.03]
     assert detail.findings[1].category == "design_intent"
@@ -88,7 +95,7 @@ def test_visual_review_detail_rejects_unknown_keys() -> None:
                 "image_sha256": "a" * 64,
                 "model": "m",
                 "checklist": "board_top",
-                "impression": "i",
+                "impression": LONG_IMPRESSION,
                 "verdict": "fail",
             }
         )
@@ -107,7 +114,7 @@ def test_visual_review_detail_accepts_drawing_quality_categories() -> None:
                 "image_sha256": "a" * 64,
                 "model": "m",
                 "checklist": "board_top",
-                "impression": "reads clearly",
+                "impression": LONG_IMPRESSION,
                 "findings": [{"category": category, "severity": "info", "note": "x"}],
             }
         )
@@ -128,7 +135,7 @@ def test_write_review_record_binds_sha256(tmp_path: Path) -> None:
         image,
         model="kimi-k3",
         checklist="schematic",
-        impression="clean sheet",
+        impression=LONG_IMPRESSION,
         findings=[{"category": "label_readability", "severity": "info", "note": "ok"}],
     )
     record = json.loads(path.read_text(encoding="utf-8"))
@@ -150,3 +157,19 @@ def test_write_review_record_fails_closed_on_bad_finding(tmp_path: Path) -> None
             findings=[{"category": "not_a_category", "severity": "info", "note": "x"}],
         )
     assert not (tmp_path / "review-visual-schematic.advisory.json").exists()
+
+
+def test_parse_visual_review_rejects_terse_impression() -> None:
+    """A one-liner impression validates to None — the review is discarded."""
+    result = _vision_result()
+    assert result.detail is not None
+    result.detail["impression"] = "looks fine"
+    assert parse_visual_review(result) is None
+
+
+def test_impression_min_length_floor() -> None:
+    """Multi-sentence text under the floor still fails closed."""
+    result = _vision_result()
+    assert result.detail is not None
+    result.detail["impression"] = "A short note. With two sentences."
+    assert parse_visual_review(result) is None

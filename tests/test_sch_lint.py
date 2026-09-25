@@ -320,3 +320,24 @@ def test_lint_no_notes_warning_with_title_block_comment(tmp_path: Path) -> None:
     path.write_text(text, encoding="utf-8")
     report = lint_schematic(path)
     assert not any(f.type == "notes_absent" for f in report.findings)
+
+
+def test_lint_warns_when_component_sits_on_power_symbol(tmp_path: Path) -> None:
+    """A component anchored on a power glyph reads as one blob — warn."""
+    power = _SYMBOL_OK.replace('lib_id "Device:R"', 'lib_id "power:+3V3"')
+    power = power.replace("(at 100 100 0)", "(at 101 100.5 0)", 1)
+    path = _write_sch(tmp_path, _SYMBOL_OK + " " + power)
+    report = lint_schematic(path)
+    assert report.verdict == "pass"
+    finding = next(f for f in report.findings if f.type == "component_on_power_symbol")
+    assert finding.severity == "warning"
+    assert any("+3V3" in item for item in finding.items)
+
+
+def test_lint_no_power_overlap_warning_when_spaced(tmp_path: Path) -> None:
+    """A power symbol 20mm from the nearest component is not an overlap."""
+    power = _SYMBOL_OK.replace('lib_id "Device:R"', 'lib_id "power:+3V3"')
+    power = power.replace("(at 100 100 0)", "(at 160 40 0)", 1)
+    path = _write_sch(tmp_path, _SYMBOL_OK + " " + power)
+    report = lint_schematic(path)
+    assert not any(f.type == "component_on_power_symbol" for f in report.findings)

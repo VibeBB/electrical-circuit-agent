@@ -7,9 +7,24 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 
 VISION_REVIEW_TOOL = "vision_review"
+IMPRESSION_MIN_LENGTH = 240
+_SENTENCE_MARKS = "。.!?"
+
+
+def _impression_is_prose(value: str) -> str:
+    if sum(value.count(mark) for mark in _SENTENCE_MARKS) < 2:
+        raise ValueError("impression must be a multi-sentence reading")
+    return value
+
 
 VisualChecklist = Literal[
     "board_top",
@@ -73,10 +88,15 @@ class VisualReviewDetail(BaseModel):
     model: str = Field(min_length=1)
     checklist: VisualChecklist
     impression: str = Field(
-        min_length=1,
-        description="Subjective impression from reading the drawing; required",
+        min_length=IMPRESSION_MIN_LENGTH,
+        description=(
+            "Subjective impression from reading the drawing; required and "
+            "multi-sentence — a terse line is rejected at validation time"
+        ),
     )
     findings: list[VisualFinding] = Field(default_factory=lambda: list[VisualFinding]())
+
+    _check_impression = field_validator("impression")(_impression_is_prose)
 
 
 def parse_visual_review(result: AdvisoryResult) -> VisualReviewDetail | None:

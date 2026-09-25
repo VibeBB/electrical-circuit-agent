@@ -415,3 +415,51 @@ def test_e2e_authoring_fails_closed_on_bad_brief(tmp_path: Path) -> None:
     written = json.loads((workdir / "e2e-authoring.json").read_text(encoding="utf-8"))
     assert written["verdict"] == "fail"
     assert written["error"]["step"] == "load"
+
+
+def _e2e_authoring_module():
+    """Load e2e_authoring with the scripts dir on sys.path (sibling imports)."""
+    import importlib
+    import sys
+
+    scripts_dir = str(Path(__file__).parents[1] / "scripts")
+    sys.path.insert(0, scripts_dir)
+    try:
+        return importlib.import_module("e2e_authoring")
+    finally:
+        sys.path.remove(scripts_dir)
+
+
+def test_e2e_authoring_record_unifies_step() -> None:
+    """Every authoring.jsonl line names its pipeline step."""
+    import io
+
+    module = _e2e_authoring_module()
+    _record = module._record
+
+    log = io.StringIO()
+    _record(log, {"tool": "circuit_render", "payload": {}, "result": {"ok": True}})
+    _record(log, {"method": "initialize", "payload": {}})
+    lines = log.getvalue().splitlines()
+    assert len(lines) == 2
+    first, second = (json.loads(line) for line in lines)
+    assert first["step"] == "circuit_render"
+    assert second["step"] == "initialize"
+
+
+def test_e2e_authoring_prunes_empty_export_dirs(tmp_path: Path) -> None:
+    """Export dirs left empty by timed-out ops are removed."""
+    _prune_empty_dirs = _e2e_authoring_module()._prune_empty_dirs
+
+    root = tmp_path / "konnect-exports"
+    (root / "export_bom").mkdir(parents=True)
+    (root / "render" / "nested").mkdir(parents=True)
+    (root / "kept").mkdir()
+    (root / "kept" / "out.json").write_text("{}", encoding="utf-8")
+
+    _prune_empty_dirs(root)
+
+    assert root.is_dir()
+    assert [child.name for child in root.iterdir()] == ["kept"]
+
+    _prune_empty_dirs(tmp_path / "missing")
