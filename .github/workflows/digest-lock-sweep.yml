@@ -1,0 +1,53 @@
+name: Digest lock PR sweep
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: digest-lock-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Merge stalled digest-lock PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          # Lock PRs sometimes stay open with auto-merge armed and every
+          # required check green while GitHub's mergeability evaluation
+          # reports "blocked" indefinitely. Re-try the merge hourly; the
+          # branch ruleset still gates it, so an unsatisfied PR cannot merge.
+          prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 50 \
+            --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("bot/update-image-digests-")) | .number')
+          if [ -z "$prs" ]; then
+            echo "no open digest-lock PRs" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          for pr in $prs; do
+            pr_url="https://github.com/$GITHUB_REPOSITORY/pull/$pr"
+            state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '.mergeable_state // "unknown"' || echo unknown)
+            case "$state" in
+              clean|blocked|behind|unstable)
+                if gh pr merge --repo "$GITHUB_REPOSITORY" --squash --delete-branch "$pr"; then
+                  echo "merged $pr_url (was $state)" >> "$GITHUB_STEP_SUMMARY"
+                else
+                  gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch "$pr" || true
+                  echo "$pr_url left open ($state; auto-merge armed)" >> "$GITHUB_STEP_SUMMARY"
+                fi
+                ;;
+              *)
+                echo "$pr_url skipped (mergeable_state=$state)" >> "$GITHUB_STEP_SUMMARY"
+                ;;
+            esac
+          done
