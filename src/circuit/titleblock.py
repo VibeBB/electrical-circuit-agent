@@ -147,9 +147,7 @@ def atomic_write(path: Path, text: str) -> None:
     try:
         parse_text(text)
     except SExprError as exc:
-        raise TitleBlockError(
-            f"refusing to write malformed schematic to {path}: {exc}"
-        ) from exc
+        raise TitleBlockError(f"refusing to write malformed schematic to {path}: {exc}") from exc
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
