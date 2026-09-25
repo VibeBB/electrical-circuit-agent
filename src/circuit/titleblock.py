@@ -8,10 +8,15 @@ fix only and never touches connectivity.
 
 from __future__ import annotations
 
+import contextlib
 import math
+import os
 import re
+import tempfile
 import textwrap
 from pathlib import Path
+
+from .sexpr import SExprError, parse_text
 
 
 class TitleBlockError(ValueError):
@@ -38,7 +43,7 @@ def _escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
 
 
-def _list_end(text: str, start: int) -> int:
+def list_end(text: str, start: int) -> int:
     """Return the index just past the ``)`` closing the ``(`` at ``start``."""
     depth = 0
     in_string = False
@@ -118,11 +123,11 @@ def _set_paper(text: str, size: str) -> str:
     element = f'\t(paper "{size}")\n'
     match = re.search(r"\(\s*paper\b", text)
     if match is not None:
-        end = _list_end(text, match.start())
+        end = list_end(text, match.start())
         return text[: match.start()] + element.rstrip("\n") + text[end:]
     version = re.search(r"\(\s*version\b", text)
     if version is not None:
-        at = _list_end(text, version.start())
+        at = list_end(text, version.start())
         return text[:at] + "\n" + element.rstrip("\n") + text[at:]
     at = text.rfind(")")
     if at < 0:
@@ -130,11 +135,37 @@ def _set_paper(text: str, size: str) -> str:
     return text[:at] + element + ")" + text[at + 1 :]
 
 
+def atomic_write(path: Path, text: str) -> None:
+    """Validate then atomically replace the schematic file.
+
+    The result must parse as one complete root s-expression before it
+    reaches disk, and the write itself is a temp-file + rename so a
+    concurrent reader (or a crash mid-write) can never observe a
+    truncated file. A ``.kicad_sch`` is edited in place by multiple
+    authoring ops, so partial writes are not acceptable here.
+    """
+    try:
+        parse_text(text)
+    except SExprError as exc:
+        raise TitleBlockError(
+            f"refusing to write malformed schematic to {path}: {exc}"
+        ) from exc
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 def set_paper_size(path: Path, size: str) -> str:
     """Set the schematic's ``(paper ...)`` element to ``size`` (e.g. "A3")."""
     text = path.read_text(encoding="utf-8")
     text = _set_paper(text, size)
-    path.write_text(text, encoding="utf-8")
+    atomic_write(path, text)
     return size
 
 
@@ -174,7 +205,7 @@ def inject_title_block(
     match = re.search(r"\(\s*title_block\b", text)
     if match is not None:
         block_start = match.start()
-        block_end = _list_end(text, block_start)
+        block_end = list_end(text, block_start)
         block = text[block_start:block_end]
         for name, value in values.items():
             if name.startswith("comment_"):
@@ -204,7 +235,7 @@ def inject_title_block(
         block = "\t(title_block\n" + "\n".join(lines) + "\n\t)\n"
         paper_match = re.search(r"\(\s*paper\b", text)
         if paper_match is not None:
-            at = _list_end(text, paper_match.start())
+            at = list_end(text, paper_match.start())
             text = text[:at] + "\n" + block + text[at:]
         else:
             at = text.rfind(")")
@@ -212,5 +243,5 @@ def inject_title_block(
                 raise TitleBlockError("no root list found in schematic text")
             text = text[:at] + block + text[at:]
 
-    path.write_text(text, encoding="utf-8")
+    atomic_write(path, text)
     return values

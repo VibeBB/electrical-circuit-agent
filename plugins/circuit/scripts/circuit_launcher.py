@@ -48,7 +48,7 @@ _MODULES = {
 
 # Subcommands handled by the unified `python -m circuit` dispatcher rather
 # than a same-named module (they contain a dash or have no module entry point).
-_CLI_SUBCOMMANDS = {"author", "intake", "sch-lint"}
+_CLI_SUBCOMMANDS = {"author", "fit-sheet", "intake", "sch-lint"}
 
 _CONTAINER_SRC = "/plugin-src"
 _ENV_PREFIXES = ("OPENHANDS_", "CIRCUIT_")

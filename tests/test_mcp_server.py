@@ -45,6 +45,7 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_konnect_call",
         "circuit_kicad_version",
         "circuit_sch_lint",
+        "circuit_fit_sheet",
     }
 
 
@@ -76,7 +77,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 23
+            assert len(tools.tools) == 24
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

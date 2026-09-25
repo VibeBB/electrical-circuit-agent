@@ -21,6 +21,7 @@ from circuit import __version__ as _circuit_version
 from circuit import (
     apiserver,
     brief,
+    fit_sheet,
     intake,
     kicad_cli,
     libraries,
@@ -761,6 +762,21 @@ def main(argv: list[str] | None = None) -> int:
                     "tool": "circuit.titleblock.inject_title_block",
                     "payload": {"schematic": str(schematic)},
                     "result": title_fields,
+                },
+            )
+
+            # Konnect ops can leave net labels outside the sheet bounds
+            # (sch_lint reports them as item_out_of_bounds errors). Clamp
+            # labels — never symbols or wires — back inside the frame so
+            # the lint gate below sees a readable sheet.
+            sheet_moves = fit_sheet.clamp_labels(schematic)
+            _record(
+                log,
+                {
+                    "step": "circuit_fit_sheet",
+                    "tool": "circuit.fit_sheet.clamp_labels",
+                    "payload": {"schematic": str(schematic)},
+                    "result": {"clamped": len(sheet_moves), "items": sheet_moves},
                 },
             )
 
