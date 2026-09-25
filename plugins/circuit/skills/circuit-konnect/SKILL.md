@@ -59,3 +59,9 @@ adding a tool to an authoring flow. IPC-required tools currently include
 Advisory checks and export comparisons are recorded in the design report and never
 change its kicad-cli-derived verdict. Mutating advisory tools run on copies or with
 `dry_run` where supported.
+
+## Terminal tool notes
+
+The terminal tool runs **one command per call**: a payload carrying several commands is bounced
+as "Cannot execute multiple commands at once". Chain with `&&` inside a single command when you
+need two steps, and write files with `file_editor` rather than multi-line heredocs.
