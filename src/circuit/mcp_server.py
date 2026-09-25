@@ -34,6 +34,7 @@ from . import (
     brief,
     connectivity,
     doctor,
+    fit_sheet,
     intake,
     kicad_cli,
     libraries,
@@ -159,6 +160,18 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
             "properties": {
                 "schematic_path": {"type": "string"},
                 "output_path": {"type": "string"},
+            },
+            "required": ["schematic_path"],
+        },
+    ),
+    (
+        "circuit_fit_sheet",
+        "Clamp out-of-bounds schematic labels back inside the sheet",
+        {
+            "type": "object",
+            "properties": {
+                "schematic_path": {"type": "string"},
+                "margin": {"type": "number"},
             },
             "required": ["schematic_path"],
         },
@@ -723,6 +736,7 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_doctor": _anno("Circuit doctor", write=False),
     "circuit_design_report": _anno("Design report", write=True),
     "circuit_sch_lint": _anno("Schematic lint", write=True),
+    "circuit_fit_sheet": _anno("Fit sheet", write=True),
     "circuit_erc": _anno("ERC", write=True),
     "circuit_drc": _anno("DRC", write=True),
     "circuit_render": _anno("Render", write=True),
@@ -910,6 +924,14 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             result = sch_lint.lint_file(
                 source, _output_path(source, args.get("output_path"), "sch_lint")
             )
+        elif name == "circuit_fit_sheet":
+            source = Path(str(args["schematic_path"]))
+            margin_arg = args.get("margin")
+            moves = fit_sheet.clamp_labels(
+                source,
+                margin=float(margin_arg) if margin_arg is not None else fit_sheet.EDGE_MARGIN_MM,
+            )
+            result = {"clamped": len(moves), "items": moves}
         elif name == "circuit_erc":
             source = Path(str(args["schematic_path"]))
             result = kicad_cli.erc(source, _output_path(source, args.get("output_path"), "erc"))

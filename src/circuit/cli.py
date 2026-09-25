@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from . import brief, connectivity, doctor, intake, netlist, sch_lint
+from . import brief, connectivity, doctor, fit_sheet, intake, netlist, sch_lint
 
 _E2E_CANDIDATES = [
     # repo checkout: <root>/src/circuit/cli.py -> <root>/scripts/e2e_authoring.py
@@ -82,6 +82,14 @@ def cmd_sch_lint(args: argparse.Namespace) -> int:
     except (ValueError, OSError) as exc:
         return _emit({"verdict": "fail", "stage": "sch-lint", "detail": str(exc)})
     return _emit(report.model_dump(mode="json"))
+
+
+def cmd_fit_sheet(args: argparse.Namespace) -> int:
+    try:
+        moves = fit_sheet.clamp_labels(Path(args.schematic), margin=args.margin)
+    except (ValueError, OSError) as exc:
+        return _emit({"verdict": "fail", "stage": "fit-sheet", "detail": str(exc)})
+    return _emit({"verdict": "pass", "clamped": len(moves), "items": moves})
 
 
 def cmd_connectivity(args: argparse.Namespace) -> int:
@@ -163,6 +171,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     sch_lint_parser.add_argument("schematic")
     sch_lint_parser.add_argument("--output", default=None)
     sch_lint_parser.set_defaults(handler=cmd_sch_lint)
+
+    fit_sheet_parser = subparsers.add_parser(
+        "fit-sheet", help="clamp out-of-bounds schematic labels inside the sheet"
+    )
+    fit_sheet_parser.add_argument("schematic")
+    fit_sheet_parser.add_argument("--margin", type=float, default=fit_sheet.EDGE_MARGIN_MM)
+    fit_sheet_parser.set_defaults(handler=cmd_fit_sheet)
 
     connectivity_parser = subparsers.add_parser(
         "connectivity", help="emit the wire-agent ConnectivitySource contract"

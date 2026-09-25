@@ -553,7 +553,18 @@ position resets, label moves, `edit_sheet`, component moves) and re-lint.
 `inject_title_block` also wraps over-long comments into consecutive
 `(comment N ...)` fields so no printed line overruns the frame, and e2e
 authoring picks the smallest `paper` size that fits the placement grid
-(`titleblock.paper_for_part_count`).
+(`titleblock.paper_for_part_count`). Host-side schematic edits
+(`inject_title_block`, `set_paper_size`, `fit_sheet`) re-parse the result
+as a complete root s-expression and write it atomically (temp file +
+rename), so a crash or a concurrent reader can never observe a truncated
+file; keep them out of the way of a live Konnect authoring session —
+single-writer discipline. For `item_out_of_bounds` findings on labels,
+`python -m circuit fit-sheet` (`circuit.fit_sheet.clamp_labels`) moves
+each offending label to the nearest in-sheet point — labels alone,
+because a label outside the sheet cannot be attached to anything, while
+symbol or wire positions are electrical and must be re-placed through
+Konnect ops. e2e authoring runs the clamp between title-block injection
+and the lint gate.
 
 ### Canvas profile scoping
 

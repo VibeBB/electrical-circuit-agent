@@ -35,6 +35,16 @@ the same ops with a small stdio JSON-RPC client (the repository's
 `KICAD_API_SOCKET` set; record such terminal invocations in the summary since
 they are less visible to policy than `circuit_konnect_call` events.
 
+Keep the `.kicad_sch` under a single-writer discipline: while a Konnect
+session is authoring the schematic, do not run host-side writers
+(`inject_title_block`, `fit-sheet`, or any other edit) against the same
+file — two writers can interleave a truncated file. Apply host-side
+writes only between Konnect ops, after `save_project` has flushed. When
+`circuit_sch_lint` reports `item_out_of_bounds` on `label`/`global_label`/
+`hierarchical_label` items, `python -m circuit fit-sheet <schematic>`
+clamps them back inside the frame; out-of-bounds symbols or wires must be
+re-placed through Konnect ops instead.
+
 Set `KICAD_API_SOCKET=ipc:///tmp/circuit-kicad.sock` and start the circuit API
 server for the selected board first. Load the PCB toolset as needed, then use
 `update_pcb_from_schematic`, `set_component_placements`, `route_pad_to_pad`, and
