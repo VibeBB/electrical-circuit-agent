@@ -15,9 +15,9 @@ upstream Specctra export limitation).
 | Content | Pin |
 |---|---|
 | Ubuntu | `26.04` |
-| KiCad | `202609230242+3f88267300~189~ubuntu26.04.1` |
+| KiCad | `202609250241+83b5faf3d5~189~ubuntu26.04.1` |
 | KiCad footprints | `202609222017+55d9dd1a3~14~ubuntu26.04.1` |
-| KiCad symbols | `202609221218+1565b6644~12~ubuntu26.04.1` |
+| KiCad symbols | `202609251227+151fb6a8c~12~ubuntu26.04.1` |
 | Konnect | `v0.12.1`, release commit and SHA-256 in the Dockerfile |
 | IBM Semeru Open JRE | `27.0.0.0`, release tarball SHA-256 in the Dockerfile |
 | FreeRouting | `v2.4.1`, release JAR SHA-256 in the Dockerfile |

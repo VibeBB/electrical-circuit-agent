@@ -2,7 +2,7 @@
 
 ## Scope
 
-- OpenHands Software Agent SDK v1.49.5
+- OpenHands Software Agent SDK v1.49.6
 - Python 3.12 or later, uv, ruff, pyright strict, pytest
 - KiCad 11 nightly (Ubuntu 26.04 `ppa:kicad/kicad-dev-nightly`)
 - Konnect v0.12.1 (AGPL-3.0-only, separate process)
@@ -74,6 +74,11 @@ apt/PPA, a release download, etc.), update the target definitions in
 section of `docs/operations.md` in the same change. Dependency candidates are
 aggregated by the weekly workflow into the "Dependency update check report" Issue. For deferred candidates, record the reason
 and a re-check deadline in `scripts/dependency_update_deferrals.json`.
+When bumping a dependency to a newer version, review the complete changelog
+of every updated component (all releases between the pinned and target
+versions), evaluate each new feature or behavior change for use in this
+repository, adopt the useful ones in the same change, and record the
+evaluation — including reasons for non-adoption — in `docs/operations.md`.
 
 ## Verification
 

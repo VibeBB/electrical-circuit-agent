@@ -1,15 +1,15 @@
-FROM ghcr.io/astral-sh/uv:0.12.18 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.19 AS uv
 
 FROM ubuntu:26.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG KICAD_NIGHTLY_VERSION=202609230242+3f88267300~189~ubuntu26.04.1
+ARG KICAD_NIGHTLY_VERSION=202609250241+83b5faf3d5~189~ubuntu26.04.1
 ARG KICAD_NIGHTLY_FOOTPRINTS_VERSION=202609222017+55d9dd1a3~14~ubuntu26.04.1
-ARG KICAD_NIGHTLY_SYMBOLS_VERSION=202609231218+2ad44fc37~12~ubuntu26.04.1
-ARG KICAD_NIGHTLY_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609230242+3f88267300~189~ubuntu26.04.1_amd64.deb
-ARG KICAD_NIGHTLY_DEB_SHA256=53b8d21ff77ff759bfc05fb39de9ebad43a9b9efb8513baae19250303e105006
-ARG KICAD_NIGHTLY_SYMBOLS_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly-symbols_202609231218+2ad44fc37~12~ubuntu26.04.1_all.deb
-ARG KICAD_NIGHTLY_SYMBOLS_DEB_SHA256=8e7ca0448c9503ddd42d1ed257d041af6e7071e782cb830362d8f3839b4871fe
+ARG KICAD_NIGHTLY_SYMBOLS_VERSION=202609251227+151fb6a8c~12~ubuntu26.04.1
+ARG KICAD_NIGHTLY_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609250241+83b5faf3d5~189~ubuntu26.04.1_amd64.deb
+ARG KICAD_NIGHTLY_DEB_SHA256=5a3fccf1bff078e130c4719af247dd5f27ab91c8c8b64a0a9908b1e90e2b93bd
+ARG KICAD_NIGHTLY_SYMBOLS_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly-symbols_202609251227+151fb6a8c~12~ubuntu26.04.1_all.deb
+ARG KICAD_NIGHTLY_SYMBOLS_DEB_SHA256=980689dce318ada0fdb814201e5af7e2ce7dba2bf2b8d606a7849170a0640c0f
 ARG KICAD_NIGHTLY_FOOTPRINTS_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly-footprints_202609222017+55d9dd1a3~14~ubuntu26.04.1_all.deb
 ARG KICAD_NIGHTLY_FOOTPRINTS_DEB_SHA256=9884c71dc7546424fea062e52afcd2055392be995e5ae90960c4d24a97400bd4
 ARG KONNECT_VERSION=0.12.1

@@ -327,6 +327,60 @@ image tag against the latest `uv` release.
   - `condenser:` frontmatter not adopted: sub-agents get a summarizing
     condenser by default at factory time (`default_condenser`).
 
+### OpenHands SDK v1.49.6 adoption record
+
+- Checked on: 2026-09-25
+- Update: v1.49.5 → v1.49.6
+- Primary source: [v1.49.6 release](https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.49.6)
+- Release delta:
+  - Meta-profile routing: `llm/meta_profile_store.py`,
+    `tool/builtins/classify_and_switch_llm.py`, agent-server
+    `meta_profiles_router.py`, example `59_route_task_to_model.py` — a
+    `ClassifyAndSwitchLLMTool` builtin routes task classes to saved LLM
+    profiles via `~/.openhands/meta-profiles/` (or
+    `$OH_PERSISTENCE_DIR/meta-profiles`); a classifier miss fails loudly.
+  - `verified_models.py`: adds `gpt-6-sol`, `gpt-6-luna`,
+    `claude-opus-5-5`; drops `claude-opus-4-8`.
+  - `hooks/executor.py`: a non-string `decision` in hook JSON is treated
+    as no decision.
+  - `llm.py`: friendly error on an invalid API key; refresh the key and
+    retry once on a 401.
+  - `mcp/oauth.py`, `mcp/utils.py`, agent-server `mcp_oauth_store.py` /
+    `mcp_router.py`: OAuth token refresh fixes; agent-server Windows
+    crash fix.
+- Reason for adoption: pin alignment to the latest patch; the plugin
+  boundary (AgentDefinition, skills, hooks, `.mcp.json`) is unchanged.
+- Feature evaluation (checked against the plugin boundary):
+  - Meta-profile routing not adoptable at plugin boundary: routing is a
+    conversation-level builtin plus operator-side config; AgentDefinition
+    frontmatter cannot pin a meta-profile per sub-agent. An operator may
+    define a meta-profile whose classes resolve to the existing
+    `vibebb-author` / `vibebb-review` profiles; no repo change.
+  - New verified models: no action — `model:` resolves named profiles
+    through `LLMProfileStore`, never raw model strings, so the
+    `claude-opus-4-8` removal only surfaces as a Canvas warning on
+    operator profiles that still point at it.
+  - Non-string hook `decision` hardening: inherent — all circuit hooks
+    emit `decision` as a string; malformed hook JSON now records no
+    decision instead of crashing the decision parse, matching the
+    fail-closed posture.
+  - LLM 401 refresh-and-retry / friendly invalid-key error: inherent —
+    runtime resilience, no repo change.
+  - MCP OAuth refresh fixes: n/a — `circuit_*`/`konnect_*` servers are
+    stdio subprocesses with no OAuth surface.
+  - `permission_mode` stays `never_confirm`: the v1.49.5 finding stands
+    (sub-agent conversations still get no security analyzer from
+    `task/manager.py`).
+  - mcp 2.x remains deferred: v1.49.6 keeps the `fastmcp<4`
+    (`fastmcp-slim: mcp<2.0`) constraint; see
+    `scripts/dependency_update_deferrals.json`.
+- AgentCanvas 1.23.0 → 1.24.0 (verification host): the canvas now calls
+  the agent-server runtime directly instead of `/api/cloud-proxy` (fixes
+  405 on verification confirm and compact-context), keeps MCP OAuth
+  credentials on saves, skips consent when tokens still work, and warns
+  on unavailable models in saved LLM profiles. Runtime-surface only —
+  no repo change.
+
 ### OpenHands runtime surfaces
 
 Runtime policy surfaces the plugin declares but the host executes:
@@ -694,6 +748,17 @@ the updated symbol set: `kicad-cli sch erc` on
 `fixtures/smoke-board/board.kicad_sch` returns a clean report
 (`kicad_version 10.99.0`, no violations), so the update was adopted. The
 librarian + SHA-256 mechanism stays in place.
+
+On 2026-09-25 the pins moved to the 09-25 core
+`202609250241+83b5faf3d5~189~ubuntu26.04.1` and symbols
+`202609251227+151fb6a8c~12~ubuntu26.04.1` (footprints unchanged), and the
+CERN submodule moved to `4fc6742b43f7b8d59f48c80de7c424fe7841b40b`
+("Update KiCad libraries", 2026-09-25 01:14 UTC). The `_cvpcb.kiface` ERC
+failure was re-tested on a minimal image built with the new core and
+symbol set: `kicad-cli sch erc` on `fixtures/smoke-board/board.kicad_sch`
+returns a clean report (`kicad_version 10.99.0`, no violations, no
+`undefined symbol` crash), so the update was adopted. The librarian +
+SHA-256 mechanism stays in place.
 
 ## Sockets and permissions
 

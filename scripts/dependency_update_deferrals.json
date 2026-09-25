@@ -3,7 +3,7 @@
     {
       "target": "mcp",
       "version": "2.x",
-      "reason": "openhands-sdk 1.49.5 の fastmcp<4 (fastmcp-slim: mcp<2.0) 制約により保留。SDK が mcp 2 対応した版へ更新する際に再検討。",
+      "reason": "openhands-sdk 1.49.6 の fastmcp<4 (fastmcp-slim: mcp<2.0) 制約により保留。SDK が mcp 2 対応した版へ更新する際に再検討。",
       "recheck_by": "2026-12-31"
     },
     {

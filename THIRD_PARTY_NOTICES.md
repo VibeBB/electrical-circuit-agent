@@ -23,9 +23,9 @@ legal advice.
 - License: GPL-3.0-or-later
 - Source: <https://ppa.launchpadcontent.net/kicad/kicad-dev-nightly/>
 - Package: `kicad-nightly`
-- Version: `202609230242+3f88267300~189~ubuntu26.04.1`
-- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609230242+3f88267300~189~ubuntu26.04.1_amd64.deb)
-- Package SHA-256: `53b8d21ff77ff759bfc05fb39de9ebad43a9b9efb8513baae19250303e105006`
+- Version: `202609250241+83b5faf3d5~189~ubuntu26.04.1`
+- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609250241+83b5faf3d5~189~ubuntu26.04.1_amd64.deb)
+- Package SHA-256: `5a3fccf1bff078e130c4719af247dd5f27ab91c8c8b64a0a9908b1e90e2b93bd`
 - Executable: `/usr/lib/kicad-nightly/bin/kicad-cli`
 
 ## KiCad official symbol / footprint libraries
@@ -37,15 +37,15 @@ legal advice.
   waives Section 3 of CC-BY-SA.
 - Packages: `kicad-nightly-symbols`, `kicad-nightly-footprints`
 - Versions:
-  - symbols `202609221218+1565b6644~12~ubuntu26.04.1`
+  - symbols `202609251227+151fb6a8c~12~ubuntu26.04.1`
   - footprints `202609222017+55d9dd1a3~14~ubuntu26.04.1`
 
 ## CERN KiCad libraries
 
 - License: CERN-OHL-P-2.0
 - Source: <https://gitlab.com/ohwr/cern-kicad-libs>
-- Commit: `8139735c9fd5db6b2b4e77b036d58072f689554b`
-- Commit date: 2026-09-23 UTC
+- Commit: `4fc6742b43f7b8d59f48c80de7c424fe7841b40b`
+- Commit date: 2026-09-25 UTC
 - Location: `libraries/cern-kicad-libs`
 - The upstream LICENSE is preserved inside the submodule.
 
@@ -83,8 +83,8 @@ legal advice.
 ## OpenHands Software Agent SDK
 
 - License: MIT
-- Packages: `openhands-sdk==1.49.4`, `openhands-tools==1.49.4`
-- Source: <https://pypi.org/project/openhands-sdk/1.49.4/>
+- Packages: `openhands-sdk==1.49.6`, `openhands-tools==1.49.6`
+- Source: <https://pypi.org/project/openhands-sdk/1.49.6/>
 - The project uses the SDK as a dependency and does not vendor SDK code.
 
 ## Python runtime dependencies
@@ -94,8 +94,8 @@ direct dependencies are:
 
 - `mcp>=1.29,<2`: MIT — <https://pypi.org/project/mcp/>
 - `pydantic>=2`: MIT — <https://pypi.org/project/pydantic/>
-- `openhands-sdk==1.49.4`: MIT — <https://pypi.org/project/openhands-sdk/1.49.4/>
-- `openhands-tools==1.49.4`: MIT — <https://pypi.org/project/openhands-tools/1.49.4/>
+- `openhands-sdk==1.49.6`: MIT — <https://pypi.org/project/openhands-sdk/1.49.6/>
+- `openhands-tools==1.49.6`: MIT — <https://pypi.org/project/openhands-tools/1.49.6/>
 
 Transitive dependencies (anyio, httpx, starlette, etc.) follow the pins in
 `uv.lock` and each PyPI distribution's own metadata. This file is not legal
