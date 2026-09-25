@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 SKIP_DIRECTORIES = {".git", ".venv", "node_modules"}
 MAX_DEPTH = 4
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".svg"}
 
 
 def _load_report(path: Path) -> tuple[str, str, list[str]]:
@@ -42,6 +44,27 @@ def _missing_sections(design: Any) -> list[str]:
     if not design.advisory:
         missing.append("advisory")
     return missing
+
+
+def _review_record_for(image: Path) -> Path:
+    slug = re.sub(r"[^a-z0-9]+", "-", image.stem.lower()).strip("-") or "image"
+    return image.parent / f"review-visual-{slug}.advisory.json"
+
+
+def _unreviewed_images(report_dir: Path) -> list[Path]:
+    """Rendered images near the report lacking a review-visual record."""
+    directories = [report_dir]
+    reports_dir = report_dir / "circuit-reports"
+    if reports_dir.is_dir():
+        directories.append(reports_dir)
+    return sorted(
+        image
+        for directory in directories
+        for image in directory.iterdir()
+        if image.is_file()
+        and image.suffix.lower() in IMAGE_SUFFIXES
+        and not _review_record_for(image).exists()
+    )
 
 
 def _find_reports(root: Path) -> list[Path]:
@@ -78,6 +101,19 @@ def main() -> int:
             if failed:
                 lines.append(
                     "Before finishing, state each failing gate explicitly for: " + ", ".join(failed)
+                )
+            unreviewed = [
+                image
+                for path, _verdict, _missing in statuses
+                for image in _unreviewed_images(Path(path).parent)
+            ]
+            if unreviewed:
+                lines.append(
+                    "Rendered images without a review-visual-*.advisory.json "
+                    "record: "
+                    + "; ".join(str(image) for image in unreviewed)
+                    + " — vision-review every rendered image and write the "
+                    "record via the review-record CLI before finishing."
                 )
             context = "\n".join(lines)
         else:

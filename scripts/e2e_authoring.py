@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -36,6 +37,12 @@ from konnect_client import call_tool, notify, request
 # Cold-start toolset loads can exceed the default 30s MCP timeout while
 # Konnect brings the KiCad session up; keep them on a longer budget.
 LOAD_TOOLSET_TIMEOUT = 180.0
+
+# Advisory render/export ops drive a cold KiCad session and have timed out
+# at the 30s default in the field; give them a wider budget plus one retry
+# before recording an error.
+ADVISORY_TIMEOUT = 120.0
+ADVISORY_RETRIES = 2
 
 TOOLSETS = [
     "project",
@@ -239,6 +246,10 @@ def _has_short(value: object) -> bool:
 
 
 def _record(log: TextIO, entry: dict[str, object]) -> None:
+    # One schema per line: every record names its pipeline step.
+    if entry.get("step") is None:
+        step = entry.get("tool") or entry.get("method")
+        entry["step"] = step if isinstance(step, str) else "unknown"
     if entry.get("result") is None:
         entry["result"] = {"status": "recorded"}
     encoded = json.dumps(entry["result"], ensure_ascii=False, default=str, separators=(",", ":"))
@@ -290,9 +301,33 @@ def _advise(
     artifacts_fn: Callable[[object], list[str]] | None = None,
 ) -> tuple[object | None, int]:
     """Run a non-blocking Konnect observation and preserve every failure."""
+    result_value: object | None = None
+    last_error: BaseException = RuntimeError(f"{name}: advisory call did not run")
+    for _attempt in range(ADVISORY_RETRIES):
+        try:
+            raw_result, next_id = call_tool(
+                process, next_id, name, dict(arguments), ADVISORY_TIMEOUT
+            )
+            result_value = cast(object, raw_result)
+            break
+        except Exception as exc:
+            last_error = exc
+            if "timeout" not in str(exc).lower() or _attempt == ADVISORY_RETRIES - 1:
+                result_value = None
+                break
+            _record(
+                log,
+                {
+                    "step": name,
+                    "tool": name,
+                    "advisory": True,
+                    "payload": dict(arguments),
+                    "result": {"retry": True, "after": str(exc)},
+                },
+            )
     try:
-        raw_result, next_id = call_tool(process, next_id, name, dict(arguments))
-        result_value: object = cast(object, raw_result)
+        if result_value is None:
+            raise last_error
         status: AdvisoryStatus = "ok"
         if isinstance(result_value, dict):
             result_dict = cast(dict[str, object], result_value)
@@ -348,6 +383,18 @@ def _advise(
             },
         )
         return None, next_id
+
+
+def _prune_empty_dirs(root: Path) -> None:
+    """Drop empty export dirs left behind when Konnect ops timed out."""
+    if not root.is_dir():
+        return
+    for child in sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if child.is_dir():
+            with contextlib.suppress(OSError):
+                child.rmdir()
+    with contextlib.suppress(OSError):
+        root.rmdir()
 
 
 def _artifacts_under(root: Path, workdir: Path) -> list[str]:
@@ -1532,6 +1579,7 @@ def main(argv: list[str] | None = None) -> int:
                 server.wait()
         apiserver.stop()
         socket_path.unlink(missing_ok=True)
+        _prune_empty_dirs(args.workdir / "konnect-exports")
 
 
 if __name__ == "__main__":

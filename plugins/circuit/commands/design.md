@@ -63,6 +63,13 @@ baseline or snapshot exists (write `*.diff.json` under `circuit-reports/`).
 `circuit_stackup` writes a deterministic section-diagram SVG next to the
 stackup JSON for cross-section review; `circuit_import` and
 `circuit_rasterize` cover foreign CAD files and PDF intake.
+Visual review is required, never skipped: every rendered image under
+`circuit-reports/` — each `*.png` board view, side elevation, schematic page
+plot, and layer plot — must be vision-inspected and get a
+`review-visual-<slug>.advisory.json` with a substantive multi-sentence
+impression (the validator rejects terse records); an unreviewed render is
+unfinished work.
+
 Record every advisory check outcome as a
 `circuit-reports/<stage>-<slug>.advisory.json` file — one JSON object per check
 following the AdvisoryResult contract: `{"tool": <konnect tool or check name>,

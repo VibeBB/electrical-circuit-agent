@@ -610,3 +610,52 @@ def test_safety_rail_allows_normal_commands() -> None:
         "find . -name '*.kicad_sch'",
     ):
         assert _run_safety_rail(command).returncode == 0, command
+
+
+def test_record_vision_tool_event_records_actor(tmp_path: Path) -> None:
+    """Payload identity keys land on the record so each event is attributable."""
+    payload = {
+        "working_dir": str(tmp_path),
+        "session_id": "session-1",
+        "tool_name": "inspect_image_with_vision",
+        "tool_input": {"image_index": 0, "question": "Check for unrouted pads"},
+        "tool_response": {
+            "answer": "No unrouted pads are visible.",
+            "profile_name": "vision",
+            "model": "vision-model-1",
+        },
+        "agent_name": "circuit-review",
+        "tool_call_id": "call-11",
+    }
+
+    assert _run_vision_hook(payload).returncode == 0
+
+    events = tmp_path / "observations" / "circuit" / "vision-tool-events.jsonl"
+    record = json.loads(events.read_text(encoding="utf-8").splitlines()[0])
+    assert record["actor"] == {"agent_name": "circuit-review", "tool_call_id": "call-11"}
+    assert record["tool_call_id"] == "call-11"
+
+
+def test_record_image_observation_records_actor(tmp_path: Path) -> None:
+    image = tmp_path / "circuit-reports" / "render-top.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    payload = {
+        "working_dir": str(tmp_path),
+        "tool_name": "circuit_render",
+        "tool_input": {"board_path": "b.kicad_pcb"},
+        "tool_response": {
+            "content": [
+                {"type": "text", "text": json.dumps({"output_path": str(image)})},
+            ]
+        },
+        "session_id": "s1",
+        "subagent_type": "circuit-layout",
+        "action_id": "act-5",
+    }
+
+    assert _run_observe_hook(payload).returncode == 0
+
+    records = _observations(tmp_path)
+    assert records[0]["actor"] == {"action_id": "act-5", "subagent_type": "circuit-layout"}
+    assert records[0]["tool_call_id"] == "act-5"

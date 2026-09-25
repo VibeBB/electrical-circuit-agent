@@ -126,8 +126,18 @@ sheet on three axes:
 
 Then say what the drawing made you think: every visual review ends with
 a subjective `impression` — what the sheet communicates well, what it
-leaves unsaid, whether a stranger could build from it. Write it in your
-reply and record it in the record's `impression` field.
+leaves unsaid, whether a stranger could build from it. The impression is
+a multi-sentence reading, not a verdict line: name strengths and
+residual gaps concretely (the record validator rejects anything under
+240 characters or with fewer than two sentences, so a one-liner never
+reaches the file). Write it in your reply and record it in the record's
+`impression` field.
+
+Review records are mandatory, not optional: every rendered image under
+`circuit-reports/` — each `*.png` board view, side elevation, schematic
+page plot, and layer plot — must be inspected through the vision lane and
+get a `review-visual-<slug>.advisory.json`. An unreviewed render is
+unfinished work: the stop hook lists any image missing its record.
 
 Record every observation as advisory evidence for a human reviewer — write a
 `circuit-reports/review-visual-<slug>.advisory.json` file per image with
@@ -146,8 +156,9 @@ python3 plugins/circuit/scripts/circuit_launcher.py review-record \
 
 where `findings.json` is a list of
 `{"category": ..., "severity": "error|warning|info", "note": ..., "bbox": [x, y, w, h]?}`.
-`impression` is required (a record without one fails validation and is
-discarded); `bbox` is a normalized `[x, y, w, h]` region when the model can
+`impression` is required and floored at 240 characters with at least two
+sentences (a terse record fails validation and is discarded); `bbox` is a
+normalized `[x, y, w, h]` region when the model can
 localize. Finding categories include the drawing-quality set
 `ambiguous_notation`, `missing_dimension`, `missing_manufacturing_info`, and
 `design_intent`.

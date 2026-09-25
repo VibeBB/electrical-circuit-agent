@@ -57,6 +57,9 @@ _LABEL_NEAR_SYMBOL_MM = 20.0
 # Two power flags closer than this read as a redundant cluster; a rail
 # wants one flag at its source, not a pile at every driven pin.
 _PWR_FLAG_MIN_SPACING_MM = 15.0
+# A component center this close to a power-symbol anchor reads as one
+# blob — the two glyphs share a grid pitch and neither is legible.
+_POWER_SYMBOL_OVERLAP_MM = 2.54
 _WIRE_ITEMS = {"wire", "bus"}
 _LABEL_ITEMS = {"label", "global_label", "hierarchical_label"}
 _POSITIONED_ITEMS = {
@@ -173,6 +176,8 @@ def lint_schematic(path: Path) -> SchLintReport:
     net_labels: list[tuple[str, float, float]] = []
     symbol_centers: list[tuple[float, float]] = []
     power_flags: list[tuple[float, float]] = []
+    power_symbols: list[tuple[str, float, float]] = []
+    component_positions: list[tuple[str, float, float]] = []
     has_text_notes = False
     for node in root[1:]:
         if not isinstance(node, list) or not node or not isinstance(node[0], str):
@@ -227,8 +232,19 @@ def lint_schematic(path: Path) -> SchLintReport:
             and lib_id[1].startswith("power:")
         ):
             non_power_symbols += 1
-        elif lib_id[1] == "power:PWR_FLAG":
-            power_flags.append(position)
+            ref = next(
+                (
+                    prop[2]
+                    for prop in _find_children(node, "property")
+                    if len(prop) > 2 and prop[1] == "Reference"
+                ),
+                "?",
+            )
+            component_positions.append((str(ref), px, py))
+        else:
+            power_symbols.append((str(lib_id[1]), px, py))
+            if lib_id[1] == "power:PWR_FLAG":
+                power_flags.append(position)
         uuid = next(
             (
                 child[1]
@@ -398,6 +414,28 @@ def lint_schematic(path: Path) -> SchLintReport:
                     "wire the main signal chain and reserve labels for power "
                     "rails and crossing nets"
                 ),
+            )
+        )
+
+    overlaps = [
+        (ref, power, cx, cy)
+        for ref, cx, cy in component_positions
+        for power, sx, sy in power_symbols
+        if (cx - sx) ** 2 + (cy - sy) ** 2 < _POWER_SYMBOL_OVERLAP_MM**2
+    ]
+    if overlaps:
+        findings.append(
+            SchLintFinding(
+                type="component_on_power_symbol",
+                severity="warning",
+                description=(
+                    f"{len(overlaps)} component(s) sit on a power symbol "
+                    f"anchor (under {_POWER_SYMBOL_OVERLAP_MM:.2f}mm); move the "
+                    "power symbol off the component so both read clearly"
+                ),
+                items=[
+                    f"{ref} at ({cx:.2f},{cy:.2f}) on {power}" for ref, power, cx, cy in overlaps
+                ],
             )
         )
 

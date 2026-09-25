@@ -13,6 +13,24 @@ from typing import Any, cast
 EVENTS_ENV = "CIRCUIT_VISION_TOOL_EVENTS"
 EVENTS_RELATIVE_PATH = Path("observations/circuit/vision-tool-events.jsonl")
 VISION_TOOL_NAME = "inspect_image_with_vision"
+# Payload keys that identify which agent/tool call produced the event;
+# different SDK versions expose different ones.
+_ACTOR_KEYS = {
+    "agent",
+    "agent_name",
+    "actor",
+    "subagent_type",
+    "task_agent",
+    "action_id",
+    "tool_call_id",
+    "parent_id",
+    "call_id",
+}
+
+
+def _actor(payload: dict[str, Any]) -> dict[str, Any] | None:
+    actor = {key: payload[key] for key in sorted(payload) if key in _ACTOR_KEYS}
+    return actor or None
 
 
 def _project_dir(payload: dict[str, Any]) -> Path:
@@ -77,6 +95,8 @@ def _record(payload: dict[str, Any]) -> dict[str, Any] | None:
         "question": tool_input.get("question"),
         "identity": identity,
         "session_id": payload.get("session_id"),
+        "actor": _actor(payload),
+        "tool_call_id": payload.get("tool_call_id") or payload.get("action_id"),
     }
 
 
@@ -109,6 +129,8 @@ def main() -> int:
             "response_sha256": identity["response_sha256"],
             "recorded_at": datetime.now(UTC).isoformat(),
             "session_id": candidate["session_id"],
+            "actor": candidate["actor"],
+            "tool_call_id": candidate["tool_call_id"],
         }
         with path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
