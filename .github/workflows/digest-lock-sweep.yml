@@ -2,7 +2,7 @@ name: Digest lock PR sweep
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "17 */6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -25,8 +25,9 @@ jobs:
           set -uo pipefail
           # Lock PRs sometimes stay open with auto-merge armed and every
           # required check green while GitHub's mergeability evaluation
-          # reports "blocked" indefinitely. Re-try the merge hourly; the
-          # branch ruleset still gates it, so an unsatisfied PR cannot merge.
+          # reports "blocked" indefinitely. Re-try the merge periodically;
+          # the branch ruleset still gates it, so an unsatisfied PR
+          # cannot merge.
           prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 50 \
             --json number,headRefName \
             --jq '.[] | select(.headRefName | startswith("bot/update-image-digests-")) | .number')
