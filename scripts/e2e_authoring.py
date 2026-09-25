@@ -938,16 +938,26 @@ def main(argv: list[str] | None = None) -> int:
                 log,
                 next_id,
             )
-            ui_health, next_id = _call(
-                process,
-                next_id,
-                "check_kicad_ui",
-                {"timeout_seconds": 5},
-                log,
-            )
-            ui_health_dict = (
-                cast(dict[str, object], ui_health) if isinstance(ui_health, dict) else {}
-            )
+            # The socket file appears before the KiCad IPC server answers
+            # requests (AS_NOT_READY until the board finishes loading), so
+            # poll check_kicad_ui until it reports responsive.
+            ui_health: object = {}
+            ui_health_dict: dict[str, object] = {}
+            for attempt in range(10):
+                ui_health, next_id = _call(
+                    process,
+                    next_id,
+                    "check_kicad_ui",
+                    {"timeout_seconds": 5},
+                    log,
+                )
+                ui_health_dict = (
+                    cast(dict[str, object], ui_health) if isinstance(ui_health, dict) else {}
+                )
+                if ui_health_dict.get("ipc_responsive") is True:
+                    break
+                if attempt < 9:
+                    time.sleep(2.0)
             if ui_health_dict.get("ipc_responsive") is not True:
                 raise StepFailure("check_kicad_ui", f"IPC health check failed: {ui_health}")
             update, next_id = _call(
