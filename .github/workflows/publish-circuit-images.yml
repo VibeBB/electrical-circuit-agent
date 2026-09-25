@@ -386,8 +386,18 @@ jobs:
             sleep 10
           done
           if [ "$merged" != true ]; then
-            echo "auto-merge is armed on $pr_url but the merge did not land within the wait; post-merge checks skipped" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            # Auto-merge can stay armed indefinitely even with every required
+            # check green when the arm races the last check completion and no
+            # further check event triggers a re-evaluation. A direct merge is
+            # still gated by the branch ruleset, so it can only land when the
+            # required checks actually pass; on failure the armed auto-merge
+            # is left in place for GitHub to resolve later.
+            if retry gh pr merge --repo "$GITHUB_REPOSITORY" --squash --delete-branch "$pr_url"; then
+              merged=true
+            else
+              echo "auto-merge is armed on $pr_url and a direct merge attempt was blocked; the lock PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
           fi
           # The post-merge checks are fire-and-forget: this job dispatches
           # them on main, records their run URLs, and finishes. Completion
