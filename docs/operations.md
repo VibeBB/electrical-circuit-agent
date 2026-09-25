@@ -314,8 +314,12 @@ image tag against the latest `uv` release.
     server-side; authoring sub-agents declare `model: vibebb-author`,
     circuit-review `model: vibebb-review` (profiles resolved from
     `~/.openhands/profiles/` via `LLMProfileStore`; a missing profile
-    hard-fails the `task` spawn — create profiles first or set
-    `model: inherit` locally). `profile_store_dir` stays discouraged
+    hard-fails the `task` spawn). The session_start
+    `ensure-llm-profiles` hook clones the conversation's
+    `active_profile` into `vibebb-author.json`/`vibebb-review.json` when
+    they are absent, so `task` delegation works out of the box and
+    operators can re-point each lane afterwards; `model: inherit`
+    remains the local fallback. `profile_store_dir` stays discouraged
     (splits provider-connections resolution).
   - `SwitchLLMTool` / agent profiles (`mcp_server_refs`, `secret_refs`) /
     critic not adoptable at plugin boundary — server-side scoping;
