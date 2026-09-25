@@ -18,9 +18,10 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import brief, connectivity, doctor, fit_sheet, intake, netlist, sch_lint
+from .advisory import VisualChecklist
 
 _E2E_CANDIDATES = [
     # repo checkout: <root>/src/circuit/cli.py -> <root>/scripts/e2e_authoring.py
@@ -90,6 +91,42 @@ def cmd_fit_sheet(args: argparse.Namespace) -> int:
     except (ValueError, OSError) as exc:
         return _emit({"verdict": "fail", "stage": "fit-sheet", "detail": str(exc)})
     return _emit({"verdict": "pass", "clamped": len(moves), "items": moves})
+
+
+def cmd_review_record(args: argparse.Namespace) -> int:
+    """Write `review-visual-<slug>.advisory.json` for a reviewed image.
+
+    The reviewer supplies impression/findings as JSON; this command binds
+    them to the image bytes (sha256), validates the detail against the
+    typed schema, and writes the record deterministically — instead of a
+    hand-assembled JSON that could drift from `advisory.py`.
+    """
+    from .advisory import write_review_record
+
+    image = Path(args.image)
+    try:
+        raw: Any = json.loads(Path(args.findings).read_text(encoding="utf-8"))
+        raw_list = cast(list[Any], raw) if isinstance(raw, list) else None
+        if raw_list is None or not all(isinstance(item, dict) for item in raw_list):
+            raise ValueError("findings JSON must be a list of objects")
+        findings = cast(list[dict[str, Any]], raw_list)
+        impression = (
+            Path(args.impression_file).read_text(encoding="utf-8").strip()
+            if args.impression_file
+            else (args.impression or "").strip()
+        )
+        path = write_review_record(
+            image,
+            model=args.model,
+            checklist=args.checklist,
+            impression=impression,
+            findings=findings,
+            summary=args.summary or "",
+            out_dir=Path(args.out) if args.out else None,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _emit({"verdict": "fail", "stage": "review-record", "detail": str(exc)})
+    return _emit({"verdict": "pass", "record": str(path)})
 
 
 def cmd_connectivity(args: argparse.Namespace) -> int:
@@ -178,6 +215,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     fit_sheet_parser.add_argument("schematic")
     fit_sheet_parser.add_argument("--margin", type=float, default=fit_sheet.EDGE_MARGIN_MM)
     fit_sheet_parser.set_defaults(handler=cmd_fit_sheet)
+
+    review_record_parser = subparsers.add_parser(
+        "review-record",
+        help="write a validated review-visual-<slug>.advisory.json for an image",
+    )
+    review_record_parser.add_argument("--image", required=True)
+    review_record_parser.add_argument("--model", required=True, help="reviewer model name")
+    review_record_parser.add_argument(
+        "--checklist",
+        required=True,
+        choices=list(VisualChecklist.__args__),
+    )
+    review_record_parser.add_argument("--impression", default=None)
+    review_record_parser.add_argument(
+        "--impression-file",
+        default=None,
+        help="text file with the subjective reading (alternative to --impression)",
+    )
+    review_record_parser.add_argument(
+        "--findings",
+        required=True,
+        help="JSON file: list of {category, severity, note, bbox?}",
+    )
+    review_record_parser.add_argument("--summary", default=None)
+    review_record_parser.add_argument("--out", default=None, help="output dir (default: image dir)")
+    review_record_parser.set_defaults(handler=cmd_review_record)
 
     connectivity_parser = subparsers.add_parser(
         "connectivity", help="emit the wire-agent ConnectivitySource contract"

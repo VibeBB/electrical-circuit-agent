@@ -1,3 +1,7 @@
+import hashlib
+import json
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -5,6 +9,8 @@ from circuit.advisory import (
     AdvisoryResult,
     VisualReviewDetail,
     parse_visual_review,
+    review_record_path,
+    write_review_record,
 )
 
 
@@ -106,3 +112,41 @@ def test_visual_review_detail_accepts_drawing_quality_categories() -> None:
             }
         )
         assert detail.findings[0].category == category
+
+
+def test_review_record_path_slugifies(tmp_path: Path) -> None:
+    image = tmp_path / "Schematic Page (v2).PNG"
+    image.write_bytes(b"x")
+    path = review_record_path(image)
+    assert path.name == "review-visual-schematic-page-v2.advisory.json"
+
+
+def test_write_review_record_binds_sha256(tmp_path: Path) -> None:
+    image = tmp_path / "schematic.png"
+    image.write_bytes(b"PNGDATA")
+    path = write_review_record(
+        image,
+        model="kimi-k3",
+        checklist="schematic",
+        impression="clean sheet",
+        findings=[{"category": "label_readability", "severity": "info", "note": "ok"}],
+    )
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["tool"] == "vision_review"
+    assert record["stage"] == "review"
+    assert record["detail"]["image_sha256"] == hashlib.sha256(b"PNGDATA").hexdigest()
+    assert parse_visual_review(AdvisoryResult.model_validate(record)) is not None
+
+
+def test_write_review_record_fails_closed_on_bad_finding(tmp_path: Path) -> None:
+    image = tmp_path / "schematic.png"
+    image.write_bytes(b"PNGDATA")
+    with pytest.raises(ValidationError):
+        write_review_record(
+            image,
+            model="kimi-k3",
+            checklist="schematic",
+            impression="x",
+            findings=[{"category": "not_a_category", "severity": "info", "note": "x"}],
+        )
+    assert not (tmp_path / "review-visual-schematic.advisory.json").exists()

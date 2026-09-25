@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import hashlib
+import re
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -100,3 +103,70 @@ class AdvisoryResult(BaseModel):
 def merge_detail(result: AdvisoryResult, extra: dict[str, object]) -> AdvisoryResult:
     result.detail = {**(result.detail or {}), **extra}
     return result
+
+
+def review_record_path(image_path: Path, out_dir: Path | None = None) -> Path:
+    """`review-visual-<slug>.advisory.json` next to the image (or out_dir)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", image_path.stem.lower()).strip("-") or "image"
+    directory = out_dir if out_dir is not None else image_path.parent
+    return directory / f"review-visual-{slug}.advisory.json"
+
+
+def build_review_record(
+    image_path: Path,
+    *,
+    model: str,
+    checklist: VisualChecklist,
+    impression: str,
+    findings: list[dict[str, Any]],
+    summary: str = "",
+) -> AdvisoryResult:
+    """Build the typed `vision_review` advisory record for one image.
+
+    The image sha256 is computed here so the record always binds the
+    judgment to the exact bytes reviewed; the detail is validated with
+    the same schema `parse_visual_review` enforces, so a bad payload
+    raises instead of producing a malformed record.
+    """
+    sha256 = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    detail = VisualReviewDetail(
+        image_path=str(image_path),
+        image_sha256=sha256,
+        model=model,
+        checklist=checklist,
+        impression=impression,
+        findings=[VisualFinding.model_validate(f) for f in findings],
+    )
+    return AdvisoryResult(
+        tool=VISION_REVIEW_TOOL,
+        stage="review",
+        status="ok",
+        summary=summary or f"visual review of {image_path.name}",
+        artifacts=[str(image_path)],
+        detail=detail.model_dump(mode="json"),
+    )
+
+
+def write_review_record(
+    image_path: Path,
+    *,
+    model: str,
+    checklist: VisualChecklist,
+    impression: str,
+    findings: list[dict[str, Any]],
+    summary: str = "",
+    out_dir: Path | None = None,
+) -> Path:
+    """Validate and write `review-visual-<slug>.advisory.json`; returns it."""
+    record = build_review_record(
+        image_path,
+        model=model,
+        checklist=checklist,
+        impression=impression,
+        findings=findings,
+        summary=summary,
+    )
+    path = review_record_path(image_path, out_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(record.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return path
