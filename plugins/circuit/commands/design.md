@@ -68,7 +68,11 @@ Record every advisory check outcome as a
 following the AdvisoryResult contract: `{"tool": <konnect tool or check name>,
 "stage": "intake|schematic|layout|review|manufacturing", "status":
 "ok|error|not_applicable", "summary": "<one line>", "artifacts": [<paths>],
-"detail": {...}}`; `circuit_design_report` aggregates them. Finish with
+"detail": {...}}`; `circuit_design_report` aggregates them. For a visual
+review of a rendered image, do not hand-assemble the record: run
+`python -m circuit review-record` (or `circuit_launcher.py review-record`)
+so the `vision_review` detail is sha256-bound to the image bytes and
+validated against the `VisualReviewDetail` schema. Finish with
 `circuit_design_report`.
 
 The design report collects exports, renders, diffs, the jobset record, and the

@@ -78,8 +78,11 @@ def test_image_from_lock_reads_skill_pin(tmp_path: Path) -> None:
     assert module._image_from_lock(tmp_path) == "ghcr.io/x/circuit-tools@sha256:abc"
 
 
-def test_ensure_image_warn_mode_never_pulls(tmp_path: Path) -> None:
+def test_ensure_image_warn_mode_never_pulls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """pull=False must report failure without running docker pull."""
+    monkeypatch.delenv("CIRCUIT_TOOLS_IMAGE", raising=False)
     module = _load_launcher()
     # Point resolution at a pin whose image cannot exist locally.
     skill_dir = tmp_path / "skills" / "circuit-workflow"
