@@ -61,3 +61,63 @@ def test_plugin_command_argument_hints() -> None:
         "erc": "<schematic.kicad_sch>",
         "export": "<board.kicad_pcb> <kind>",
     }
+
+
+def test_ensure_llm_profiles_provisions(tmp_path: Path) -> None:
+    """The session_start hook clones active_profile into vibebb-* slots."""
+    import subprocess
+    import sys
+
+    script = PLUGIN / "hooks" / "scripts" / "ensure_llm_profiles.py"
+    assert script.is_file()
+    home = tmp_path / "home"
+    profiles = home / ".openhands" / "profiles"
+    profiles.mkdir(parents=True)
+    (home / ".openhands" / "settings.json").write_text(
+        json.dumps({"active_profile": "test-model"}), encoding="utf-8"
+    )
+    template = {"schema_version": 1, "model": "test-model", "auth_type": "api_key"}
+    (profiles / "test-model.json").write_text(json.dumps(template), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+        check=False,
+    )
+    assert proc.returncode == 0
+    out = json.loads(proc.stdout)
+    assert out["missing"] == []
+    assert (
+        json.loads((profiles / "vibebb-author.json").read_text(encoding="utf-8"))["model"]
+        == "test-model"
+    )
+    assert (
+        json.loads((profiles / "vibebb-review.json").read_text(encoding="utf-8"))["model"]
+        == "test-model"
+    )
+    # Idempotent: a second run provisions nothing and still reports ok.
+    proc2 = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+        check=False,
+    )
+    assert json.loads(proc2.stdout)["findings"] == []
+
+
+def test_ensure_llm_profiles_tolerates_missing_settings(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    script = PLUGIN / "hooks" / "scripts" / "ensure_llm_profiles.py"
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        env={"HOME": str(tmp_path / "nohome"), "PATH": "/usr/bin:/bin"},
+        check=False,
+    )
+    assert proc.returncode == 0
+    assert json.loads(proc.stdout)["missing"] == ["vibebb-author", "vibebb-review"]
