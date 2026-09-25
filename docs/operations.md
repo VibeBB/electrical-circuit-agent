@@ -375,7 +375,9 @@ docker (`docker run --rm -i --network none --user uid:gid`, workspace mounted
 at its own path). The launcher resolves the tools image in order:
 
 1. `$CIRCUIT_TOOLS_IMAGE` (a full ref, optionally digest-pinned)
-2. `plugins/circuit/tools-image.json` or the repo cache's
+2. `plugins/circuit/tools-image.json`,
+   `plugins/circuit/skills/*/tools-image.json` (the pin ships inside the
+   plugin, rewritten by the publish workflow), or the repo cache's
    `docker/image-digests.json` (`circuit_tools` entry)
 3. none resolvable, or the pinned ref cannot be pulled -> error
    (docker-only: the launcher never falls back to a local build)
@@ -389,6 +391,15 @@ and mounts the first matching source tree read-only at `/plugin-src`
 3. `/opt/circuit/src` (the circuit-tools image layout)
 4. `<repo>/src` in a repository checkout
 5. otherwise the image's own baked package is used
+
+Cache candidates are searched under both `$HOME` and the account's real
+home, so a `HOME` override applied to the container cannot blind the
+launcher. Inside the container `HOME`/`TMPDIR`/`XDG_*` are pinned to `/tmp`:
+the image runs as the host uid, whose passwd entry and home do not exist
+there, and a forwarded host home left fontconfig/KiCad without writable
+directories. In `--warn` doctor mode (the SessionStart hook) the launcher
+reports a missing local image instead of pulling it inside the 60s hook
+timeout — run `circuit_launcher.py prewarm` to fetch it.
 
 The KiCad API socket (`KICAD_API_SOCKET`, default `/tmp/circuit-kicad.sock`) is
 bind-mounted into the container when it exists on the host; `konnect` runs

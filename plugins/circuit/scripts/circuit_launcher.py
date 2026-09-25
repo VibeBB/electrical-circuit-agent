@@ -15,9 +15,15 @@ Source resolution order (first directory containing circuit/__init__.py wins):
   4. <repo>/src when running from a repository checkout
   5. none found -> the image's own baked package is used
 
+The OpenHands cache candidates are searched under both $HOME and the
+account's real home directory: callers sometimes override HOME for the
+tools container (the image runs as the host uid and its baked-in home is
+not writable), and a redirected HOME must not blind the cache lookup.
+
 Image resolution order (first hit wins):
   1. $CIRCUIT_TOOLS_IMAGE (full ref, e.g. ghcr.io/.../circuit-tools@sha256:...)
-  2. <plugin>/tools-image.json or repo-cache docker/image-digests.json
+  2. <plugin>/tools-image.json or <plugin>/skills/*/tools-image.json or
+     repo-cache docker/image-digests.json
      (circuit_tools entry: image + digest, falling back to image + tag)
   3. none resolvable, or the pinned ref cannot be pulled -> error
      (docker-only: the launcher never falls back to a local build)
@@ -34,6 +40,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -52,9 +59,32 @@ _CLI_SUBCOMMANDS = {"author", "intake", "sch-lint"}
 
 _CONTAINER_SRC = "/plugin-src"
 _ENV_PREFIXES = ("OPENHANDS_", "CIRCUIT_")
-_ENV_KEYS = ("HOME", "TMPDIR", "KICAD_API_SOCKET", "CIRCUIT_KONNECT")
+_ENV_KEYS = ("TMPDIR", "KICAD_API_SOCKET", "CIRCUIT_KONNECT")
 _API_SOCKET_PATH = "/tmp/circuit-kicad.sock"
 _MODULE_NAME = re.compile(r"^[a-z_]+$")
+
+# The container runs as the host uid, whose passwd entry and home do not
+# exist inside the image: a forwarded HOME/XDG leaves fontconfig, KiCad and
+# friends without writable directories. Point the transient state at /tmp.
+_CONTAINER_ENV = {
+    "HOME": "/tmp",
+    "TMPDIR": "/tmp",
+    "XDG_CACHE_HOME": "/tmp/.cache",
+    "XDG_CONFIG_HOME": "/tmp/.config",
+    "XDG_DATA_HOME": "/tmp/.local/share",
+}
+
+
+def _homes() -> list[Path]:
+    """$HOME first, then the account's real home (HOME may be overridden)."""
+    homes = [Path.home()]
+    try:
+        real = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (KeyError, OSError):
+        return homes
+    if real != homes[0]:
+        homes.append(real)
+    return homes
 
 
 def _candidates(plugin_root: Path) -> list[Path]:
@@ -62,18 +92,19 @@ def _candidates(plugin_root: Path) -> list[Path]:
     env_src = os.environ.get("CIRCUIT_SRC")
     if env_src:
         candidates.append(Path(env_src))
-    cache = Path.home() / ".openhands" / "cache" / "extensions"
-    try:
-        if cache.is_dir():
-            candidates.extend(
-                sorted(
-                    cache.glob("electrical-circuit-agent-*/src"),
-                    key=lambda path: path.stat().st_mtime,
-                    reverse=True,
+    for home in _homes():
+        cache = home / ".openhands" / "cache" / "extensions"
+        try:
+            if cache.is_dir():
+                candidates.extend(
+                    sorted(
+                        cache.glob("electrical-circuit-agent-*/src"),
+                        key=lambda path: path.stat().st_mtime,
+                        reverse=True,
+                    )
                 )
-            )
-    except OSError:
-        pass
+        except OSError:
+            pass
     candidates.append(Path("/opt/circuit/src"))
     candidates.append(plugin_root.parent.parent / "src")
     return candidates
@@ -95,18 +126,19 @@ def _repo_dirs(plugin_root: Path) -> list[Path]:
     repo_checkout = plugin_root.parent.parent
     if (repo_checkout / "docker").is_dir():
         dirs.append(repo_checkout)
-    cache = Path.home() / ".openhands" / "cache" / "extensions"
-    try:
-        if cache.is_dir():
-            dirs.extend(
-                sorted(
-                    (p for p in cache.glob("electrical-circuit-agent-*") if p.is_dir()),
-                    key=lambda path: path.stat().st_mtime,
-                    reverse=True,
+    for home in _homes():
+        cache = home / ".openhands" / "cache" / "extensions"
+        try:
+            if cache.is_dir():
+                dirs.extend(
+                    sorted(
+                        (p for p in cache.glob("electrical-circuit-agent-*") if p.is_dir()),
+                        key=lambda path: path.stat().st_mtime,
+                        reverse=True,
+                    )
                 )
-            )
-    except OSError:
-        pass
+        except OSError:
+            pass
     return dirs
 
 
@@ -129,6 +161,14 @@ def _image_from_lock(plugin_root: Path) -> str | None:
     ref = _lock_entry_ref(plugin_root / "tools-image.json", None)
     if ref:
         return ref
+    try:
+        skill_pins = sorted(plugin_root.glob("skills/*/tools-image.json"))
+    except OSError:
+        skill_pins = []
+    for pin in skill_pins:
+        ref = _lock_entry_ref(pin, None)
+        if ref:
+            return ref
     for repo_dir in _repo_dirs(plugin_root):
         ref = _lock_entry_ref(repo_dir / "docker" / "image-digests.json", "circuit_tools")
         if ref:
@@ -140,8 +180,11 @@ def _docker() -> str | None:
     return shutil.which("docker")
 
 
-def _ensure_image(plugin_root: Path) -> str:
-    """Resolve the pinned tools image ref; fail when none is available."""
+def _ensure_image(plugin_root: Path, *, pull: bool = True) -> str:
+    """Resolve the pinned tools image ref; fail when none is available.
+
+    ``pull=False`` reports a missing local image without pulling it — the
+    SessionStart doctor hook (--warn) must stay lightweight."""
     docker = _docker()
     if docker is None:
         raise RuntimeError("docker not found on PATH (circuit runs docker-only)")
@@ -162,6 +205,11 @@ def _ensure_image(plugin_root: Path) -> str:
         == 0
     ):
         return ref
+    if not pull:
+        raise RuntimeError(
+            f"circuit tools image {ref} not pulled locally; "
+            "run 'circuit_launcher.py prewarm' to fetch it"
+        )
     print(f"circuit_launcher: pulling tools image {ref}", file=sys.stderr)
     if (
         subprocess.run(
@@ -206,6 +254,8 @@ def _docker_argv(image: str, source: Path | None, inner_argv: list[str]) -> list
     for key, value in os.environ.items():
         if key in _ENV_KEYS or any(key.startswith(p) for p in _ENV_PREFIXES):
             argv += ["-e", f"{key}={value}"]
+    for key, value in _CONTAINER_ENV.items():
+        argv += ["-e", f"{key}={value}"]
     argv.append(image)
     argv += inner_argv
     return argv
@@ -232,7 +282,7 @@ def main() -> int:
 
     plugin_root = Path(__file__).resolve().parents[1]
     try:
-        image = _ensure_image(plugin_root)
+        image = _ensure_image(plugin_root, pull="--warn" not in argv)
     except RuntimeError as exc:
         return _warn_or_die(str(exc), argv)
     if argv[0] == "prewarm":
