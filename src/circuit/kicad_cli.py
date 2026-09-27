@@ -10,7 +10,7 @@ import shlex
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 
 from pydantic import BaseModel, Field
 
@@ -304,12 +304,16 @@ ExportKind = Literal[
     "fp_svg",
 ]
 
+EXPORT_KINDS: tuple[ExportKind, ...] = get_args(ExportKind)
 
 DiffFormat = Literal["json", "png", "svg"]
+DIFF_FORMATS: tuple[DiffFormat, ...] = get_args(DiffFormat)
+DiffKind = Literal["sch", "pcb"]
+DIFF_KINDS: tuple[DiffKind, ...] = get_args(DiffKind)
 
 
 class DiffReport(BaseModel):
-    kind: Literal["sch", "pcb"]
+    kind: DiffKind
     left: Path
     right: Path
     identical: bool
@@ -432,6 +436,7 @@ def _require_input(path: Path, label: str) -> None:
 
 
 ImportKind = Literal["sch", "pcb"]
+IMPORT_KINDS: tuple[ImportKind, ...] = get_args(ImportKind)
 
 _IMPORT_FORMATS: dict[ImportKind, frozenset[str]] = {
     "sch": frozenset(
@@ -553,8 +558,11 @@ def export_stackup(pcb: Path, out: Path) -> dict[str, object]:
 
 
 CameraSide = Literal["top", "bottom", "left", "right", "front", "back"]
+CAMERA_SIDES: tuple[CameraSide, ...] = get_args(CameraSide)
 RenderBackground = Literal["default", "transparent", "opaque"]
+RENDER_BACKGROUNDS: tuple[RenderBackground, ...] = get_args(RenderBackground)
 RenderQuality = Literal["basic", "high", "user", "job_settings"]
+RENDER_QUALITIES: tuple[RenderQuality, ...] = get_args(RenderQuality)
 
 _XYZ_PATTERN = re.compile(r"^-?\d+(?:\.\d+)?(,-?\d+(?:\.\d+)?){2}$")
 
@@ -726,7 +734,7 @@ def render_layers(
 
 
 def diff(
-    kind: Literal["sch", "pcb"],
+    kind: DiffKind,
     left: Path,
     right: Path,
     out: Path,
