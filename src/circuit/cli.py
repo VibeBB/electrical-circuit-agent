@@ -18,10 +18,14 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Final, Literal, cast
 
 from . import brief, connectivity, doctor, fit_sheet, intake, netlist, sch_lint
 from .advisory import VisualChecklist
+
+Verdict = Literal["pass", "fail"]
+PASS: Final[Verdict] = "pass"
+FAIL: Final[Verdict] = "fail"
 
 _E2E_CANDIDATES = [
     # repo checkout: <root>/src/circuit/cli.py -> <root>/scripts/e2e_authoring.py
@@ -39,9 +43,13 @@ def _e2e_script() -> Path | None:
 
 
 def _emit(payload: dict[str, Any]) -> int:
+    """Print the JSON verdict; exit 0 only when ``payload["verdict"] == PASS``."""
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    verdict = payload.get("verdict", payload.get("status"))
-    return 0 if verdict in ("pass", "ready", "ok") else 1
+    return 0 if payload["verdict"] == PASS else 1
+
+
+def _fail(stage: str, detail: str) -> int:
+    return _emit({"verdict": FAIL, "stage": stage, "detail": detail})
 
 
 def _load_brief(path: str) -> brief.DesignBrief:
@@ -68,9 +76,9 @@ def cmd_intake(args: argparse.Namespace) -> int:
             intake_path=intake_path,
         )
     except (ValueError, OSError) as exc:
-        return _emit({"verdict": "fail", "stage": "intake", "detail": str(exc)})
+        return _fail("intake", str(exc))
     payload = report.model_dump(mode="json")
-    payload["verdict"] = "pass" if report.verdict == "ready" else "fail"
+    payload["verdict"] = PASS if report.verdict == "ready" else FAIL
     return _emit(payload)
 
 
@@ -81,7 +89,7 @@ def cmd_sch_lint(args: argparse.Namespace) -> int:
             Path(args.output) if args.output else None,
         )
     except (ValueError, OSError) as exc:
-        return _emit({"verdict": "fail", "stage": "sch-lint", "detail": str(exc)})
+        return _fail("sch-lint", str(exc))
     return _emit(report.model_dump(mode="json"))
 
 
@@ -89,8 +97,8 @@ def cmd_fit_sheet(args: argparse.Namespace) -> int:
     try:
         moves = fit_sheet.clamp_labels(Path(args.schematic), margin=args.margin)
     except (ValueError, OSError) as exc:
-        return _emit({"verdict": "fail", "stage": "fit-sheet", "detail": str(exc)})
-    return _emit({"verdict": "pass", "clamped": len(moves), "items": moves})
+        return _fail("fit-sheet", str(exc))
+    return _emit({"verdict": PASS, "clamped": len(moves), "items": moves})
 
 
 def cmd_review_record(args: argparse.Namespace) -> int:
@@ -125,8 +133,8 @@ def cmd_review_record(args: argparse.Namespace) -> int:
             out_dir=Path(args.out) if args.out else None,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        return _emit({"verdict": "fail", "stage": "review-record", "detail": str(exc)})
-    return _emit({"verdict": "pass", "record": str(path)})
+        return _fail("review-record", str(exc))
+    return _emit({"verdict": PASS, "record": str(path)})
 
 
 def cmd_connectivity(args: argparse.Namespace) -> int:
@@ -136,10 +144,10 @@ def cmd_connectivity(args: argparse.Namespace) -> int:
         payload = connectivity.connectivity_source(design, parsed)
         connectivity.write_connectivity(design, Path(args.out), parsed)
     except (ValueError, OSError) as exc:
-        return _emit({"verdict": "fail", "stage": "connectivity-export", "detail": str(exc)})
+        return _fail("connectivity-export", str(exc))
     return _emit(
         {
-            "verdict": "pass",
+            "verdict": PASS,
             "design": design.name,
             "connectors": [item["ref"] for item in payload["connectors"]],
             "nets": [item["ref"] for item in payload["nets"]],
@@ -151,15 +159,9 @@ def cmd_connectivity(args: argparse.Namespace) -> int:
 def cmd_author(args: argparse.Namespace) -> int:
     script = _e2e_script()
     if script is None:
-        return _emit(
-            {
-                "verdict": "fail",
-                "stage": "author",
-                "detail": (
-                    "e2e_authoring.py not found "
-                    f"(searched {', '.join(str(p) for p in _E2E_CANDIDATES)})"
-                ),
-            }
+        return _fail(
+            "author",
+            f"e2e_authoring.py not found (searched {', '.join(str(p) for p in _E2E_CANDIDATES)})",
         )
     argv = [
         sys.executable,
@@ -177,14 +179,8 @@ def cmd_author(args: argparse.Namespace) -> int:
         argv += ["--json", args.json]
     proc = subprocess.run(argv, check=False)
     if proc.returncode != 0:
-        return _emit(
-            {
-                "verdict": "fail",
-                "stage": "author",
-                "detail": f"e2e_authoring exited with status {proc.returncode}",
-            }
-        )
-    return _emit({"verdict": "pass", "workdir": args.workdir})
+        return _fail("author", f"e2e_authoring exited with status {proc.returncode}")
+    return _emit({"verdict": PASS, "workdir": args.workdir})
 
 
 def main(argv: Sequence[str] | None = None) -> int:
