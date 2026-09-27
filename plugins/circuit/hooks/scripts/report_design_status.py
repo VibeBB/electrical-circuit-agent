@@ -8,7 +8,10 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from circuit.report import DesignReport
 
 SKIP_DIRECTORIES = {".git", ".venv", "node_modules"}
 MAX_DEPTH = 4
@@ -31,8 +34,8 @@ def _load_report(path: Path) -> tuple[str, str, list[str]]:
     return str(path), verdict, missing
 
 
-def _missing_sections(design: Any) -> list[str]:
-    missing = []
+def _missing_sections(design: DesignReport) -> list[str]:
+    missing: list[str] = []
     if design.sch_lint is None:
         missing.append("sch_lint")
     if not design.exports:
