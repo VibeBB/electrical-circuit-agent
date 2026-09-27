@@ -16,57 +16,28 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _provenance import (
+    actor,
+    event_id,
+    events_path,
+    next_sequence,
+    project_dir,
+)
+
 EVENTS_ENV = "CIRCUIT_IMAGE_OBSERVATIONS"
 EVENTS_RELATIVE_PATH = Path("observations/circuit/image-observations.jsonl")
 OBSERVED_TOOLS = {"circuit_render", "circuit_diff", "circuit_rasterize", "file_editor"}
-# Payload keys that identify which agent/tool call produced the event;
-# different SDK versions expose different ones.
-_ACTOR_KEYS = {
-    "agent",
-    "agent_name",
-    "actor",
-    "subagent_type",
-    "task_agent",
-    "action_id",
-    "tool_call_id",
-    "parent_id",
-    "call_id",
-}
-
-
-def _actor(payload: dict[str, Any]) -> dict[str, Any] | None:
-    actor = {key: payload[key] for key in sorted(payload) if key in _ACTOR_KEYS}
-    return actor or None
-
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 _IMAGE_PATH = re.compile(r"[^\s\"'<>]+?\.(?:png|jpe?g)", re.IGNORECASE)
-
-
-def _project_dir(payload: dict[str, Any]) -> Path:
-    return Path(
-        os.environ.get("OPENHANDS_PROJECT_DIR") or payload.get("working_dir") or "."
-    ).resolve()
-
-
-def _events_path(payload: dict[str, Any]) -> Path:
-    override = os.environ.get(EVENTS_ENV)
-    if override:
-        path = Path(override).expanduser()
-        return path if path.is_absolute() else _project_dir(payload) / path
-    return _project_dir(payload) / EVENTS_RELATIVE_PATH
-
-
-def _event_id(record: dict[str, Any]) -> str:
-    payload = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
 
 
 def _resolve(candidate: str, base: Path) -> Path | None:
@@ -129,16 +100,14 @@ def main() -> int:
         response = cast(dict[str, Any], response)
         if "error" in response or response.get("is_error"):
             return 0
-    base = _project_dir(cast(dict[str, Any], payload))
+    base = project_dir(cast(dict[str, Any], payload))
     paths = _image_paths(cast(dict[str, Any], payload), base)
     if not paths:
         return 0
-    path = _events_path(cast(dict[str, Any], payload))
+    path = events_path(cast(dict[str, Any], payload), EVENTS_ENV, EVENTS_RELATIVE_PATH)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        sequence = 1
-        if path.exists():
-            sequence += len(path.read_text(encoding="utf-8").splitlines())
+        sequence = next_sequence(path)
         with path.open("a", encoding="utf-8") as stream:
             for image_path in paths:
                 try:
@@ -153,13 +122,13 @@ def main() -> int:
                 }
                 record = {
                     "sequence": sequence,
-                    "event_id": _event_id(identity),
+                    "event_id": event_id(identity),
                     "tool_name": payload["tool_name"],
                     "image_path": str(image_path),
                     "image_sha256": digest,
                     "recorded_at": datetime.now(UTC).isoformat(),
                     "session_id": payload.get("session_id"),
-                    "actor": _actor(cast(dict[str, Any], payload)),
+                    "actor": actor(cast(dict[str, Any], payload)),
                     "tool_call_id": (payload.get("tool_call_id") or payload.get("action_id")),
                 }
                 stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
