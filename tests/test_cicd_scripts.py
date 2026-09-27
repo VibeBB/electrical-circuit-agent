@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import pytest
@@ -445,6 +445,36 @@ def test_e2e_authoring_record_unifies_step() -> None:
     first, second = (json.loads(line) for line in lines)
     assert first["step"] == "circuit_render"
     assert second["step"] == "initialize"
+
+
+def test_e2e_authoring_session_advances_message_id_per_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each tool call and each advisory (even a failed one) consumes one JSON-RPC id."""
+    import io
+
+    module = _e2e_authoring_module()
+    calls: list[tuple[int, str]] = []
+
+    def fake_call_tool(
+        _process: object, next_id: int, name: str, _arguments: object, _timeout: float
+    ) -> tuple[object, int]:
+        calls.append((next_id, name))
+        if name == "broken":
+            raise RuntimeError("boom")
+        return {"status": "ok"}, next_id + 1
+
+    monkeypatch.setattr(module, "call_tool", fake_call_tool)
+    session = module.KonnectSession(cast(Any, object()), 7, io.StringIO())
+    results: list[Any] = []
+
+    assert session.call("first", {}) == {"status": "ok"}
+    assert session.advise("broken", {}, "intake", results) is None
+    assert session.advise("second", {}, "intake", results) == {"status": "ok"}
+
+    assert calls == [(7, "first"), (8, "broken"), (9, "second")]
+    assert session.next_id == 10
+    assert [item.status for item in results] == ["error", "ok"]
 
 
 def test_e2e_authoring_prunes_empty_export_dirs(tmp_path: Path) -> None:
