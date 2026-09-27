@@ -13,6 +13,8 @@ from pathlib import Path
 from .kicad_cli import version
 from .paths import API_SOCKET_PATH
 
+_PROBE_TIMEOUT_S = 30.0
+
 
 def _check(name: str, ok: bool, detail: str) -> dict[str, object]:
     return {"name": name, "status": "ok" if ok else "fail", "detail": detail}
@@ -35,9 +37,10 @@ def checks() -> list[dict[str, object]]:
                 text=True,
                 encoding="utf-8",
                 check=False,
+                timeout=_PROBE_TIMEOUT_S,
             )
             result.append(_check("api-server", probe.returncode == 0, probe.stderr or probe.stdout))
-        except OSError as exc:
+        except (OSError, subprocess.TimeoutExpired) as exc:
             result.append(_check("api-server", False, str(exc)))
     konnect = shutil.which("konnect")
     if konnect is None:
@@ -50,10 +53,11 @@ def checks() -> list[dict[str, object]]:
                 text=True,
                 encoding="utf-8",
                 check=False,
+                timeout=_PROBE_TIMEOUT_S,
             )
             detail = (probe.stdout or probe.stderr).strip()
             result.append(_check("konnect", probe.returncode == 0, detail))
-        except OSError as exc:
+        except (OSError, subprocess.TimeoutExpired) as exc:
             result.append(_check("konnect", False, str(exc)))
     try:
         import circuit
