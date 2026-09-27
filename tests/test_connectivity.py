@@ -12,6 +12,8 @@ from pydantic import ValidationError
 from circuit.brief import DesignBrief
 from circuit.connectivity import (
     ConnectivityError,
+    connectivity_failure,
+    connectivity_result,
     connectivity_source,
     write_connectivity,
 )
@@ -97,6 +99,24 @@ def _brief(**overrides: Any) -> dict[str, Any]:
     }
     data.update(overrides)
     return data
+
+
+def test_connectivity_result_envelope() -> None:
+    brief = DesignBrief.model_validate(_brief())
+    payload = connectivity_source(brief)
+    result = connectivity_result(brief, payload, "out/demo.json")
+    assert result == {
+        "verdict": "pass",
+        "design": brief.name,
+        "connectors": [c["ref"] for c in payload["connectors"]],
+        "nets": [n["ref"] for n in payload["nets"]],
+        "out": "out/demo.json",
+    }
+    assert connectivity_failure(ValueError("boom")) == {
+        "verdict": "fail",
+        "stage": "connectivity-export",
+        "detail": "boom",
+    }
 
 
 def test_connectivity_source_emits_contract() -> None:

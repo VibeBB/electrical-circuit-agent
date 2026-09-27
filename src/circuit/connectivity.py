@@ -114,6 +114,20 @@ def write_connectivity(brief: DesignBrief, out_path: Path, netlist: Netlist | No
     return out_path
 
 
+def connectivity_result(design: DesignBrief, payload: dict[str, Any], out: str) -> dict[str, Any]:
+    return {
+        "verdict": "pass",
+        "design": design.name,
+        "connectors": [item["ref"] for item in payload["connectors"]],
+        "nets": [item["ref"] for item in payload["nets"]],
+        "out": out,
+    }
+
+
+def connectivity_failure(exc: Exception) -> dict[str, Any]:
+    return {"verdict": "fail", "stage": "connectivity-export", "detail": str(exc)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="python3 -m circuit.connectivity",
@@ -129,25 +143,9 @@ def main() -> int:
         payload = connectivity_source(design, parsed)
         write_connectivity(design, Path(args.out), parsed)
     except (ValueError, OSError) as exc:
-        print(
-            json.dumps(
-                {"verdict": "fail", "stage": "connectivity-export", "detail": str(exc)},
-                ensure_ascii=False,
-            )
-        )
+        print(json.dumps(connectivity_failure(exc), ensure_ascii=False))
         return 1
-    print(
-        json.dumps(
-            {
-                "verdict": "pass",
-                "design": design.name,
-                "connectors": [item["ref"] for item in payload["connectors"]],
-                "nets": [item["ref"] for item in payload["nets"]],
-                "out": args.out,
-            },
-            ensure_ascii=False,
-        )
-    )
+    print(json.dumps(connectivity_result(design, payload, args.out), ensure_ascii=False))
     return 0
 
 

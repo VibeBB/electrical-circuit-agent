@@ -136,16 +136,8 @@ def cmd_connectivity(args: argparse.Namespace) -> int:
         payload = connectivity.connectivity_source(design, parsed)
         connectivity.write_connectivity(design, Path(args.out), parsed)
     except (ValueError, OSError) as exc:
-        return _emit({"verdict": "fail", "stage": "connectivity-export", "detail": str(exc)})
-    return _emit(
-        {
-            "verdict": "pass",
-            "design": design.name,
-            "connectors": [item["ref"] for item in payload["connectors"]],
-            "nets": [item["ref"] for item in payload["nets"]],
-            "out": args.out,
-        }
-    )
+        return _emit(connectivity.connectivity_failure(exc))
+    return _emit(connectivity.connectivity_result(design, payload, args.out))
 
 
 def cmd_author(args: argparse.Namespace) -> int:
