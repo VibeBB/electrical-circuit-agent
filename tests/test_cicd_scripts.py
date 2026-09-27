@@ -11,12 +11,15 @@ from scripts.check_dependency_updates import (
     ProjectDependency,
     Status,
     apply_deferrals,
+    check_apt_packages,
+    check_docker_args,
     check_docker_base,
+    check_kicad_ppa,
     check_pypi_lock,
     check_python_versions,
     check_uv_pin,
     load_deferrals,
-    locked_versions,
+    lock_versions,
     parse_kicad_packages,
     pypi_status,
     release_version,
@@ -95,7 +98,7 @@ def test_dependency_checker_reads_resolved_versions_from_lock(tmp_path: Path) ->
         '[[package]]\nname = "mcp"\nversion = "1.30.0"\n',
         encoding="utf-8",
     )
-    assert locked_versions(tmp_path)["mcp"] == "1.30.0"
+    assert lock_versions(tmp_path)["mcp"] == "1.30.0"
 
 
 def test_dependency_checker_uses_latest_version_within_specifier() -> None:
@@ -187,6 +190,68 @@ def test_parse_kicad_packages() -> None:
         "kicad-nightly-footprints": "3",
         "kicad-nightly-symbols": "4",
     }
+
+
+def test_check_docker_args_reads_release_tags(tmp_path: Path) -> None:
+    docker = tmp_path / "docker"
+    docker.mkdir()
+    (docker / "circuit-tools.Dockerfile").write_text(
+        "ARG KONNECT_VERSION=0.12.1\n"
+        "ARG FREEROUTING_VERSION=2.4.1\n"
+        "ARG SEMERU_JRE_VERSION=27.0.0.0\n",
+        encoding="utf-8",
+    )
+    tags = {
+        "mixelpixx/Konnect": "v0.13.0",
+        "freerouting/freerouting": "v2.4.1",
+        "ibmruntimes/semeru27-binaries": "jdk-27.0.1.0",
+    }
+
+    def fetch_json(url: str) -> Any:
+        repo = url.removeprefix("https://api.github.com/repos/").removesuffix("/releases/latest")
+        return {"tag_name": tags[repo]}
+
+    statuses = check_docker_args(tmp_path, fetch_json=fetch_json)
+    assert [status.name for status in statuses] == [
+        "Konnect",
+        "FreeRouting",
+        "Semeru JRE (OpenJ9)",
+    ]
+    assert [status.latest for status in statuses] == ["0.13.0", "2.4.1", "27.0.1.0"]
+    assert [status.outdated for status in statuses] == [True, False, True]
+
+
+def test_check_apt_packages_are_unpinned_rows() -> None:
+    statuses = check_apt_packages()
+    assert [status.name for status in statuses] == ["poppler-utils", "librsvg2-bin"]
+    assert all(status.current == "unpinned" and not status.outdated for status in statuses)
+
+
+def test_check_kicad_ppa_compares_docker_args(tmp_path: Path) -> None:
+    import gzip
+
+    docker = tmp_path / "docker"
+    docker.mkdir()
+    (docker / "circuit-tools.Dockerfile").write_text(
+        "ARG KICAD_NIGHTLY_VERSION=1\n"
+        "ARG KICAD_NIGHTLY_FOOTPRINTS_VERSION=3\n"
+        "ARG KICAD_NIGHTLY_SYMBOLS_VERSION=4\n",
+        encoding="utf-8",
+    )
+    payload = gzip.compress(
+        b"Package: kicad-nightly\nVersion: 2\n\n"
+        b"Package: kicad-nightly-footprints\nVersion: 3\n\n"
+        b"Package: kicad-nightly-symbols\nVersion: 5\n"
+    )
+    statuses = check_kicad_ppa(tmp_path, fetch=lambda url: payload)
+    assert [status.name for status in statuses] == [
+        "kicad-nightly",
+        "kicad-nightly-footprints",
+        "kicad-nightly-symbols",
+    ]
+    assert [status.latest for status in statuses] == ["2", "3", "5"]
+    assert [status.outdated for status in statuses] == [True, False, True]
+    assert all(status.source == "KiCad PPA resolute" for status in statuses)
 
 
 def test_measure_image_tools_reads_cern_commit_file(monkeypatch: pytest.MonkeyPatch) -> None:

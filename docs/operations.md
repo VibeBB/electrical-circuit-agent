@@ -105,7 +105,9 @@ in `scripts/dependency_update_deferrals.json`, and until the deadline they are
 counted as `保留（記録済み）` (deferred, recorded) rather than as updates.
 Candidates past their deadline return to the update candidates as
 `保留期限切れ` (deferral expired). Malformed JSON is fail-closed and reported as
-FAIL.
+FAIL. The script keeps the repo-specific targets in a constants block at the
+top, and the shared check functions mirror the sibling repositories' checker
+so fixes port 1:1.
 
 The check also covers the `[tool.uv] required-version` pin (compared to the
 latest `uv` release on PyPI), Python minor pins (`requires-python`, any
