@@ -19,6 +19,7 @@ EXPECTED_AGENTS = {"circuit-brief", "circuit-layout", "circuit-review", "circuit
 EXPECTED_SKILLS = {
     "circuit-brief",
     "circuit-brief-rules",
+    "circuit-firmware",
     "circuit-konnect",
     "circuit-libraries",
     "circuit-library-guard",

@@ -35,3 +35,4 @@
 | [0020](adr/ADR-0020-vision-lane-diagnostics.md) | Vision-lane diagnostics in doctor |
 | [0021](adr/ADR-0021-openj9-freerouting-runtime.md) | Semeru OpenJ9 and FreeRouting runtime in the tools image |
 | [0022](adr/ADR-0022-tscircuit-not-adopted.md) | tscircuit evaluated and not adopted |
+| [0023](adr/ADR-0023-firmware-pinmap-interchange.md) | Firmware pin map interchange with firmware-agent |
