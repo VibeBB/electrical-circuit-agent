@@ -799,3 +799,142 @@ def test_rasterize_attaches_pngs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         assert image.mimeType == "image/png"
 
     asyncio.run(exercise())
+
+
+def _fail_if_called(name: str) -> Any:
+    def fake(*_args: object, **_kwargs: object) -> None:
+        pytest.fail(f"kicad_cli.{name} must not be called with invalid literal args")
+
+    return fake
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "key", "value"),
+    [
+        (
+            "circuit_render",
+            {"board_path": "b.kicad_pcb", "output_path": "out.png", "side": "diagonal"},
+            "side",
+            "diagonal",
+        ),
+        (
+            "circuit_render",
+            {"board_path": "b.kicad_pcb", "output_path": "out.png", "background": "neon"},
+            "background",
+            "neon",
+        ),
+        (
+            "circuit_render",
+            {"board_path": "b.kicad_pcb", "output_path": "out.png", "quality": "ultra"},
+            "quality",
+            "ultra",
+        ),
+        (
+            "circuit_diff",
+            {
+                "kind": "sch",
+                "left_path": "a.kicad_sch",
+                "right_path": "b.kicad_sch",
+                "output_path": "out.json",
+                "format": "pdf",
+            },
+            "format",
+            "pdf",
+        ),
+        (
+            "circuit_diff",
+            {
+                "kind": "board",
+                "left_path": "a.kicad_pcb",
+                "right_path": "b.kicad_pcb",
+                "output_path": "out.json",
+            },
+            "kind",
+            "board",
+        ),
+        (
+            "circuit_export",
+            {"kind": "bogus", "source_path": "b.kicad_pcb", "output_dir": "out"},
+            "kind",
+            "bogus",
+        ),
+        (
+            "circuit_import",
+            {"kind": "bogus", "source_path": "a.sch", "output_path": "out.kicad_sch"},
+            "kind",
+            "bogus",
+        ),
+    ],
+)
+def test_call_tool_rejects_invalid_literal_args(
+    tmp_path: Path,
+    monkeypatch: Any,
+    tool: str,
+    arguments: dict[str, str],
+    key: str,
+    value: str,
+) -> None:
+    monkeypatch.setattr(mcp_server.kicad_cli, "render", _fail_if_called("render"))
+    monkeypatch.setattr(mcp_server.kicad_cli, "diff", _fail_if_called("diff"))
+    monkeypatch.setattr(mcp_server.kicad_cli, "export", _fail_if_called("export"))
+    monkeypatch.setattr(mcp_server.kicad_cli, "import_file", _fail_if_called("import_file"))
+
+    async def exercise() -> None:
+        result = cast(Any, await mcp_server.call_tool(tool, arguments))
+        assert result.isError is True
+        text = result.content[0].text
+        assert f"'{key}'" in text
+        assert repr(value) in text
+
+    asyncio.run(exercise())
+
+
+def test_render_valid_literal_args_pass_through(tmp_path: Path, monkeypatch: Any) -> None:
+    captured: dict[str, object] = {}
+    out_path = tmp_path / "render.png"
+    out_path.write_bytes(b"\x89PNG" + b"0" * 32)
+
+    def fake_render(pcb: Path, out: Path, **kwargs: object) -> Path:
+        captured.update(kwargs)
+        return out_path
+
+    monkeypatch.setattr(mcp_server.kicad_cli, "render", fake_render)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_render",
+                {
+                    "board_path": str(tmp_path / "b.kicad_pcb"),
+                    "output_path": str(out_path),
+                    "side": "bottom",
+                    "background": "",
+                    "quality": "high",
+                },
+            ),
+        )
+        assert result.isError is False
+
+    asyncio.run(exercise())
+
+    assert captured["side"] == "bottom"
+    assert captured["background"] is None
+    assert captured["quality"] == "high"
+
+
+def test_tool_schema_enums_match_kicad_cli_literals() -> None:
+    schemas = {name: schema for name, _, schema in mcp_server._TOOLS}  # pyright: ignore[reportPrivateUsage]
+    render_props = schemas["circuit_render"]["properties"]
+    assert render_props["side"]["enum"] == list(mcp_server.kicad_cli.CAMERA_SIDES)
+    assert render_props["background"]["enum"] == list(mcp_server.kicad_cli.RENDER_BACKGROUNDS)
+    assert render_props["quality"]["enum"] == list(mcp_server.kicad_cli.RENDER_QUALITIES)
+    diff_props = schemas["circuit_diff"]["properties"]
+    assert diff_props["kind"]["enum"] == list(mcp_server.kicad_cli.DIFF_KINDS)
+    assert diff_props["format"]["enum"] == list(mcp_server.kicad_cli.DIFF_FORMATS)
+    assert schemas["circuit_export"]["properties"]["kind"]["enum"] == list(
+        mcp_server.kicad_cli.EXPORT_KINDS
+    )
+    assert schemas["circuit_import"]["properties"]["kind"]["enum"] == list(
+        mcp_server.kicad_cli.IMPORT_KINDS
+    )
