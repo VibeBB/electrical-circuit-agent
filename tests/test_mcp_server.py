@@ -31,6 +31,8 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_netlist_export",
         "circuit_connectivity_check",
         "circuit_connectivity_export",
+        "circuit_firmware_export",
+        "circuit_firmware_check",
         "circuit_doctor",
         "circuit_design_report",
         "circuit_erc",
@@ -77,7 +79,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 24
+            assert len(tools.tools) == 26
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

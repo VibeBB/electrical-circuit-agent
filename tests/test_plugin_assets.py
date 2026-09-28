@@ -20,7 +20,7 @@ def test_plugin_loads_all_assets() -> None:
         "circuit-layout",
         "circuit-review",
     }
-    assert len(plugin.skills) == 7
+    assert len(plugin.skills) == 8
     assert set(plugin.mcp_config) == {"circuit", "konnect"}
     assert plugin.hooks is not None
     assert plugin.entry_slash_command == "/circuit:doctor"

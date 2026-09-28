@@ -34,6 +34,7 @@ from . import (
     brief,
     connectivity,
     doctor,
+    firmware,
     fit_sheet,
     intake,
     kicad_cli,
@@ -131,6 +132,33 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "output_path": {"type": "string"},
             },
             "required": ["brief_path"],
+        },
+    ),
+    (
+        "circuit_firmware_export",
+        "Emit MCU pin connectivity for firmware-agent (*.firmware.json)",
+        {
+            "type": "object",
+            "properties": {
+                "brief_path": {"type": "string"},
+                "netlist_path": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["brief_path"],
+        },
+    ),
+    (
+        "circuit_firmware_check",
+        "Check a firmware-agent pin map (*.fw-pinmap.json) against the circuit",
+        {
+            "type": "object",
+            "properties": {
+                "brief_path": {"type": "string"},
+                "pinmap_path": {"type": "string"},
+                "netlist_path": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["brief_path", "pinmap_path"],
         },
     ),
     (
@@ -739,6 +767,8 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_netlist_export": _anno("Netlist export", write=True),
     "circuit_connectivity_check": _anno("Connectivity check", write=True),
     "circuit_connectivity_export": _anno("Connectivity export", write=True),
+    "circuit_firmware_export": _anno("Firmware connectivity export", write=True),
+    "circuit_firmware_check": _anno("Firmware pin map check", write=True),
     "circuit_doctor": _anno("Circuit doctor", write=False),
     "circuit_design_report": _anno("Design report", write=True),
     "circuit_sch_lint": _anno("Schematic lint", write=True),
@@ -855,6 +885,40 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             connectivity.write_connectivity(design, output, parsed_netlist)
             payload = connectivity.connectivity_source(design, parsed_netlist)
             result = connectivity.connectivity_result(design, payload, str(output))
+        elif name in ("circuit_firmware_export", "circuit_firmware_check"):
+            brief_path = Path(str(args["brief_path"]))
+            netlist_arg = _optional_string(args.get("netlist_path"))
+            netlist_file = Path(netlist_arg) if netlist_arg else None
+            firmware_payload = firmware.firmware_connectivity(
+                brief.load_brief(brief_path),
+                brief_path,
+                netlist.parse_netlist(netlist_file) if netlist_file else None,
+                netlist_file,
+            )
+            if name == "circuit_firmware_export":
+                output = _output_path(
+                    brief_path, _optional_string(args.get("output_path")), "firmware"
+                )
+                firmware.write_firmware_connectivity(firmware_payload, output)
+                result = {
+                    "verdict": "pass",
+                    "design": firmware_payload.design,
+                    "source": firmware_payload.source,
+                    "mcus": [m.ref for m in firmware_payload.mcus],
+                    "out": str(output),
+                }
+            else:
+                pinmap_path = Path(str(args["pinmap_path"]))
+                firmware_report = firmware.check_firmware_pinmap(
+                    firmware_payload,
+                    firmware.load_pinmap(pinmap_path),
+                    firmware.sha256_file(pinmap_path),
+                )
+                output = _output_path(
+                    brief_path, _optional_string(args.get("output_path")), "firmware-check"
+                )
+                output.write_text(firmware_report.model_dump_json(indent=2), encoding="utf-8")
+                result = firmware_report
         elif name == "circuit_doctor":
             checks = doctor.checks()
             result = {

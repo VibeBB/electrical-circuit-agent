@@ -26,7 +26,7 @@ class ConnectivityError(ValueError):
     """Raised when a ConnectivitySource payload cannot be built."""
 
 
-def _signal_class(name: str, declared: str | None) -> str:
+def signal_class(name: str, declared: str | None) -> str:
     if declared is not None:
         return declared
     upper = name.upper().lstrip("+-/")
@@ -37,7 +37,7 @@ def _signal_class(name: str, declared: str | None) -> str:
     return "signal"
 
 
-def _pin_key(pin: str) -> tuple[int, int, str]:
+def pin_key(pin: str) -> tuple[int, int, str]:
     match = _PIN_SUFFIX.match(pin)
     if match is None or match.group(2):
         return (1, 0, pin)
@@ -51,7 +51,7 @@ def _brief_cavities(brief: DesignBrief, reference: str) -> list[str]:
             ref, _, pin = token.partition(".")
             if ref == reference:
                 pins.add(pin)
-    return sorted(pins, key=_pin_key)
+    return sorted(pins, key=pin_key)
 
 
 def _netlist_cavities(netlist: Netlist, reference: str) -> list[str]:
@@ -60,7 +60,7 @@ def _netlist_cavities(netlist: Netlist, reference: str) -> list[str]:
         for ref, pin in nodes:
             if ref == reference:
                 pins.add(pin)
-    return sorted(pins, key=_pin_key)
+    return sorted(pins, key=pin_key)
 
 
 def connectivity_source(brief: DesignBrief, netlist: Netlist | None = None) -> dict[str, Any]:
@@ -90,7 +90,7 @@ def connectivity_source(brief: DesignBrief, netlist: Netlist | None = None) -> d
     nets = [
         {
             "ref": net.name,
-            "signal_class": _signal_class(net.name, net.signal_class),
+            "signal_class": signal_class(net.name, net.signal_class),
             "voltage_v": net.voltage_v,
             "current_a": net.current_a,
         }

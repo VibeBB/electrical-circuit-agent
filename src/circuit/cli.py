@@ -5,6 +5,8 @@ Subcommands:
   intake       validate an intake.json against a design brief (JSON verdict)
   sch-lint     lint a .kicad_sch for readability defects (JSON verdict)
   connectivity emit the wire-agent ConnectivitySource contract (JSON verdict)
+  firmware-export  emit MCU pin connectivity for firmware-agent (JSON verdict)
+  firmware-check   check a firmware-agent pin map against the circuit (JSON verdict)
   author       run e2e authoring from a design brief (JSON verdict)
 
 All commands print a JSON verdict to stdout; the verdict is fail-closed.
@@ -20,7 +22,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
-from . import brief, connectivity, doctor, fit_sheet, intake, netlist, sch_lint
+from . import brief, connectivity, doctor, firmware, fit_sheet, intake, netlist, sch_lint
 from .advisory import VisualChecklist
 
 Verdict = Literal["pass", "fail"]
@@ -148,6 +150,50 @@ def cmd_connectivity(args: argparse.Namespace) -> int:
     return _emit(connectivity.connectivity_result(design, payload, args.out))
 
 
+def _firmware_connectivity(args: argparse.Namespace) -> firmware.CircuitFirmwareConnectivity:
+    brief_path = Path(args.brief)
+    netlist_path = Path(args.netlist) if args.netlist else None
+    return firmware.firmware_connectivity(
+        _load_brief(args.brief),
+        brief_path,
+        netlist.parse_netlist(netlist_path) if netlist_path else None,
+        netlist_path,
+    )
+
+
+def cmd_firmware_export(args: argparse.Namespace) -> int:
+    try:
+        payload = _firmware_connectivity(args)
+        out = firmware.write_firmware_connectivity(payload, Path(args.out))
+    except (ValueError, OSError) as exc:
+        return _fail("firmware-export", str(exc))
+    return _emit(
+        {
+            "verdict": PASS,
+            "design": payload.design,
+            "source": payload.source,
+            "mcus": [m.ref for m in payload.mcus],
+            "out": str(out),
+        }
+    )
+
+
+def cmd_firmware_check(args: argparse.Namespace) -> int:
+    try:
+        payload = _firmware_connectivity(args)
+        pinmap_path = Path(args.pinmap)
+        report = firmware.check_firmware_pinmap(
+            payload, firmware.load_pinmap(pinmap_path), firmware.sha256_file(pinmap_path)
+        )
+    except (ValueError, OSError) as exc:
+        return _fail("firmware-check", str(exc))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return _emit(report.model_dump(mode="json"))
+
+
 def cmd_author(args: argparse.Namespace) -> int:
     script = _e2e_script()
     if script is None:
@@ -237,6 +283,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     connectivity_parser.add_argument("--netlist", default=None)
     connectivity_parser.add_argument("--out", required=True)
     connectivity_parser.set_defaults(handler=cmd_connectivity)
+
+    firmware_export_parser = subparsers.add_parser(
+        "firmware-export", help="emit MCU pin connectivity (*.firmware.json) for firmware-agent"
+    )
+    firmware_export_parser.add_argument("--brief", required=True)
+    firmware_export_parser.add_argument("--netlist", default=None)
+    firmware_export_parser.add_argument("--out", required=True)
+    firmware_export_parser.set_defaults(handler=cmd_firmware_export)
+
+    firmware_check_parser = subparsers.add_parser(
+        "firmware-check", help="check a firmware-agent *.fw-pinmap.json against the circuit"
+    )
+    firmware_check_parser.add_argument("--brief", required=True)
+    firmware_check_parser.add_argument("--pinmap", required=True)
+    firmware_check_parser.add_argument("--netlist", default=None)
+    firmware_check_parser.add_argument("--out", default=None)
+    firmware_check_parser.set_defaults(handler=cmd_firmware_check)
 
     author_parser = subparsers.add_parser("author", help="run e2e authoring from a design brief")
     author_parser.add_argument("--brief", required=True)
