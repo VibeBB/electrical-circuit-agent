@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -237,6 +238,16 @@ def test_measure_image_tools_rejects_unknown_cern_commit(
     monkeypatch.setattr("scripts.measure_image_tools.subprocess.run", fake_run)
     with pytest.raises(ValueError, match="metadata probe omitted"):
         measure("ghcr.io/example/circuit-tools@sha256:" + "a" * 64)
+
+
+def test_measure_image_tools_fails_closed_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    def hanging_run(args: list[str], **kwargs: Any) -> SimpleNamespace:
+        assert kwargs["timeout"] > 0
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr("scripts.measure_image_tools.subprocess.run", hanging_run)
+    with pytest.raises(RuntimeError, match="timed out"):
+        measure("circuit-tools:dev")
 
 
 def test_check_pypi_lock_reports_transitive_drift(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ from pathlib import Path
 
 _IMAGE_REF = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}\Z")
 _LOCAL_IMAGE_REF = re.compile(r"[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9_.-]*\Z")
+_PROBE_TIMEOUT_S = 600.0
 
 
 def measure(image_ref: str) -> dict[str, str]:
@@ -31,13 +32,17 @@ def measure(image_ref: str) -> dict[str, str]:
         "dpkg-query -W -f='kicad-nightly-footprints=${Version}\\n' kicad-nightly-footprints; "
         "dpkg-query -W -f='kicad-nightly-symbols=${Version}\\n' kicad-nightly-symbols"
     )
-    result = subprocess.run(
-        ["docker", "run", "--rm", "--entrypoint", "", image_ref, "sh", "-c", script],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "run", "--rm", "--entrypoint", "", image_ref, "sh", "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=_PROBE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"metadata probe timed out after {_PROBE_TIMEOUT_S:g}s") from exc
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or "metadata probe failed")
     values: dict[str, str] = {}
