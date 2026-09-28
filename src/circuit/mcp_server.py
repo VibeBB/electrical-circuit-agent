@@ -854,13 +854,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             )
             connectivity.write_connectivity(design, output, parsed_netlist)
             payload = connectivity.connectivity_source(design, parsed_netlist)
-            result = {
-                "verdict": "pass",
-                "design": design.name,
-                "connectors": [item["ref"] for item in payload["connectors"]],
-                "nets": [item["ref"] for item in payload["nets"]],
-                "out": str(output),
-            }
+            result = connectivity.connectivity_result(design, payload, str(output))
         elif name == "circuit_doctor":
             checks = doctor.checks()
             result = {
