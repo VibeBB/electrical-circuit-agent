@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -119,3 +120,39 @@ def test_docker_argv_keeps_kicad_env(monkeypatch: pytest.MonkeyPatch) -> None:
     }
     assert env["KICAD_API_SOCKET"] == "ipc:///tmp/k.sock"
     assert env["CIRCUIT_KONNECT"] == "/usr/bin/konnect"
+
+
+def test_main_mcp_server_argv_is_module_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`mcp_server` must exec `python3 -m circuit.mcp_server`; argv entries are str."""
+    module = _load_launcher()
+    captured: list[list[str]] = []
+
+    def fake_execvp(file: str, args: list[str]) -> None:
+        captured.append([file, *args])
+
+    def fake_ensure_image(_root: Path, *, pull: bool = True) -> str:
+        return "img@sha256:abc"
+
+    def fake_resolve_source(_root: Path) -> Path | None:
+        return None
+
+    monkeypatch.setattr(module, "_ensure_image", fake_ensure_image)
+    monkeypatch.setattr(module, "resolve_source", fake_resolve_source)
+    monkeypatch.setattr(os, "execvp", fake_execvp)
+    monkeypatch.setattr(sys, "argv", ["circuit_launcher.py", "mcp_server", "--extra"])
+    assert module.main() == 0
+    assert len(captured) == 1
+    argv = captured[0]
+    assert argv[0] == "docker"
+    assert all(isinstance(arg, str) for arg in argv)
+    assert argv[-4:] == ["python3", "-m", "circuit.mcp_server", "--extra"]
+
+
+def test_warn_fallback_json_matches_doctor_key(capsys: pytest.CaptureFixture[str]) -> None:
+    """The --warn fallback payload uses the same top-level key as circuit.doctor."""
+    module = _load_launcher()
+    assert module._warn_or_die("boom", ["doctor", "--warn"]) == 0
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    # circuit.doctor reports under "status" (not "verdict" like the sibling repos).
+    assert payload == {"status": "fail", "detail": "boom"}
+    assert next(iter(payload)) == "status"
