@@ -25,6 +25,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _provenance import project_dir
+
 EVENTS_DIR_ENV = "CIRCUIT_AGENT_EVENTS_DIR"
 ATTACHMENTS_ENV = "CIRCUIT_INTAKE_ATTACHMENTS_DIR"
 DEFAULT_EVENTS_ROOT = Path(".openhands/agent-canvas/dev_conversations")
@@ -47,12 +51,6 @@ _MAGIC_EXT = (
 )
 
 
-def _project_dir(payload: dict[str, Any]) -> Path:
-    return Path(
-        os.environ.get("OPENHANDS_PROJECT_DIR") or payload.get("working_dir") or "."
-    ).resolve()
-
-
 def _events_dir(payload: dict[str, Any]) -> Path | None:
     override = os.environ.get(EVENTS_DIR_ENV)
     if override:
@@ -69,8 +67,8 @@ def _attachments_dir(payload: dict[str, Any]) -> Path:
     override = os.environ.get(ATTACHMENTS_ENV)
     if override:
         path = Path(override).expanduser()
-        return path if path.is_absolute() else _project_dir(payload) / path
-    return _project_dir(payload) / ATTACHMENTS_RELATIVE
+        return path if path.is_absolute() else project_dir(payload) / path
+    return project_dir(payload) / ATTACHMENTS_RELATIVE
 
 
 def _image_blocks(value: Any) -> list[dict[str, Any]]:
