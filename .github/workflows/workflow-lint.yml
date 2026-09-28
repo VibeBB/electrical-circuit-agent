@@ -5,11 +5,13 @@ on:
     branches: [main]
     paths: [".github/**"]
   pull_request:
-    # Digest-lock bot PRs only touch docker/image-digests.json. Filter at
-    # trigger level so no run is created: a queued (action_required) run
-    # gets killed by the branch-deleting merge with a spurious
-    # "workflow file issue" failure.
-    paths-ignore: ["docker/image-digests.json"]
+    # Digest-lock bot PRs only touch docker/image-digests.json and the
+    # plugin's tools-image.json. Filter at trigger level so no run is
+    # created: a queued (action_required) run gets killed by the
+    # branch-deleting merge with a spurious "workflow file issue" failure.
+    paths-ignore:
+      - "docker/image-digests.json"
+      - "plugins/circuit/skills/circuit-workflow/tools-image.json"
   schedule:
     - cron: "0 3 * * 1"
   # Dispatched by the publish workflow on digest-lock branches so the
