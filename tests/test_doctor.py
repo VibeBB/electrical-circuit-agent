@@ -18,6 +18,24 @@ def test_doctor_is_fail_closed_when_tools_are_missing(monkeypatch: MonkeyPatch) 
     assert any(item["name"] == "konnect" and item["status"] == "fail" for item in result)
 
 
+def test_doctor_fails_closed_when_probe_hangs(monkeypatch: MonkeyPatch) -> None:
+    def available(_name: str) -> str:
+        return "/usr/bin/tool"
+
+    def hanging_run(args: list[str], **kwargs: Any) -> SimpleNamespace:
+        assert kwargs["timeout"] == doctor._PROBE_TIMEOUT_S  # pyright: ignore[reportPrivateUsage]
+        raise doctor.subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(doctor.shutil, "which", available)
+    monkeypatch.setattr(doctor, "version", lambda: "10.99.0")
+    monkeypatch.setattr(doctor.subprocess, "run", hanging_run)
+    result = doctor.checks()
+    for name in ("api-server", "konnect"):
+        item = next(i for i in result if i["name"] == name)
+        assert item["status"] == "fail"
+        assert "timed out" in str(item["detail"])
+
+
 def test_doctor_honors_circuit_cern_libs_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     def available(_name: str) -> str:
         return "/usr/bin/tool"

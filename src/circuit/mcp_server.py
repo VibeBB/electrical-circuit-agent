@@ -231,7 +231,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 },
                 "side": {
                     "type": "string",
-                    "enum": ["top", "bottom", "left", "right", "front", "back"],
+                    "enum": list(kicad_cli.CAMERA_SIDES),
                     "default": "top",
                 },
                 "width": {"type": "integer", "default": 1280},
@@ -250,11 +250,11 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "floor": {"type": "boolean"},
                 "background": {
                     "type": "string",
-                    "enum": ["default", "transparent", "opaque"],
+                    "enum": list(kicad_cli.RENDER_BACKGROUNDS),
                 },
                 "quality": {
                     "type": "string",
-                    "enum": ["basic", "high", "user", "job_settings"],
+                    "enum": list(kicad_cli.RENDER_QUALITIES),
                 },
                 "pages": {
                     "type": "string",
@@ -286,13 +286,13 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         {
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "enum": ["sch", "pcb"]},
+                "kind": {"type": "string", "enum": list(kicad_cli.DIFF_KINDS)},
                 "left_path": {"type": "string"},
                 "right_path": {"type": "string"},
                 "output_path": {"type": "string"},
                 "format": {
                     "type": "string",
-                    "enum": ["json", "png", "svg"],
+                    "enum": list(kicad_cli.DIFF_FORMATS),
                     "default": "json",
                 },
             },
@@ -320,26 +320,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
             "properties": {
                 "kind": {
                     "type": "string",
-                    "enum": [
-                        "gerbers",
-                        "drill",
-                        "pos",
-                        "bom",
-                        "netlist",
-                        "pdf-sch",
-                        "step",
-                        "sch_pdf",
-                        "sch_svg",
-                        "pcb_pdf",
-                        "pcb_svg",
-                        "dxf",
-                        "ipc2581",
-                        "odb",
-                        "gencad",
-                        "vrml",
-                        "glb",
-                        "fp_svg",
-                    ],
+                    "enum": list(kicad_cli.EXPORT_KINDS),
                 },
                 "source_path": {
                     "type": "string",
@@ -360,7 +341,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         {
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "enum": ["sch", "pcb"]},
+                "kind": {"type": "string", "enum": list(kicad_cli.IMPORT_KINDS)},
                 "source_path": {"type": "string"},
                 "output_path": {"type": "string"},
                 "format": {
@@ -455,6 +436,31 @@ def _required_string(args: dict[str, Any], name: str, context: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{context} requires '{name}'")
     return value
+
+
+def _literal[LiteralT: str](
+    args: dict[str, Any],
+    key: str,
+    allowed: tuple[LiteralT, ...],
+    default: LiteralT | None = None,
+    *,
+    context: str,
+) -> LiteralT:
+    value = args.get(key, default)
+    if value is None:
+        raise ValueError(f"{context} requires '{key}'")
+    if not isinstance(value, str) or value not in allowed:
+        raise ValueError(f"'{key}' must be one of {list(allowed)}, got {value!r}")
+    return cast(LiteralT, value)
+
+
+def _optional_literal[LiteralT: str](
+    args: dict[str, Any], key: str, allowed: tuple[LiteralT, ...], *, context: str
+) -> LiteralT | None:
+    value = args.get(key)
+    if value is None or value == "":
+        return None
+    return _literal(args, key, allowed, context=context)
 
 
 _IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
@@ -935,14 +941,14 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
         elif name == "circuit_render":
             render_kind = str(args.get("kind", "board3d"))
             if render_kind == "board3d":
-                background_arg = _optional_string(args.get("background"))
-                quality_arg = _optional_string(args.get("quality"))
                 zoom_arg = args.get("zoom")
                 result = str(
                     kicad_cli.render(
                         Path(_required_string(args, "board_path", "kind 'board3d'")),
                         Path(_required_string(args, "output_path", "kind 'board3d'")),
-                        side=cast(kicad_cli.CameraSide, str(args.get("side", "top"))),
+                        side=_literal(
+                            args, "side", kicad_cli.CAMERA_SIDES, "top", context="circuit_render"
+                        ),
                         width=int(args.get("width", 1280)),
                         height=int(args.get("height", 720)),
                         rotate=_optional_string(args.get("rotate")),
@@ -951,13 +957,14 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                         pivot=_optional_string(args.get("pivot")),
                         perspective=bool(args.get("perspective", False)),
                         floor=bool(args.get("floor", False)),
-                        background=(
-                            cast(kicad_cli.RenderBackground, background_arg)
-                            if background_arg
-                            else None
+                        background=_optional_literal(
+                            args,
+                            "background",
+                            kicad_cli.RENDER_BACKGROUNDS,
+                            context="circuit_render",
                         ),
-                        quality=(
-                            cast(kicad_cli.RenderQuality, quality_arg) if quality_arg else None
+                        quality=_optional_literal(
+                            args, "quality", kicad_cli.RENDER_QUALITIES, context="circuit_render"
                         ),
                     )
                 )
@@ -1001,9 +1008,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             else:
                 raise ValueError(f"unknown circuit_render kind: {render_kind}")
         elif name == "circuit_diff":
-            diff_format = cast(kicad_cli.DiffFormat, str(args.get("format", "json")))
+            diff_format: kicad_cli.DiffFormat = _literal(
+                args, "format", kicad_cli.DIFF_FORMATS, "json", context="circuit_diff"
+            )
             result = kicad_cli.diff(
-                cast(Literal["sch", "pcb"], str(args["kind"])),
+                _literal(args, "kind", kicad_cli.DIFF_KINDS, context="circuit_diff"),
                 Path(str(args["left_path"])),
                 Path(str(args["right_path"])),
                 Path(str(args["output_path"])),
@@ -1023,13 +1032,13 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             record.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         elif name == "circuit_export":
             result = kicad_cli.export(
-                cast(kicad_cli.ExportKind, str(args["kind"])),
+                _literal(args, "kind", kicad_cli.EXPORT_KINDS, context="circuit_export"),
                 Path(str(args["source_path"])),
                 Path(str(args["output_dir"])),
             )
         elif name == "circuit_import":
             result = kicad_cli.import_file(
-                cast(kicad_cli.ImportKind, str(args["kind"])),
+                _literal(args, "kind", kicad_cli.IMPORT_KINDS, context="circuit_import"),
                 Path(str(args["source_path"])),
                 Path(str(args["output_path"])),
                 format=str(args.get("format", "auto")),
