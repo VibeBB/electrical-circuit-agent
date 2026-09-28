@@ -127,6 +127,26 @@ jobs:
           docker run --rm --user circuit -v "$PWD/fixtures/smoke-board:/work:ro" "$TOOLS_REF" python3 /opt/circuit/bin/smoke_kicad11_konnect.py
       - name: Clone OpenHands SDK
         run: git clone --depth 1 --branch "v${SDK_VERSION}" https://github.com/OpenHands/software-agent-sdk "$RUNNER_TEMP/sdk"
+      - name: Stabilize server build cache tag
+        # Upstream keys the registry cache tag on the base-image digest, so
+        # every new tools digest opens a fresh (empty) cache namespace and
+        # the importer logs "not found" on every publish. The
+        # base-image-independent builder/binary-builder/acp-providers stages
+        # are the bulk of the server build, so point the cache at a stable
+        # per-target tag. Fail-open: if upstream renames the property, build
+        # unpatched rather than break.
+        run: |
+          set -euo pipefail
+          f="$RUNNER_TEMP/sdk/openhands-agent-server/openhands/agent_server/docker/build.py"
+          needle='buildcache-{self.target}-{self.base_image_slug}{self.flavor_suffix}'
+          replacement='buildcache-{self.target}{self.flavor_suffix}'
+          if grep -qF "$needle" "$f"; then
+            sed -i "s/$needle/$replacement/" "$f"
+            grep -qF "$replacement" "$f"
+            echo "patched: registry cache tag is now buildcache-<target>-main"
+          else
+            echo "::warning::upstream build.py cache_tags layout changed; building without stable cache tag"
+          fi
       - name: Build and publish server
         env:
           SDK_SHA: ${{ github.sha }}
