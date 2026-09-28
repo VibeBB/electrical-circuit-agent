@@ -30,6 +30,7 @@ class Part(BaseModel):
     footprint: str
     value: str | None = None
     connector: bool = False
+    mcu: bool = False
     housing: str | None = None
     rated_current_a: float | None = Field(default=None, gt=0)
     rated_voltage_v: float | None = Field(default=None, gt=0)

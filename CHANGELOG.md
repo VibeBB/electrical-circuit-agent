@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- firmware-agent cooperation: brief parts may set `mcu: true`, the netlist
+  parser keeps KiCad `pinfunction`, `circuit_firmware_export` /
+  `firmware-export` writes `<design>.firmware.json`, and
+  `circuit_firmware_check` / `firmware-check` validates a firmware
+  `*.fw-pinmap.json` fail-closed (ADR-0023, `circuit-firmware` skill).
 - `circuit_sch_lint` gains a `power_flag_crowded` warning when two
   `power:PWR_FLAG` symbols sit closer than 15 mm — one flag per rail at
   its source reads as intent, a pile reads as a patch.

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import sexpr
 from .brief import DesignBrief, brief_sha256, expected_nets
@@ -28,6 +28,7 @@ class Netlist(BaseModel):
 
     nets: dict[str, frozenset[tuple[str, str]]]
     components: dict[str, Component]
+    pin_functions: dict[str, str] = Field(default_factory=dict[str, str])
 
 
 def _section(root: list[sexpr.SExpr], name: str) -> list[sexpr.SExpr]:
@@ -76,6 +77,7 @@ def parse_netlist(path: Path) -> Netlist:
             footprint=_field(value, "footprint"),
         )
     nets: dict[str, frozenset[tuple[str, str]]] = {}
+    pin_functions: dict[str, str] = {}
     for value in nets_section[1:]:
         if not isinstance(value, list) or not value or value[0] != "net":
             continue
@@ -95,8 +97,11 @@ def parse_netlist(path: Path) -> Netlist:
             if not ref or not pin:
                 raise NetlistError("node without ref/pin")
             nodes.add((ref, pin))
+            function = _field(child, "pinfunction")
+            if function:
+                pin_functions[f"{ref}.{pin}"] = function
         nets[name] = frozenset(nodes)
-    return Netlist(nets=nets, components=components)
+    return Netlist(nets=nets, components=components, pin_functions=pin_functions)
 
 
 class ConnectivityReport(BaseModel):

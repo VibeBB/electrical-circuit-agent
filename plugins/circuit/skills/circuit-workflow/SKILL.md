@@ -21,3 +21,5 @@ the operation does not require an open board. Write and validate a design brief,
 author schematic nets with labels rather than crossing pin-to-pin wires, and run the
 authoritative netlist connectivity check before ERC. Save before running ERC or DRC,
 and use the circuit MCP server as the deterministic verification boundary.
+When the board has an MCU, export its pin connectivity for firmware-agent and confirm the
+returned pin map with `circuit_firmware_check` (circuit-firmware skill).

@@ -29,6 +29,9 @@ requirements conversation becomes a verified schematic and a routed board.
   produced netlist against the design brief. LLM self-reports and Konnect
   explanatory text are never promoted to a verdict — missing tools and
   unknowns fail closed.
+- **Firmware cooperation** — `circuit_firmware_export` writes MCU pin
+  connectivity for firmware-agent, and `circuit_firmware_check` confirms
+  the returned firmware pin map against the circuit (ADR-0023).
 
 ### Install
 
@@ -147,6 +150,9 @@ the license conditions that apply to their own usage.
   `circuit_connectivity_check` は生成 netlist を設計ブリーフと照合します。
   LLM の自己申告や Konnect の説明文を合否へ昇格させることはなく、
   ツール欠落・不明は fail-closed で不合格です。
+- **ファームウェア連携** — `circuit_firmware_export` が firmware-agent 向けに
+  MCU ピンの接続情報を書き出し、`circuit_firmware_check` が返ってきた
+  ファームウェアのピンマップを回路と照合します（ADR-0023）。
 
 ### インストール
 
