@@ -51,7 +51,7 @@ JRE is extracted to `/opt/jre` and resolved via `JAVA_HOME`/`PATH`; the JAR is
 placed at `/opt/freerouting/freerouting.jar`, which Konnect v0.12.1 discovers
 via its built-in search roots (see ADR-0021). The CERN commit is recorded in
 `/opt/circuit/libraries/cern-kicad-libs.commit` and the OCI label
-`circuit.cern.commit`. Because the SDK v1.49.5 server image build requires
+`circuit.cern.commit`. Because the SDK v1.50.0 server image build requires
 root-privileged apt/useradd on the base image, the tools image's default user is
 root. For standalone runs specify `--user circuit`; in the server image use the
 `openhands` user created by the SDK. Docker itself does not guarantee
@@ -382,6 +382,93 @@ image tag against the latest `uv` release.
   credentials on saves, skips consent when tokens still work, and warns
   on unavailable models in saved LLM profiles. Runtime-surface only —
   no repo change.
+
+### OpenHands SDK v1.50.0 adoption review
+
+- Checked on: 2026-09-30
+- Update: v1.49.6 → v1.50.0
+- Primary source: [v1.50.0 release](https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.50.0)
+- Release delta: reviewed all 25 commits from v1.49.6 through v1.50.0.
+- Feature evaluation (checked against the plugin boundary):
+  - MCP startup failures now keep the conversation alive and report absent
+    plugin tools; inherent in the SDK. The doctor hook already reports image
+    availability and circuit agents remain fail-closed.
+  - Managed-proxy budget denials stop without retry backoff; inherent.
+  - The refresh-on-401 hook applies to agent-server images built from this
+    pin; the publish workflow builds the server image.
+  - Optional Canvas app backends, the client-owned browser event stream,
+    goal mode, TypeScript-only changes, and internal refactors are not
+    applicable to this plugin.
+  - anyio 4.14.2 is picked up by the lock refresh. Async secret resolution,
+    null cache-token handling, profile pre-flight system ordering, condenser
+    prompt preservation, provider-gated prompt cache keys, and aiosqlite
+    0.22.1 arrive with the SDK; no plugin code change is needed.
+  - MCP input schemas are hand-written without `anyOf`; the schema fix does
+    not affect them. Vision helper documentation confirms the existing review
+    boundary; no vision routing change is adopted.
+  - OpenAPI tool-metadata exemptions and documentation, CI, and release
+    changes are n/a; the helper refactor is internal.
+  - The SDK still requires `fastmcp>=3.2.0,<4`, which requires `mcp<2`;
+    MCP 2.x remains deferred in
+    `scripts/dependency_update_deferrals.json`.
+- KiCad and library update review:
+  - KiCad core moved from `202609250241+83b5faf3d5~189~ubuntu26.04.1` to
+    `202609290253+1dd7ad3604~189~ubuntu26.04.1`; the compare includes 255
+    commits. Reviewed changes cover schematic editing, symbol/reference
+    handling, PCB routing and DRC, Gerber parsing, import/export, and 3D
+    viewing. No plugin API or fixture format change is required; schematic
+    ERC was checked against the existing fixture.
+  - Footprints moved to
+    `202609270717+b5e7a752f~14~ubuntu26.04.1`; its change sets the fiducial
+    property in the fiducial generator. Symbols moved to
+    `202609271717+716edc43f~12~ubuntu26.04.1`; its change adds the
+    ISL28291FRUZ operational amplifier symbol. These are additive library
+    updates and do not alter the fixture's existing library references.
+  - The CERN library submodule moved from
+    `4fc6742b43f7b8d59f48c80de7c424fe7841b40b` to
+    `7618368c1cc70478024ed84882d54c0dade7dc86` (2026-09-30). Three
+    synchronization commits carry the same upstream conversion source
+    `6b6a01e0`; the library files and generated checksums are refreshed while
+    the upstream license files remain unchanged.
+  - All three KiCad Debian assets were fetched from Launchpad and their
+    SHA-256 values recomputed for the Dockerfile. The existing schematic ERC
+    and Docker integration smoke passed on the updated image. The build
+    verified all three asset checksums; `kicad-cli sch erc
+    --exit-code-violations --format json` returned zero violations for
+    `fixtures/smoke-board/board.kicad_sch` (`kicad_version` 10.99.0), with
+    no `_cvpcb.kiface` undefined-symbol failure. The Konnect integration
+    smoke passed.
+- AgentCanvas v1.24.0 (2026-09-25) remains the latest release and was
+  evaluated with the v1.49.6 update. OpenHands/OpenHands#17822 (inline
+  artifact previews) remains deferred until release. SDK #5360/#5367
+  (DeepSeek vision serialization) remains deferred until #5367 ships;
+  circuit-review must not use DeepSeek vision before then. SDK #5351 is n/a
+  because plugin agents do not disable default tools. SDK #5381 is closed,
+  not planned; circuit sub-agents launch only this plugin's own fail-closed
+  MCP server.
+- Vision path: vision-capable `vibebb-review` / `vibebb-author` profiles
+  receive images opened by `file_editor view` and MCP `ImageContent` directly.
+  `inspect_image_with_vision` covers only images in the latest user message,
+  not rendered workspace files; no repo change.
+- uv 0.12.19 → 0.12.21:
+  - 0.12.20 lockfile reuse for semantically equivalent declarations,
+    repeated-requirement `--require-hashes`, failed-upgrade restoration,
+    XDG_CONFIG_DIRS fix, and panic fixes are inherent.
+  - 0.12.20 lockfile-normalization, pylock.toml group/path fixes, and
+    tool-install-locks dedupe are preview-only and n/a.
+  - 0.12.21 OpenSSL 3.5.9, omitted empty `[manifest]` tables,
+    post-/pre-release compatibility fix, and `uv python pin --rm` global-file
+    fix are inherent; preview `resolution-inputs` is n/a.
+- Reason for adoption: pin alignment to the requested SDK/tool versions and
+  the latest dependency-checker KiCad/CERN candidates; the plugin's fail-closed
+  authoring boundary remains unchanged.
+- Verification: `uv sync --locked --all-groups`, Ruff check/format, Pyright,
+  `pytest -q`, `scripts/verify_all.py --stage fast`, plugin load, and docs
+  verification passed (311 tests passed, 4 skipped). The dependency checker
+  was rerun with `GH_TOKEN` from `gh auth token` after the unauthenticated
+  request returned HTTP 403; it reported only deferred items and no update
+  candidates. AnyIO resolves to 4.15.1. See
+  `/home/ubuntu/work/verify/electrical-circuit-agent-deps.log` for full output.
 
 ### OpenHands runtime surfaces
 

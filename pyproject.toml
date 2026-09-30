@@ -7,8 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2",
     "mcp>=1.29,<2",
-    "openhands-sdk==1.49.6",
-    "openhands-tools==1.49.6",
+    "openhands-sdk==1.50.0",
+    "openhands-tools==1.50.0",
 ]
 
 [dependency-groups]
@@ -28,7 +28,7 @@ build-backend = "hatchling.build"
 packages = ["src/circuit"]
 
 [tool.uv]
-required-version = "==0.12.19"
+required-version = "==0.12.21"
 
 [tool.ruff]
 line-length = 100
