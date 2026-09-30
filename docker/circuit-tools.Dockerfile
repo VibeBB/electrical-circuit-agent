@@ -1,17 +1,17 @@
-FROM ghcr.io/astral-sh/uv:0.12.19 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.21 AS uv
 
 FROM ubuntu:26.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG KICAD_NIGHTLY_VERSION=202609250241+83b5faf3d5~189~ubuntu26.04.1
-ARG KICAD_NIGHTLY_FOOTPRINTS_VERSION=202609222017+55d9dd1a3~14~ubuntu26.04.1
-ARG KICAD_NIGHTLY_SYMBOLS_VERSION=202609251227+151fb6a8c~12~ubuntu26.04.1
-ARG KICAD_NIGHTLY_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609250241+83b5faf3d5~189~ubuntu26.04.1_amd64.deb
-ARG KICAD_NIGHTLY_DEB_SHA256=5a3fccf1bff078e130c4719af247dd5f27ab91c8c8b64a0a9908b1e90e2b93bd
-ARG KICAD_NIGHTLY_SYMBOLS_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly-symbols_202609251227+151fb6a8c~12~ubuntu26.04.1_all.deb
-ARG KICAD_NIGHTLY_SYMBOLS_DEB_SHA256=980689dce318ada0fdb814201e5af7e2ce7dba2bf2b8d606a7849170a0640c0f
-ARG KICAD_NIGHTLY_FOOTPRINTS_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly-footprints_202609222017+55d9dd1a3~14~ubuntu26.04.1_all.deb
-ARG KICAD_NIGHTLY_FOOTPRINTS_DEB_SHA256=9884c71dc7546424fea062e52afcd2055392be995e5ae90960c4d24a97400bd4
+ARG KICAD_NIGHTLY_VERSION=202609290253+1dd7ad3604~189~ubuntu26.04.1
+ARG KICAD_NIGHTLY_FOOTPRINTS_VERSION=202609270717+b5e7a752f~14~ubuntu26.04.1
+ARG KICAD_NIGHTLY_SYMBOLS_VERSION=202609271717+716edc43f~12~ubuntu26.04.1
+ARG KICAD_NIGHTLY_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609290253+1dd7ad3604~189~ubuntu26.04.1_amd64.deb
+ARG KICAD_NIGHTLY_DEB_SHA256=105258412e8fcbc7fabef5980d1701820f96bf40add34d0a4364ac8eb480583e
+ARG KICAD_NIGHTLY_SYMBOLS_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly-symbols_202609271717+716edc43f~12~ubuntu26.04.1_all.deb
+ARG KICAD_NIGHTLY_SYMBOLS_DEB_SHA256=4c3c894591a0f7d95db7627dae0941dec483722a5629eacb5200e9c99cf44295
+ARG KICAD_NIGHTLY_FOOTPRINTS_DEB_URL=https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly-footprints_202609270717+b5e7a752f~14~ubuntu26.04.1_all.deb
+ARG KICAD_NIGHTLY_FOOTPRINTS_DEB_SHA256=e727c916a7abdd1c4394f8b277f09803317837191f8f589f2daef1f24ee03978
 ARG KONNECT_VERSION=0.12.1
 ARG KONNECT_SHA256=8a546fc949d11edbb55096a9b1f2c8f9147b26a9916b47a5c4990ee9e9441fb6
 ARG KONNECT_COMMIT=fa62e1ccb9eba359519bf8e3eab53a6cffeee33c
