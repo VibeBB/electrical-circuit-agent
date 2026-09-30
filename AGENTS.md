@@ -94,7 +94,12 @@ uv run python scripts/verify_all.py --stage fast
 commands in parallel up to `--jobs` workers (default
 `min(os.cpu_count() or 1, 4)`); `--list` dumps the machine-readable command
 table. `standard` additionally requires `CIRCUIT_TOOLS_IMAGE` for the Docker
-integration run.
+integration run. The fast stage includes the shared-hook checker and enforces
+the configured line-coverage threshold. Policy: shared hooks are canonical
+across the family; change all 9 copies together and update EXPECTED.
+`intake_attachments.py`, `protect_libraries.py`, `record_image_observation.py`,
+`record_vision_tool_event.py`, and `report_design_status.py` are intentionally
+repo-specific.
 
 ## Git
 

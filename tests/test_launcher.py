@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -45,8 +46,10 @@ def test_plugin_image_pin_matches_docker_lock() -> None:
     assert pinned["digest"] == locked["digest"]
 
 
-def test_docker_argv_transient_state_env() -> None:
+def test_docker_argv_transient_state_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """HOME/XDG point at /tmp inside the container (host HOME is unwritable)."""
+    monkeypatch.delenv("OPENHANDS_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
     module = _load_launcher()
     argv = module._docker_argv(image="img", source=None, inner_argv=["doctor"])
     env = {
@@ -58,6 +61,7 @@ def test_docker_argv_transient_state_env() -> None:
     assert env["XDG_CACHE_HOME"].startswith("/tmp/")
     assert env["XDG_CONFIG_HOME"].startswith("/tmp/")
     assert env["XDG_DATA_HOME"].startswith("/tmp/")
+    assert env["OPENHANDS_PROJECT_DIR"] == str(tmp_path)
 
 
 def test_docker_argv_does_not_forward_host_home(
@@ -96,6 +100,55 @@ def test_ensure_image_warn_mode_never_pulls(
         pytest.skip("docker not on PATH")
     with pytest.raises(RuntimeError, match="not pulled locally"):
         module._ensure_image(tmp_path, pull=False)
+
+
+def test_ensure_image_inspect_timeout_does_not_pull(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_launcher()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(module, "_docker", lambda: "docker")
+
+    def fake_image_from_lock(_root: Path) -> str:
+        return "image"
+
+    monkeypatch.setattr(module, "_image_from_lock", fake_image_from_lock)
+
+    def timeout(command: list[str], **kwargs: Any) -> Any:
+        calls.append(command)
+        raise module.subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(module.subprocess, "run", timeout)
+    with pytest.raises(RuntimeError, match="docker image inspect timed out after 30 seconds"):
+        module._ensure_image(tmp_path)
+    assert calls == [["docker", "image", "inspect", "image"]]
+
+
+def test_ensure_image_pull_timeout_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_launcher()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(module, "_docker", lambda: "docker")
+
+    def fake_image_from_lock(_root: Path) -> str:
+        return "image"
+
+    monkeypatch.setattr(module, "_image_from_lock", fake_image_from_lock)
+
+    def timeout_pull(command: list[str], **kwargs: Any) -> Any:
+        calls.append(command)
+        if command[1:3] == ["image", "inspect"]:
+            return module.subprocess.CompletedProcess(command, 1)
+        raise module.subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(module.subprocess, "run", timeout_pull)
+    with pytest.raises(RuntimeError, match="docker pull timed out after 900 seconds"):
+        module._ensure_image(tmp_path)
+    assert calls == [
+        ["docker", "image", "inspect", "image"],
+        ["docker", "pull", "image"],
+    ]
 
 
 def test_homes_includes_real_pw_dir() -> None:

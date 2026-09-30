@@ -10,6 +10,7 @@ import os
 import shlex
 from pathlib import Path
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -47,6 +48,7 @@ from . import (
 )
 from .advisory import AdvisoryResult
 from .paths import KONNECT_SOCKET_URL
+from .workspace import workspace_path
 
 server = Server("circuit", version=__version__)
 
@@ -441,6 +443,114 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def _installed_footprint_roots() -> tuple[Path, ...]:
+    kicad_share = Path(os.environ.get("CIRCUIT_KICAD_SHARE", "/usr/share/kicad-nightly"))
+    cern = Path(os.environ.get("CIRCUIT_CERN_LIBS", "/opt/circuit/libraries/cern-kicad-libs"))
+    return kicad_share / "footprints", cern / "PcbLib"
+
+
+def _footprint_library_path(value: str) -> Path:
+    try:
+        return workspace_path(value)
+    except ValueError as workspace_error:
+        candidate = Path(value)
+        if candidate.is_absolute():
+            for root in _installed_footprint_roots():
+                try:
+                    return workspace_path(candidate, root=root)
+                except ValueError:
+                    pass
+        raise ValueError(
+            "footprint library must be inside the workspace or an installed KiCad/CERN library"
+        ) from workspace_error
+
+
+def _is_path_argument(key: str) -> bool:
+    return key in {"path", "paths"} or key.endswith(("_path", "_dir"))
+
+
+def _workspace_path_argument(
+    name: str,
+    key: str,
+    value: Any,
+    required_paths: set[str],
+    arguments: dict[str, Any],
+) -> Any:
+    if isinstance(value, list):
+        return [
+            _workspace_path_argument(name, key, item, required_paths, arguments)
+            for item in cast(list[Any], value)
+        ]
+    if value is None:
+        if key in required_paths:
+            raise ValueError(f"'{key}' must be a non-empty path")
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"'{key}' must be a path string")
+    if not value:
+        if key in required_paths:
+            raise ValueError(f"'{key}' must be a non-empty path")
+        return value
+    if name == "circuit_export" and key == "source_path" and arguments.get("kind") == "fp_svg":
+        return str(_footprint_library_path(value))
+    return str(workspace_path(value))
+
+
+def _workspace_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    required_paths: set[str] = set()
+    for tool_name, _, schema in _TOOLS:
+        if tool_name == name:
+            required = schema.get("required", [])
+            if isinstance(required, list):
+                required_paths = {key for key in cast(list[Any], required) if isinstance(key, str)}
+            break
+
+    normalized = dict(arguments)
+    for key, value in arguments.items():
+        if _is_path_argument(key):
+            normalized[key] = _workspace_path_argument(name, key, value, required_paths, arguments)
+        elif name == "circuit_konnect_call" and key == "ops" and isinstance(value, list):
+            ops: list[Any] = []
+            for item in cast(list[Any], value):
+                if isinstance(item, dict):
+                    operation = cast(dict[str, Any], item)
+                    operation_tool = operation.get("tool")
+                    operation_arguments = operation.get("arguments")
+                    if isinstance(operation_tool, str) and isinstance(operation_arguments, dict):
+                        operation = {
+                            **operation,
+                            "arguments": _workspace_arguments(
+                                operation_tool,
+                                cast(dict[str, Any], operation_arguments),
+                            ),
+                        }
+                    ops.append(operation)
+                else:
+                    ops.append(item)
+            normalized[key] = ops
+        elif (
+            name == "circuit_konnect_call"
+            and key == "arguments"
+            and isinstance(value, dict)
+            and isinstance(arguments.get("tool"), str)
+        ):
+            normalized[key] = _workspace_arguments(
+                cast(str, arguments["tool"]),
+                cast(dict[str, Any], value),
+            )
+    return normalized
+
+
+def _socket_url(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.lower().startswith("ipc://")
+        or urlsplit(value).scheme.lower() != "ipc"
+    ):
+        raise ValueError("circuit_konnect_call 'socket' must use ipc://")
+    return value
+
+
 def _output_path(source: Path, output: str | None, kind: str) -> Path:
     path = (
         Path(output) if output else source.parent / "circuit-reports" / f"{source.stem}.{kind}.json"
@@ -691,9 +801,13 @@ async def _konnect_call(
     ops: list[dict[str, Any]] | None = None,
 ) -> CallToolResult:
     command = shlex.split(os.environ.get("CIRCUIT_KONNECT", "konnect"))
+    socket_url = (
+        _socket_url(socket or os.environ.get("KICAD_API_SOCKET") or KONNECT_SOCKET_URL)
+        or KONNECT_SOCKET_URL
+    )
     env = {
         **os.environ,
-        "KICAD_API_SOCKET": socket or os.environ.get("KICAD_API_SOCKET") or KONNECT_SOCKET_URL,
+        "KICAD_API_SOCKET": socket_url,
     }
     params = StdioServerParameters(command=command[0], args=command[1:], env=env)
     counter = [0]
@@ -806,9 +920,9 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResult:
-    args = arguments or {}
     image_paths: list[Path] = []
     try:
+        args = _workspace_arguments(name, arguments or {})
         if name == "circuit_api_server_start":
             result = apiserver.start(Path(str(args["board_path"])))
         elif name == "circuit_api_server_status":
@@ -1131,6 +1245,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
         elif name == "circuit_konnect_call":
             konnect_arguments = args.get("arguments")
             ops = args.get("ops")
+            socket_url = _socket_url(args["socket"]) if "socket" in args else None
             if ops is not None:
                 if not isinstance(ops, list) or not all(
                     isinstance(item, dict) for item in cast(list[Any], ops)
@@ -1139,7 +1254,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 return await _konnect_call(
                     "",
                     {},
-                    _optional_string(args.get("socket")),
+                    socket_url,
                     ops=cast(list[dict[str, Any]], ops),
                 )
             tool = args.get("tool")
@@ -1150,7 +1265,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 cast(dict[str, Any], konnect_arguments)
                 if isinstance(konnect_arguments, dict)
                 else {},
-                _optional_string(args.get("socket")),
+                socket_url,
             )
         elif name == "circuit_kicad_version":
             result = kicad_cli.version()

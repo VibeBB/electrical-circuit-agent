@@ -100,7 +100,8 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
-def test_brief_validate_tool(tmp_path: Path) -> None:
+def test_brief_validate_tool(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(Path(__file__).resolve().parents[1]))
     brief_path = Path(__file__).parent / "data" / "brief_led_loop.json"
 
     async def exercise() -> None:
@@ -114,7 +115,80 @@ def test_brief_validate_tool(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_path_arguments_accept_workspace_relative_paths(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    sample = Path(__file__).parent / "data" / "brief_led_loop.json"
+    (tmp_path / "brief.json").write_text(sample.read_text(encoding="utf-8"), encoding="utf-8")
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool("circuit_brief_validate", {"brief_path": "brief.json"}),
+        )
+        assert result.isError is False
+        assert '"brief_sha256"' in result.content[0].text
+
+    asyncio.run(exercise())
+
+
+def test_path_arguments_reject_parent_traversal(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_brief_validate",
+                {"brief_path": "../outside.json"},
+            ),
+        )
+        assert result.isError is True
+        assert "outside the workspace" in result.content[0].text
+
+    asyncio.run(exercise())
+
+
+def test_path_arguments_reject_outside_absolute_path(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.json"
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_brief_validate",
+                {"brief_path": str(outside)},
+            ),
+        )
+        assert result.isError is True
+        assert "outside the workspace" in result.content[0].text
+
+    asyncio.run(exercise())
+
+
+def test_path_arguments_reject_symlink_components(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(outside, target_is_directory=True)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_brief_validate",
+                {"brief_path": str(linked / "brief.json")},
+            ),
+        )
+        assert result.isError is True
+        assert "symlink" in result.content[0].text
+
+    asyncio.run(exercise())
+
+
 def test_render_result_includes_image_content(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     # Smallest valid PNG (1x1 transparent pixel).
     png_bytes = bytes.fromhex(
         "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
@@ -160,6 +234,8 @@ def test_render_result_includes_image_content(tmp_path: Path, monkeypatch: Any) 
 
 
 def test_render_result_text_only_when_png_missing(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+
     def fake_render(
         pcb: Path,
         out: Path,
@@ -193,6 +269,7 @@ def test_render_result_text_only_when_png_missing(tmp_path: Path, monkeypatch: A
 
 
 def test_render_schematic_kind_attaches_images(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     png_bytes = bytes.fromhex(
         "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
         "0000000a49444154789c626001000000ffff03000006000557bfabd40000000049"
@@ -233,6 +310,7 @@ def test_render_schematic_kind_attaches_images(tmp_path: Path, monkeypatch: Any)
 
 
 def test_render_layers_kind_attaches_capped_images(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     png_bytes = b"\x89PNG" + b"0" * 32
     out_dir = tmp_path / "layers"
     out_dir.mkdir()
@@ -277,7 +355,11 @@ def test_render_layers_kind_attaches_capped_images(tmp_path: Path, monkeypatch: 
         ("layers", "layers"),
     ],
 )
-def test_render_kind_requires_its_inputs(tmp_path: Path, kind: str, missing: str) -> None:
+def test_render_kind_requires_its_inputs(
+    tmp_path: Path, monkeypatch: Any, kind: str, missing: str
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+
     async def exercise() -> None:
         args: dict[str, Any] = {
             "kind": kind,
@@ -296,7 +378,9 @@ def test_render_kind_requires_its_inputs(tmp_path: Path, kind: str, missing: str
     asyncio.run(exercise())
 
 
-def test_render_unknown_kind_errors(tmp_path: Path) -> None:
+def test_render_unknown_kind_errors(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+
     async def exercise() -> None:
         result = cast(
             Any,
@@ -312,6 +396,7 @@ def test_render_unknown_kind_errors(tmp_path: Path) -> None:
 
 
 def test_diff_png_attaches_image(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     png_bytes = b"\x89PNG" + b"0" * 32
     out_path = tmp_path / "diff.png"
     out_path.write_bytes(png_bytes)
@@ -412,6 +497,7 @@ def test_rewrite_base64_images_handles_data_url_and_image_blocks(
 
 
 def test_konnect_call_ops_extract_image_blocks(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     png_bytes = (
         bytes.fromhex(
             "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
@@ -490,7 +576,10 @@ def test_konnect_call_proxies_to_managed_subprocess(tmp_path: Path, monkeypatch:
             Any,
             await mcp_server.call_tool(
                 "circuit_konnect_call",
-                {"tool": "circuit_kicad_version"},
+                {
+                    "tool": "circuit_kicad_version",
+                    "socket": "ipc:///tmp/circuit-kicad.sock",
+                },
             ),
         )
         assert result.isError is False
@@ -575,6 +664,63 @@ def test_konnect_call_requires_tool_or_ops(tmp_path: Path, monkeypatch: Any) -> 
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize(
+    "socket",
+    ["tcp://127.0.0.1:9000", "file:///tmp/socket", "/tmp/socket", "ipc:/tmp/socket", "", None],
+)
+def test_konnect_call_rejects_non_ipc_socket(tmp_path: Path, monkeypatch: Any, socket: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_konnect_call",
+                {"tool": "circuit_kicad_version", "socket": socket},
+            ),
+        )
+        assert result.isError is True
+        assert "must use ipc://" in result.content[0].text
+
+    asyncio.run(exercise())
+
+
+def test_konnect_call_contains_nested_tool_and_operation_paths(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+
+    async def exercise() -> None:
+        for arguments in [
+            {
+                "tool": "circuit_render",
+                "arguments": {
+                    "board_path": "../outside.kicad_pcb",
+                    "output_path": "render.png",
+                },
+            },
+            {
+                "ops": [
+                    {
+                        "tool": "circuit_render",
+                        "arguments": {
+                            "board_path": "../outside.kicad_pcb",
+                            "output_path": "render.png",
+                        },
+                    }
+                ]
+            },
+        ]:
+            result = cast(
+                Any,
+                await mcp_server.call_tool("circuit_konnect_call", arguments),
+            )
+            assert result.isError is True
+            assert "outside the workspace" in result.content[0].text
+
+    asyncio.run(exercise())
+
+
 def _write_gate_reports(project: Path) -> Path:
     reports = project / "circuit-reports"
     reports.mkdir(parents=True)
@@ -630,9 +776,12 @@ def _write_gate_reports(project: Path) -> Path:
     return reports
 
 
-def test_design_report_collects_pipeline_sections(tmp_path: Path) -> None:
-    brief_path = Path(__file__).parent / "data" / "brief_led_loop.json"
+def test_design_report_collects_pipeline_sections(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     project = tmp_path
+    brief_path = project / "brief.json"
+    sample = Path(__file__).parent / "data" / "brief_led_loop.json"
+    brief_path.write_text(sample.read_text(encoding="utf-8"), encoding="utf-8")
     (project / "board.kicad_sch").write_text("()", encoding="utf-8")
     (project / "board.kicad_pcb").write_text("()", encoding="utf-8")
     reports = _write_gate_reports(project)
@@ -709,6 +858,7 @@ def test_design_report_collects_pipeline_sections(tmp_path: Path) -> None:
 def test_import_dispatches_and_returns_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     from circuit.kicad_cli import ImportResult
 
     def fake_import(kind: str, source: Path, output: Path, *, format: str) -> ImportResult:
@@ -744,6 +894,7 @@ def test_import_dispatches_and_returns_report(
 
 
 def test_stackup_writes_json_and_svg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     out_dir = tmp_path / "stackup"
 
     def fake_stackup(board: Path, out: Path) -> dict[str, object]:
@@ -771,6 +922,7 @@ def test_stackup_writes_json_and_svg(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_rasterize_attaches_pngs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     png_bytes = bytes.fromhex(
         "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
         "0000000a49444154789c626001000000ffff03000006000557bfabd40000000049"
@@ -799,6 +951,119 @@ def test_rasterize_attaches_pngs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         image = result.content[1]
         assert isinstance(image, ImageContent)
         assert image.mimeType == "image/png"
+
+    asyncio.run(exercise())
+
+
+def test_fp_svg_export_accepts_workspace_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    library = tmp_path / "workspace.pretty"
+    library.mkdir()
+    (library / "part.kicad_mod").write_text("(footprint)", encoding="utf-8")
+    output_dir = tmp_path / "exports"
+    calls: list[tuple[str, Path, Path]] = []
+
+    def fake_export(kind: str, source: Path, output: Path) -> dict[str, str]:
+        calls.append((kind, source, output))
+        return {"kind": kind}
+
+    monkeypatch.setattr(mcp_server.kicad_cli, "export", fake_export)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_export",
+                {
+                    "kind": "fp_svg",
+                    "source_path": str(library),
+                    "output_dir": "exports",
+                },
+            ),
+        )
+        assert result.isError is False
+        assert calls == [("fp_svg", library, output_dir)]
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    ("library_env", "library_subdir"),
+    [
+        ("CIRCUIT_KICAD_SHARE", "footprints"),
+        ("CIRCUIT_CERN_LIBS", "PcbLib"),
+    ],
+)
+def test_fp_svg_export_accepts_installed_library_roots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    library_env: str,
+    library_subdir: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(workspace))
+    monkeypatch.setenv("CIRCUIT_KICAD_SHARE", str(tmp_path / "kicad"))
+    monkeypatch.setenv("CIRCUIT_CERN_LIBS", str(tmp_path / "cern"))
+    library_root = Path(os.environ[library_env]) / library_subdir
+    library = library_root / "installed.pretty"
+    library.mkdir(parents=True)
+    (library / "part.kicad_mod").write_text("(footprint)", encoding="utf-8")
+    output_dir = workspace / "exports"
+    calls: list[tuple[str, Path, Path]] = []
+
+    def fake_export(kind: str, source: Path, output: Path) -> dict[str, str]:
+        calls.append((kind, source, output))
+        return {"kind": kind}
+
+    monkeypatch.setattr(mcp_server.kicad_cli, "export", fake_export)
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_export",
+                {
+                    "kind": "fp_svg",
+                    "source_path": str(library),
+                    "output_dir": "exports",
+                },
+            ),
+        )
+        assert result.isError is False
+        assert calls == [("fp_svg", library, output_dir)]
+
+    asyncio.run(exercise())
+
+
+def test_fp_svg_export_rejects_external_library(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(workspace))
+    monkeypatch.setenv("CIRCUIT_KICAD_SHARE", str(tmp_path / "kicad"))
+    monkeypatch.setenv("CIRCUIT_CERN_LIBS", str(tmp_path / "cern"))
+    outside = tmp_path / "outside.pretty"
+    outside.mkdir()
+    (outside / "part.kicad_mod").write_text("(footprint)", encoding="utf-8")
+
+    async def exercise() -> None:
+        result = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_export",
+                {
+                    "kind": "fp_svg",
+                    "source_path": str(outside),
+                    "output_dir": "exports",
+                },
+            ),
+        )
+        assert result.isError is True
+        assert "installed KiCad/CERN library" in result.content[0].text
 
     asyncio.run(exercise())
 
@@ -892,6 +1157,7 @@ def test_call_tool_rejects_invalid_literal_args(
 
 
 def test_render_valid_literal_args_pass_through(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     captured: dict[str, object] = {}
     out_path = tmp_path / "render.png"
     out_path.write_bytes(b"\x89PNG" + b"0" * 32)
