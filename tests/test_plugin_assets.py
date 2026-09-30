@@ -104,7 +104,10 @@ def test_ensure_llm_profiles_provisions(tmp_path: Path) -> None:
         env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
         check=False,
     )
-    assert json.loads(proc2.stdout)["findings"] == []
+    assert json.loads(proc2.stdout)["findings"] == [
+        "vibebb-review is not vision-capable (unsupported); rendered-image review is text-only — "
+        "point ~/.openhands/profiles/vibebb-review.json at a vision-capable model"
+    ]
 
 
 def test_ensure_llm_profiles_tolerates_missing_settings(tmp_path: Path) -> None:
