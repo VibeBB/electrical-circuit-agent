@@ -3,31 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
-import json
-import os
-import shlex
 from pathlib import Path
-from typing import Any, Literal, cast
-from urllib.parse import urlsplit
+from typing import Any, cast
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import (
     CallToolResult,
     ContentBlock,
-    ImageContent,
     ServerCapabilities,
     TextContent,
     Tool,
     ToolAnnotations,
     ToolsCapability,
 )
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from . import (
     __version__,
@@ -46,9 +37,33 @@ from . import (
     sch_lint,
     stackup,
 )
-from .advisory import AdvisoryResult
-from .paths import KONNECT_SOCKET_URL
-from .workspace import workspace_path
+from . import mcp_konnect as _mcp_konnect
+from .mcp_args import (
+    _json,
+    _literal,
+    _netlist_path,
+    _optional_literal,
+    _optional_string,
+    _output_path,
+    _required_string,
+    _socket_url,
+)
+from .mcp_args import (
+    _workspace_arguments as _workspace_arguments_from_args,
+)
+from .mcp_collect import (
+    _MAX_INLINE_IMAGES,
+    _collect_advisory,
+    _collect_diffs,
+    _collect_exports,
+    _collect_jobset,
+    _collect_renders,
+    _image_content,
+    _jobset_consistent,
+    _load_report,
+    _reports_dirs,
+)
+from .mcp_konnect import _konnect_call, _rewrite_base64_images
 
 server = Server("circuit", version=__version__)
 
@@ -439,424 +454,17 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
 ]
 
 
-def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, default=str)
-
-
-def _installed_footprint_roots() -> tuple[Path, ...]:
-    kicad_share = Path(os.environ.get("CIRCUIT_KICAD_SHARE", "/usr/share/kicad-nightly"))
-    cern = Path(os.environ.get("CIRCUIT_CERN_LIBS", "/opt/circuit/libraries/cern-kicad-libs"))
-    return kicad_share / "footprints", cern / "PcbLib"
-
-
-def _footprint_library_path(value: str) -> Path:
-    try:
-        return workspace_path(value)
-    except ValueError as workspace_error:
-        candidate = Path(value)
-        if candidate.is_absolute():
-            for root in _installed_footprint_roots():
-                try:
-                    return workspace_path(candidate, root=root)
-                except ValueError:
-                    pass
-        raise ValueError(
-            "footprint library must be inside the workspace or an installed KiCad/CERN library"
-        ) from workspace_error
-
-
-def _is_path_argument(key: str) -> bool:
-    return key in {"path", "paths"} or key.endswith(("_path", "_dir"))
-
-
-def _workspace_path_argument(
-    name: str,
-    key: str,
-    value: Any,
-    required_paths: set[str],
-    arguments: dict[str, Any],
-) -> Any:
-    if isinstance(value, list):
-        return [
-            _workspace_path_argument(name, key, item, required_paths, arguments)
-            for item in cast(list[Any], value)
-        ]
-    if value is None:
-        if key in required_paths:
-            raise ValueError(f"'{key}' must be a non-empty path")
-        return None
-    if not isinstance(value, str):
-        raise ValueError(f"'{key}' must be a path string")
-    if not value:
-        if key in required_paths:
-            raise ValueError(f"'{key}' must be a non-empty path")
-        return value
-    if name == "circuit_export" and key == "source_path" and arguments.get("kind") == "fp_svg":
-        return str(_footprint_library_path(value))
-    return str(workspace_path(value))
-
-
 def _workspace_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    required_paths: set[str] = set()
-    for tool_name, _, schema in _TOOLS:
-        if tool_name == name:
-            required = schema.get("required", [])
-            if isinstance(required, list):
-                required_paths = {key for key in cast(list[Any], required) if isinstance(key, str)}
-            break
-
-    normalized = dict(arguments)
-    for key, value in arguments.items():
-        if _is_path_argument(key):
-            normalized[key] = _workspace_path_argument(name, key, value, required_paths, arguments)
-        elif name == "circuit_konnect_call" and key == "ops" and isinstance(value, list):
-            ops: list[Any] = []
-            for item in cast(list[Any], value):
-                if isinstance(item, dict):
-                    operation = cast(dict[str, Any], item)
-                    operation_tool = operation.get("tool")
-                    operation_arguments = operation.get("arguments")
-                    if isinstance(operation_tool, str) and isinstance(operation_arguments, dict):
-                        operation = {
-                            **operation,
-                            "arguments": _workspace_arguments(
-                                operation_tool,
-                                cast(dict[str, Any], operation_arguments),
-                            ),
-                        }
-                    ops.append(operation)
-                else:
-                    ops.append(item)
-            normalized[key] = ops
-        elif (
-            name == "circuit_konnect_call"
-            and key == "arguments"
-            and isinstance(value, dict)
-            and isinstance(arguments.get("tool"), str)
-        ):
-            normalized[key] = _workspace_arguments(
-                cast(str, arguments["tool"]),
-                cast(dict[str, Any], value),
-            )
-    return normalized
-
-
-def _socket_url(value: Any) -> str:
-    if (
-        not isinstance(value, str)
-        or not value.lower().startswith("ipc://")
-        or urlsplit(value).scheme.lower() != "ipc"
-    ):
-        raise ValueError("circuit_konnect_call 'socket' must use ipc://")
-    return value
-
-
-def _output_path(source: Path, output: str | None, kind: str) -> Path:
-    path = (
-        Path(output) if output else source.parent / "circuit-reports" / f"{source.stem}.{kind}.json"
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _netlist_path(source: Path, output: str | None) -> Path:
-    path = Path(output) if output else source.parent / "circuit-reports" / f"{source.stem}.net"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def _optional_string(value: Any) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _required_string(args: dict[str, Any], name: str, context: str) -> str:
-    value = args.get(name)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{context} requires '{name}'")
-    return value
-
-
-def _literal[LiteralT: str](
-    args: dict[str, Any],
-    key: str,
-    allowed: tuple[LiteralT, ...],
-    default: LiteralT | None = None,
-    *,
-    context: str,
-) -> LiteralT:
-    value = args.get(key, default)
-    if value is None:
-        raise ValueError(f"{context} requires '{key}'")
-    if not isinstance(value, str) or value not in allowed:
-        raise ValueError(f"'{key}' must be one of {list(allowed)}, got {value!r}")
-    return cast(LiteralT, value)
-
-
-def _optional_literal[LiteralT: str](
-    args: dict[str, Any], key: str, allowed: tuple[LiteralT, ...], *, context: str
-) -> LiteralT | None:
-    value = args.get(key)
-    if value is None or value == "":
-        return None
-    return _literal(args, key, allowed, context=context)
-
-
-_IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
-_MAX_INLINE_IMAGES = 4
-
-
-def _image_content(path: Path) -> ImageContent | None:
-    mime = _IMAGE_MIME.get(path.suffix.lower())
-    if mime is None or not path.is_file():
-        return None
-    try:
-        data = base64.b64encode(path.read_bytes()).decode("ascii")
-    except OSError:
-        return None
-    return ImageContent(type="image", data=data, mimeType=mime)
-
-
-def _load_report(path: Path, *, kind: str, source: Path) -> kicad_cli.Report:
-    try:
-        with path.open(encoding="utf-8") as handle:
-            value: object = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise kicad_cli.KicadCliError(f"could not read {kind} report {path}: {exc}") from exc
-    if not isinstance(value, dict):
-        raise kicad_cli.KicadCliError(f"{kind} report has no kicad_version")
-    value = cast(dict[str, object], value)
-    kicad_version = value.get("kicad_version")
-    if not isinstance(kicad_version, str):
-        raise kicad_cli.KicadCliError(f"{kind} report has no kicad_version")
-    return kicad_cli.Report.from_json_file(
-        path,
-        kind=cast(Literal["erc", "drc"], kind),
-        source=source,
-        kicad_version=kicad_version,
-    )
-
-
-def _reports_dirs(schematic: Path, board: Path) -> list[Path]:
-    directories: list[Path] = []
-    for source in (schematic, board):
-        directory = source.parent / "circuit-reports"
-        if directory.is_dir() and directory not in directories:
-            directories.append(directory)
-    return directories
-
-
-def _collect_exports(project_dirs: list[Path]) -> dict[str, list[str]]:
-    exports: dict[str, list[str]] = {}
-    for project_dir in project_dirs:
-        root = project_dir / "exports"
-        if not root.is_dir():
-            continue
-        for child in sorted(root.iterdir()):
-            if child.is_dir():
-                files = [str(p) for p in sorted(child.rglob("*")) if p.is_file()]
-                if files:
-                    exports[child.name] = files
-            elif child.is_file():
-                exports.setdefault("exports", []).append(str(child))
-    return exports
-
-
-def _collect_advisory(directories: list[Path]) -> list[AdvisoryResult]:
-    results: list[AdvisoryResult] = []
-    for directory in directories:
-        for path in sorted(directory.glob("*.advisory.json")):
-            try:
-                value = json.loads(path.read_text(encoding="utf-8"))
-                results.append(AdvisoryResult.model_validate(value))
-            except (OSError, json.JSONDecodeError, ValidationError):
-                continue
-        journal = directory / "advisory.jsonl"
-        if not journal.is_file():
-            continue
-        try:
-            lines = journal.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                results.append(AdvisoryResult.model_validate_json(line))
-            except ValidationError:
-                continue
-    return results
-
-
-def _collect_renders(directories: list[Path]) -> list[str]:
-    renders: list[str] = []
-    for directory in directories:
-        for pattern in ("*.png", "*.jpg", "*.jpeg"):
-            renders.extend(str(path) for path in sorted(directory.glob(pattern)))
-    return renders
-
-
-def _collect_diffs(directories: list[Path]) -> dict[str, kicad_cli.DiffReport]:
-    diffs: dict[str, kicad_cli.DiffReport] = {}
-    for directory in directories:
-        for path in sorted(directory.glob("*.diff.json")):
-            try:
-                diffs[path.name[: -len(".diff.json")]] = kicad_cli.DiffReport.model_validate_json(
-                    path.read_text(encoding="utf-8")
-                )
-            except (OSError, ValidationError):
-                continue
-    return diffs
-
-
-def _collect_jobset(directories: list[Path]) -> kicad_cli.JobsetResult | None:
-    for directory in directories:
-        for path in sorted(directory.glob("*.jobset.json"), reverse=True):
-            try:
-                return kicad_cli.JobsetResult.model_validate_json(path.read_text(encoding="utf-8"))
-            except (OSError, ValidationError):
-                continue
-    return None
-
-
-def _jobset_consistent(
-    jobset: kicad_cli.JobsetResult | None,
-    erc_report: kicad_cli.Report | None,
-    drc_report: kicad_cli.Report | None,
-) -> bool | None:
-    if jobset is None:
-        return None
-    checks: list[bool] = []
-    if jobset.erc_report is not None and erc_report is not None:
-        checks.append(kicad_cli.reports_equivalent(jobset.erc_report, erc_report.report_path))
-    if jobset.drc_report is not None and drc_report is not None:
-        checks.append(kicad_cli.reports_equivalent(jobset.drc_report, drc_report.report_path))
-    return all(checks) if checks else None
-
-
-_BASE64_MIN_LENGTH = 1024
-
-
-def _konnect_image_dir() -> Path:
-    override = os.environ.get("CIRCUIT_KONNECT_IMAGE_DIR")
-    if override:
-        return Path(override)
-    return Path.cwd() / "circuit-reports" / "konnect-images"
-
-
-def _decode_image_payload(value: str) -> tuple[bytes, str] | None:
-    candidate = value
-    if candidate.startswith("data:"):
-        prefix, separator, candidate = candidate.partition(",")
-        if not separator or not prefix.startswith("data:image/"):
-            return None
-    if len(candidate) < _BASE64_MIN_LENGTH:
-        return None
-    try:
-        data = base64.b64decode(candidate, validate=True)
-    except ValueError:
-        return None
-    if data.startswith(b"\x89PNG"):
-        return data, ".png"
-    if data.startswith(b"\xff\xd8\xff"):
-        return data, ".jpg"
-    return None
-
-
-def _rewrite_base64_images(value: Any, image_dir: Path, counter: list[int]) -> Any:
-    if isinstance(value, str):
-        decoded = _decode_image_payload(value)
-        if decoded is None:
-            return value
-        data, suffix = decoded
-        image_dir.mkdir(parents=True, exist_ok=True)
-        counter[0] += 1
-        path = image_dir / f"{counter[0]:03d}{suffix}"
-        path.write_bytes(data)
-        return {
-            "image_path": str(path),
-            "sha256": hashlib.sha256(data).hexdigest(),
-        }
-    if isinstance(value, dict):
-        return {
-            key: _rewrite_base64_images(item, image_dir, counter)
-            for key, item in cast(dict[str, Any], value).items()
-        }
-    if isinstance(value, list):
-        return [_rewrite_base64_images(item, image_dir, counter) for item in cast(list[Any], value)]
-    return value
+    return _workspace_arguments_from_args(name, arguments, _TOOLS)
 
 
 def _rewrite_text_block_images(text: str, image_dir: Path, counter: list[int]) -> str:
-    try:
-        parsed: object = json.loads(text)
-    except json.JSONDecodeError:
-        return text
-    return json.dumps(_rewrite_base64_images(parsed, image_dir, counter), ensure_ascii=False)
-
-
-async def _konnect_call(
-    tool: str,
-    arguments: dict[str, Any],
-    socket: str | None,
-    ops: list[dict[str, Any]] | None = None,
-) -> CallToolResult:
-    command = shlex.split(os.environ.get("CIRCUIT_KONNECT", "konnect"))
-    socket_url = (
-        _socket_url(socket or os.environ.get("KICAD_API_SOCKET") or KONNECT_SOCKET_URL)
-        or KONNECT_SOCKET_URL
+    return _mcp_konnect._rewrite_text_block_images(
+        text,
+        image_dir,
+        counter,
+        rewrite_base64_images=_rewrite_base64_images,
     )
-    env = {
-        **os.environ,
-        "KICAD_API_SOCKET": socket_url,
-    }
-    params = StdioServerParameters(command=command[0], args=command[1:], env=env)
-    counter = [0]
-    image_dir = _konnect_image_dir()
-    async with (
-        stdio_client(params) as (read_stream, write_stream),
-        ClientSession(read_stream, write_stream) as session,
-    ):
-        await session.initialize()
-        if ops is None:
-            result = await session.call_tool(tool, arguments)
-            for index, block in enumerate(result.content):
-                text = getattr(block, "text", None)
-                if text is not None:
-                    result.content[index] = TextContent(
-                        type="text",
-                        text=_rewrite_text_block_images(text, image_dir, counter),
-                    )
-            return result
-        results: list[dict[str, Any]] = []
-        for op in ops:
-            op_tool = str(op.get("tool", ""))
-            op_arguments_value = op.get("arguments")
-            op_arguments: dict[str, Any] = (
-                cast(dict[str, Any], op_arguments_value)
-                if isinstance(op_arguments_value, dict)
-                else {}
-            )
-            op_result = await session.call_tool(op_tool, op_arguments)
-            content: list[Any] = []
-            for block in op_result.content:
-                text = getattr(block, "text", None)
-                if text is not None:
-                    content.append(_rewrite_text_block_images(text, image_dir, counter))
-                else:
-                    content.append(
-                        _rewrite_base64_images(block.model_dump(mode="json"), image_dir, counter)
-                    )
-            results.append(
-                {
-                    "tool": op_tool,
-                    "isError": bool(op_result.isError),
-                    "content": content,
-                }
-            )
-        return CallToolResult(
-            content=[TextContent(type="text", text=_json({"results": results}))],
-            isError=any(item["isError"] for item in results),
-        )
 
 
 def _anno(
@@ -1256,6 +864,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                     {},
                     socket_url,
                     ops=cast(list[dict[str, Any]], ops),
+                    rewrite_text_block_images=_rewrite_text_block_images,
+                    rewrite_base64_images=_rewrite_base64_images,
                 )
             tool = args.get("tool")
             if not isinstance(tool, str) or not tool:
@@ -1266,6 +876,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 if isinstance(konnect_arguments, dict)
                 else {},
                 socket_url,
+                rewrite_text_block_images=_rewrite_text_block_images,
+                rewrite_base64_images=_rewrite_base64_images,
             )
         elif name == "circuit_kicad_version":
             result = kicad_cli.version()
