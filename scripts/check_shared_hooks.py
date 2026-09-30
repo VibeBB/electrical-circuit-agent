@@ -4,7 +4,9 @@ import ast
 import hashlib
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 _EXPECTED_ENSURE_LLM_PROFILES_NORMALIZED_AST_SHA256 = (
     "e8eb58bf540e432be683e737a913a97e84b7f2c2e20daddf27cb6fec42316c79"
@@ -49,7 +51,11 @@ def _digest(path: Path, plugin_name: str) -> str:
         source = re.sub(r"\bux_creator\b", "PLUGIN", source)
     tree = ast.parse(source, filename=str(path))
     _strip_docstrings(tree)
-    normalized = ast.dump(tree, include_attributes=False).encode("utf-8")
+    dump = cast(Callable[..., str], ast.dump)
+    dump_options: dict[str, bool] = {"include_attributes": False}
+    if sys.version_info >= (3, 13):
+        dump_options["show_empty"] = True
+    normalized = dump(tree, **dump_options).encode("utf-8")
     return hashlib.sha256(normalized).hexdigest()
 
 

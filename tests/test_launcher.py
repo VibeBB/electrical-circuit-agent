@@ -106,6 +106,7 @@ def test_ensure_image_inspect_timeout_does_not_pull(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = _load_launcher()
+    monkeypatch.delenv("CIRCUIT_TOOLS_IMAGE", raising=False)
     calls: list[list[str]] = []
     monkeypatch.setattr(module, "_docker", lambda: "docker")
 
@@ -128,6 +129,7 @@ def test_ensure_image_pull_timeout_is_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = _load_launcher()
+    monkeypatch.delenv("CIRCUIT_TOOLS_IMAGE", raising=False)
     calls: list[list[str]] = []
     monkeypatch.setattr(module, "_docker", lambda: "docker")
 
