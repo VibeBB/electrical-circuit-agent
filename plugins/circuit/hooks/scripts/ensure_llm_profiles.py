@@ -21,8 +21,21 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 _PROFILES = ("vibebb-author", "vibebb-review")
+
+if TYPE_CHECKING:
+    from openhands.sdk.llm import LLM as _LLMType
+
+os.environ["OPENHANDS_SUPPRESS_BANNER"] = "1"
+_sdk_llm: type[_LLMType] | None
+try:
+    from openhands.sdk.llm import LLM as _sdk_llm
+except ImportError:
+    _sdk_llm = None
+
+LLM: type[_LLMType] | None = _sdk_llm
 
 
 def _settings() -> dict[str, object]:
@@ -36,6 +49,37 @@ def _settings() -> dict[str, object]:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _read_profile(path: Path) -> dict[str, object] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _vision_status(profile: dict[str, object]) -> str:
+    """'disabled' | 'active' | 'unsupported' | 'unverified'."""
+    if profile.get("disable_vision") is True:
+        return "disabled"
+    model = profile.get("model")
+    if LLM is None or not isinstance(model, str) or not model:
+        return "unverified"
+    try:
+        overrides = profile.get("capability_overrides")
+        if isinstance(overrides, dict):
+            capability_overrides = cast("dict[str, bool | str]", overrides)
+        else:
+            capability_overrides = {}
+        llm = LLM(
+            model=model,
+            usage_id="vision-probe",
+            capability_overrides=capability_overrides,
+        )
+        return "active" if llm.vision_is_active() else "unsupported"
+    except Exception:
+        return "unverified"
 
 
 def _atomic_write(path: Path, payload: str) -> None:
@@ -78,12 +122,31 @@ def main() -> int:
                     findings.append(f"could not write {dest}: {exc}")
 
     missing = [n for n in _PROFILES if not (store / f"{n}.json").is_file()]
+    vision = {
+        name: _vision_status(profile) if profile is not None else "unverified"
+        for name in _PROFILES
+        if (store / f"{name}.json").is_file()
+        for profile in (_read_profile(store / f"{name}.json"),)
+    }
+    review_status = vision.get("vibebb-review")
+    if review_status in {"disabled", "unsupported"}:
+        findings.append(
+            "vibebb-review is not vision-capable "
+            f"({review_status}); rendered-image review is text-only — point "
+            "~/.openhands/profiles/vibebb-review.json at a vision-capable model"
+        )
+    elif review_status == "unverified":
+        findings.append(
+            "vibebb-review vision capability unverified "
+            "(SDK not importable in the hook environment)"
+        )
     print(
         json.dumps(
             {
                 "hook": "ensure-llm-profiles",
                 "profiles": _PROFILES,
                 "missing": missing,
+                "vision": vision,
                 "findings": findings,
             }
         )
