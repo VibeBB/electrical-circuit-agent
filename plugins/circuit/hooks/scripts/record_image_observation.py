@@ -93,6 +93,7 @@ def main() -> int:
         return 0
     if not isinstance(payload, dict):
         return 0
+    payload = cast(dict[str, Any], payload)
     if payload.get("tool_name") not in OBSERVED_TOOLS:
         return 0
     response = payload.get("tool_response")
@@ -100,8 +101,8 @@ def main() -> int:
         response = cast(dict[str, Any], response)
         if "error" in response or response.get("is_error"):
             return 0
-    base = project_dir(cast(dict[str, Any], payload))
-    paths = _image_paths(cast(dict[str, Any], payload), base)
+    base = project_dir(payload)
+    paths = _image_paths(payload, base)
     if not paths:
         return 0
     path = events_path(cast(dict[str, Any], payload), EVENTS_ENV, EVENTS_RELATIVE_PATH)
@@ -128,7 +129,7 @@ def main() -> int:
                     "image_sha256": digest,
                     "recorded_at": datetime.now(UTC).isoformat(),
                     "session_id": payload.get("session_id"),
-                    "actor": actor(cast(dict[str, Any], payload)),
+                    "actor": actor(payload),
                     "tool_call_id": (payload.get("tool_call_id") or payload.get("action_id")),
                 }
                 stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))

@@ -1,3 +1,4 @@
+import fcntl
 import os
 import stat
 import textwrap
@@ -15,6 +16,26 @@ def test_rejects_project_file(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     board.write_text("{}", encoding="utf-8")
     with pytest.raises(apiserver.ApiServerError, match="GetOpenDocuments"):
         apiserver.start(board)
+
+
+def test_start_and_stop_reject_an_occupied_lifecycle_lock(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setattr(apiserver, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(apiserver, "API_SOCKET_PATH", tmp_path / "kicad.sock")
+    board = tmp_path / "board.kicad_pcb"
+    board.write_text("(kicad_pcb)", encoding="utf-8")
+    lock_path = tmp_path / "api-server.lock"
+    lock_path.touch()
+
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(apiserver.ApiServerError) as start_error:
+            apiserver.start(board)
+        assert str(start_error.value) == "another api-server start/stop is in progress"
+        with pytest.raises(apiserver.ApiServerError) as stop_error:
+            apiserver.stop()
+        assert str(stop_error.value) == "another api-server start/stop is in progress"
 
 
 def _fake_cli(tmp_path: Path, *, listen: bool) -> Path:

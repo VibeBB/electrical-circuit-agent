@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import os
 import signal
 import socket
 import subprocess
 import time
+from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -30,6 +32,18 @@ class ApiServerState(BaseModel):
 
 def _state_dir() -> Path:
     return STATE_FILE.parent
+
+
+@contextlib.contextmanager
+def _state_lock() -> Generator[None, None, None]:
+    state_dir = _state_dir()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with (state_dir / "api-server.lock").open("a", encoding="utf-8") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ApiServerError("another api-server start/stop is in progress") from exc
+        yield
 
 
 def _read_state() -> ApiServerState | None:
@@ -73,6 +87,11 @@ def start(board_path: Path, *, timeout_s: float = 30.0) -> ApiServerState:
     if not board_path.is_file():
         raise ApiServerError(f"board does not exist: {board_path}")
 
+    with _state_lock():
+        return _start_locked(board_path, timeout_s)
+
+
+def _start_locked(board_path: Path, timeout_s: float) -> ApiServerState:
     current = _read_state()
     if current is not None:
         if _alive(current.pid):
@@ -138,6 +157,11 @@ def status() -> ApiServerState | None:
 
 
 def stop(*, timeout_s: float = 10.0) -> bool:
+    with _state_lock():
+        return _stop_locked(timeout_s)
+
+
+def _stop_locked(timeout_s: float) -> bool:
     state = _read_state()
     if state is None:
         API_SOCKET_PATH.unlink(missing_ok=True)

@@ -8,7 +8,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from circuit.report import DesignReport
@@ -23,7 +23,7 @@ def _load_report(path: Path) -> tuple[str, str, list[str]]:
     try:
         from circuit.report import DesignReport
     except ImportError:
-        verdict = value.get("verdict") if isinstance(value, dict) else None
+        verdict = cast(dict[str, Any], value).get("verdict") if isinstance(value, dict) else None
         missing: list[str] = []
     else:
         design = DesignReport.model_validate(value)

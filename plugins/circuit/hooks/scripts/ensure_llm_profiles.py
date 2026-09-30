@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SessionStart hook: provision the vibebb-* LLM profiles agents need.
 
-Every circuit sub-agent declares `model: vibebb-author` or `model:
+Every wire sub-agent declares `model: vibebb-author` or `model:
 vibebb-review`, resolved through the SDK's LLMProfileStore
 (~/.openhands/profiles/<name>.json). A missing profile raises ValueError
 at task spawn and silently disables task delegation. This hook clones the
@@ -48,7 +48,9 @@ def _settings() -> dict[str, object]:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    return cast("dict[str, object]", data)
 
 
 def _read_profile(path: Path) -> dict[str, object] | None:
@@ -56,7 +58,9 @@ def _read_profile(path: Path) -> dict[str, object] | None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    return cast("dict[str, object]", data)
 
 
 def _vision_status(profile: dict[str, object]) -> str:

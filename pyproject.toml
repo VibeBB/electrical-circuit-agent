@@ -16,6 +16,7 @@ dev = [
     "packaging>=26",
     "pyright>=1.1.414",
     "pytest>=9",
+    "pytest-cov==7.1.0",
     "pytest-xdist>=3",
     "ruff>=0.16",
 ]
@@ -41,8 +42,21 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
-include = ["src", "scripts", "tests"]
+include = [
+    "src",
+    "scripts",
+    "tests",
+    "plugins/circuit/hooks/scripts",
+    "plugins/circuit/scripts",
+]
 exclude = ["**/__pycache__", ".venv"]
+
+[tool.coverage.run]
+branch = false
+source = ["src/circuit"]
+
+[tool.coverage.report]
+fail_under = 83
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

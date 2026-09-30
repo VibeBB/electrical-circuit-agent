@@ -199,7 +199,10 @@ def main() -> int:
     except (json.JSONDecodeError, OSError) as exc:
         print(f"invalid hook input: {exc}", file=sys.stderr)
         return 2
-    if not isinstance(payload, dict) or payload.get("tool_name") != "terminal":
+    if not isinstance(payload, dict):
+        return 0
+    payload = cast(dict[str, Any], payload)
+    if payload.get("tool_name") != "terminal":
         return 0
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
