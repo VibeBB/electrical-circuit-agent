@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Literal, cast
+from xml.etree import ElementTree as ET
 
 import pytest
 from PIL import Image
@@ -10,6 +11,7 @@ from PIL import Image
 from circuit import libreview
 from circuit.datasheet import DatasheetExtraction, PageExtraction
 from circuit.landpattern import Density, LandPatternResult
+from circuit.libitems import FootprintDef, PadDef, SymbolDef, SymPin
 from circuit.libverify import (
     LibraryVerification,
     VerificationInputs,
@@ -21,6 +23,7 @@ from circuit.partspec import (
     CellRef,
     DatasheetRef,
     Dimension,
+    ExposedPad,
     LandPad,
     LandPattern,
     OrderableVariant,
@@ -232,6 +235,101 @@ def test_blind_questions_select_pins_deterministically_and_omit_expected(tmp_pat
     assert "SIG1" not in blind.read_text(encoding="utf-8")
 
 
+def test_blind_questions_do_not_sample_the_exposed_pad_pin() -> None:
+    spec = _spec()
+    exposed_pad = ExposedPad(
+        number="6",
+        length=Dimension(nom=0.8, reading=_reading("0.8")),
+        width=Dimension(nom=0.8, reading=_reading("0.8")),
+    )
+    spec = spec.model_copy(
+        update={"package": spec.package.model_copy(update={"exposed_pad": exposed_pad})}
+    )
+
+    questions = libreview.blind_questions(spec, "a" * 16)
+    pin_questions = {item.question_id for item in questions if item.question_id.startswith("pin.")}
+
+    assert "pin.6" not in pin_questions
+    assert "pin.5" in pin_questions
+    private_api: Any = libreview
+    assert private_api._question_crop_field("pin.2", spec) == "pin_table"
+
+
+def test_unlabelled_exposed_pad_row_maps_to_the_part_symbol_and_footprint_pin(
+    tmp_path: Path,
+) -> None:
+    spec = _spec()
+    exposed_pad = ExposedPad(
+        number="6",
+        length=Dimension(nom=0.8, reading=_reading("0.8")),
+        width=Dimension(nom=0.8, reading=_reading("0.8")),
+    )
+    spec = spec.model_copy(
+        update={"package": spec.package.model_copy(update={"exposed_pad": exposed_pad})}
+    )
+    pdf_path = tmp_path / "part.pdf"
+    pdf_path.write_bytes(b"pdf")
+    extraction_dir = tmp_path / "evidence"
+    extraction = _make_extraction(pdf_path, extraction_dir)
+    table_path = extraction_dir / "page-001.tables.json"
+    table_document = json.loads(table_path.read_text(encoding="utf-8"))
+    table = table_document["tables"][0]
+    table["rows"].append(["", "Exposed Thermal Pad"])
+    table["cells"].append([[0, 50, 10, 60], [10, 50, 40, 60]])
+    table_path.write_text(json.dumps(table_document), encoding="utf-8")
+
+    private_api: Any = libreview
+    rows = private_api._pin_table_rows(spec, extraction, extraction_dir)
+    symbol = SymbolDef(
+        name="Example",
+        pins=[
+            SymPin(
+                number="6",
+                name="EP",
+                electrical_type="passive",
+                x=0,
+                y=0,
+                length=1,
+                orientation=0,
+                unit=1,
+            )
+        ],
+        properties={},
+    )
+    footprint = FootprintDef(
+        name="Example",
+        attributes=["smd"],
+        pads=[
+            PadDef(
+                number="6",
+                type="smd",
+                shape="rect",
+                x=0,
+                y=0,
+                rotation=0,
+                width=1,
+                height=1,
+                drill=None,
+                layers=["F.Cu"],
+            )
+        ],
+        graphics=[],
+        models=[],
+        properties={},
+    )
+
+    row = next(item for item in rows if item["exposed_pad_row"])
+    augmented = private_api._augment_pin_rows([row], symbol, footprint)[0]
+
+    assert augmented["pin_number"] == "6"
+    assert augmented["part_spec_name"] == "SIG6"
+    assert augmented["symbol_number"] == "6"
+    assert augmented["symbol_name"] == "EP"
+    assert augmented["footprint_pad_present"] is True
+    assert augmented["mismatch"] is True
+    assert "pdfplumber_name" in augmented["mismatch_fields"]
+
+
 def test_review_html_lists_warnings_and_information_after_errors() -> None:
     review: dict[str, Any] = {
         "artifact_kind": "circuit_library_review_packet",
@@ -271,6 +369,66 @@ def test_review_html_lists_warnings_and_information_after_errors() -> None:
 
     assert rendered.index("error: deterministic_error") < rendered.index("warning: review_warning")
     assert rendered.index("warning: review_warning") < rendered.index("info: review_info")
+
+
+def test_review_html_renders_inline_evidence_renders_and_mismatch_cells() -> None:
+    review: dict[str, Any] = {
+        "packet_id": "a" * 16,
+        "findings": [],
+        "evidence_pages": [{"page": 1, "path": "evidence/page-001.png"}],
+        "pin_comparisons": [
+            {
+                "pin_number": "1",
+                "part_spec_name": "SIG1",
+                "part_spec_type": "passive",
+                "symbol_type": "input",
+                "footprint_pad_present": True,
+                "mismatch_fields": ["part_spec_type", "symbol_type"],
+                "mismatch": True,
+            }
+        ],
+        "dimensions": [
+            {
+                "field": "package.pitch",
+                "label": "—",
+                "kind": "limit",
+                "min": None,
+                "nom": 0.5,
+                "max": None,
+                "page": 1,
+                "crop_path": "crops/package.pitch.png",
+                "crop_sha256": "b" * 64,
+            }
+        ],
+        "crops": [
+            {"field": "package.pin1_reading", "page": 1, "path": "crops/pin1.png"},
+            {"field": "orderable.0.row", "page": 1, "path": "crops/orderable.png"},
+        ],
+        "renders": [
+            {"kind": "footprint_svg", "path": "renders/footprint.svg", "sha256": "c" * 64},
+            {"kind": "symbol_svg", "path": "renders/symbol.svg", "sha256": "d" * 64},
+        ],
+        "artifact_hashes": {},
+        "overlay": {"path": "overlay.svg", "scale_known": True},
+        "land_pattern_crop": {"path": "crops/land-pattern.png", "page": 1},
+        "message_template": "",
+        "unknowns": [],
+    }
+    private_api: Any = libreview
+
+    rendered = private_api._review_html(review)
+
+    assert '<img src="crops/package.pitch.png"' in rendered
+    assert 'style="max-height:120px' in rendered
+    assert 'href="evidence/page-001.png">Page 1</a>' in rendered
+    assert '<img src="crops/pin1.png"' in rendered
+    assert '<img src="crops/orderable.png"' in rendered
+    assert '<img src="renders/footprint.svg"' in rendered
+    assert '<img src="renders/symbol.svg"' in rendered
+    assert '<td class="mismatch">passive</td>' in rendered
+    assert "<th>Mismatch</th>" in rendered
+    assert "Same-scale placement overlay" in rendered
+    assert "package.pitch</td><td>—</td>" in rendered
 
 
 def test_review_status_approves_normalized_answers_and_rejects_corrections(
@@ -329,6 +487,67 @@ def test_review_status_fails_closed_for_non_user_and_malformed_decisions(
 
     assert status.state == "invalid"
     assert any(reason in item for item in status.reasons)
+
+
+def test_review_status_recovers_from_user_grammar_typo_followed_by_valid_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
+    spec = _spec()
+    library = tmp_path / "library"
+    packet = "8" * 16
+    _write_event(
+        tmp_path,
+        library,
+        packet,
+        f"CIRCUIT-LIBRARY-REVIEW {packet}\ndecision: aproove\nreviewer: Ada",
+        suffix="typo",
+    )
+    _write_event(
+        tmp_path,
+        library,
+        packet,
+        _message(packet, answers=_expected_answers(spec, packet)),
+        suffix="valid",
+    )
+
+    status = libreview.review_status(library, spec, packet)
+
+    assert status.state == "approved"
+    assert "decision_field_invalid_or_duplicated" in status.reasons
+    assert all(item.integrity_valid for item in status.decisions)
+
+
+def test_review_status_keeps_tampered_event_as_blocker_after_valid_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
+    spec = _spec()
+    library = tmp_path / "library"
+    packet = "9" * 16
+    tampered = _write_event(
+        tmp_path,
+        library,
+        packet,
+        _message(packet, decision="reject"),
+        suffix="tampered",
+    )
+    tampered.write_text("changed after event hashing", encoding="utf-8")
+    _write_event(
+        tmp_path,
+        library,
+        packet,
+        _message(packet, answers=_expected_answers(spec, packet)),
+        suffix="valid",
+    )
+
+    status = libreview.review_status(library, spec, packet)
+
+    assert status.state == "invalid"
+    assert any("event_sha256" in reason for reason in status.reasons)
+    assert any(not item.integrity_valid for item in status.decisions)
 
 
 def test_review_status_detects_tampering_wrong_answers_and_corrections(
@@ -643,6 +862,12 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     regressed: bool,
 ) -> None:
     spec = _spec()
+    pitch = Dimension(
+        nom=1.0,
+        label="pitch",
+        reading=_reading("1.0", bbox=(70, 70, 90, 90)),
+    )
+    spec = spec.model_copy(update={"package": spec.package.model_copy(update={"pitch": pitch})})
     pdf_path = tmp_path / "part.pdf"
     pdf_path.write_bytes(b"pdf")
     spec_path = tmp_path / "part-spec.json"
@@ -822,13 +1047,20 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert "<script" not in review_html.lower()
     assert "base64," not in review_html.lower()
     assert "http://" not in review_html.lower()
-    assert "Land-pattern page crop" in review_html
+    assert "Land-pattern drawing-view crop" in review_html
     assert "Same-scale placement overlay" in review_html
     assert "render_unavailable" in review["unknowns"]
     assert "3D visual review not included yet" in review["unknowns"]
     assert "model:0" in review["artifact_hashes"]
     assert review["overlay"] is not None
     assert review["land_pattern_crop"] is not None
+    assert review["land_pattern_crop"]["path"] == "crops/land_pattern.drawing_view.png"
+    crop_fields = {item["field"]: item for item in review["crops"]}
+    assert crop_fields["package.drawing_view"]["path"] == "crops/package.drawing_view.png"
+    assert crop_fields["package.drawing_view"]["crop_bbox"] == [0, 0, 126, 126]
+    assert crop_fields["land_pattern.drawing_view"]["crop_bbox"] == [0, 0, 66, 56]
+    assert 'src="crops/package.drawing_view.png"' in blind_html
+    assert 'src="crops/pin_table.png"' in blind_html
     assert any(item["field"] == "orderable.0.row" for item in review["crops"])
     page_hashes = {item["page"]: item["sha256"] for item in review["evidence_pages"]}
     for page_record in review["evidence_pages"]:
@@ -850,14 +1082,41 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert "<circle " in overlay_svg
     assert "Top-view placement" in overlay_svg
     assert "drawing view top" in overlay_svg
+    assert review["overlay"]["scale_known"] is True
     crop = review["land_pattern_crop"]
     crop_path = packet.packet_dir / crop["path"]
     assert hashlib.sha256(crop_path.read_bytes()).hexdigest() == crop["sha256"]
     with Image.open(crop_path) as image:
         assert min(image.size) >= 400
-    assert review["overlay"]["scale_px_per_mm"] == pytest.approx(
-        72 / 25.4 * next(item["scale"] for item in review["crops"] if item["path"] == crop["path"])
+    land_page = next(item for item in review["evidence_pages"] if item["page"] == crop["page"])
+    crop_scale = land_page["dpi"] / 25.4 * crop_fields["land_pattern.drawing_view"]["scale"]
+    assert review["overlay"]["scale_px_per_mm"] == pytest.approx(crop_scale)
+    svg_root = ET.fromstring(overlay_svg)
+    view_box = [float(item) for item in svg_root.attrib["viewBox"].split()]
+    overlay_width_px = float(svg_root.attrib["width"].removesuffix("px"))
+    assert overlay_width_px / view_box[2] == pytest.approx(crop_scale)
+    private_api: Any = libreview
+
+    def no_drawing_view_crops(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(private_api, "_drawing_view_crops", no_drawing_view_crops)
+    no_scale_packet = libreview.build_review_packet(
+        spec_path,
+        symbol_lib=symbol_lib,
+        symbol_name="Derived",
+        footprint_path=footprint_path,
+        library_dir=library_dir,
+        density="nominal",
+        out_dir=tmp_path / "reviews-no-scale",
     )
+    no_scale_review = json.loads(
+        (no_scale_packet.packet_dir / "review.json").read_text(encoding="utf-8")
+    )
+    no_scale_html = (no_scale_packet.packet_dir / "02-review.html").read_text(encoding="utf-8")
+    assert no_scale_review["overlay"]["scale_known"] is False
+    assert any("overlay not to scale" in item for item in no_scale_review["unknowns"])
+    assert "Placement overlay — not to scale" in no_scale_html
     assert (
         extraction_holder["extraction"].pages[0].png_sha256 == review["evidence_pages"][0]["sha256"]
     )

@@ -10,6 +10,7 @@ import math
 import os
 import re
 import tempfile
+from collections import Counter
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
@@ -97,6 +98,7 @@ class ReviewDecision(BaseModel):
     event_name: str = ""
     valid: bool
     reasons: list[str]
+    integrity_valid: bool = True
 
 
 class ReviewStatus(BaseModel):
@@ -342,7 +344,10 @@ def blind_questions(spec: PartSpec, packet_id: str) -> list[BlindQuestion]:
             expected="yes" if spec.package.exposed_pad is not None else "no",
         ),
     ]
-    pins = list(spec.pins)
+    exposed_number = (
+        spec.package.exposed_pad.number if spec.package.exposed_pad is not None else None
+    )
+    pins = [pin for pin in spec.pins if pin.number != exposed_number]
 
     def number_key(value: str) -> tuple[int, int | str]:
         return (0, int(value)) if value.isdigit() else (1, value.casefold())
@@ -521,6 +526,7 @@ def _parse_decision(
         event_name=event_path.name,
         valid=not reasons,
         reasons=reasons,
+        integrity_valid=True,
     )
 
 
@@ -532,6 +538,7 @@ def _invalid_decision(packet_id: str, name: str, reason: str) -> ReviewDecision:
         event_name=name,
         valid=False,
         reasons=[reason],
+        integrity_valid=False,
     )
 
 
@@ -600,10 +607,15 @@ def review_status(library_dir: Path, spec: PartSpec, packet_id: str) -> ReviewSt
     expected = {question.question_id: question.expected for question in questions}
     valid_approvals: list[ReviewDecision] = []
     valid_rejections: list[ReviewDecision] = []
+    grammar_reasons: list[str] = []
     status_reasons: list[str] = []
+    integrity_reasons: list[str] = []
     for decision in decisions:
+        if not decision.integrity_valid:
+            integrity_reasons.extend(decision.reasons)
+            continue
         if not decision.valid:
-            status_reasons.extend(decision.reasons)
+            grammar_reasons.extend(decision.reasons)
             continue
         if decision.decision == "reject":
             valid_rejections.append(decision)
@@ -632,23 +644,26 @@ def review_status(library_dir: Path, spec: PartSpec, packet_id: str) -> ReviewSt
         for item in valid_approvals
         if latest_rejection is None or order(item) > order(latest_rejection)
     ]
-    if eligible_approvals and not any(not item.valid for item in decisions):
+    blockers = integrity_reasons + status_reasons
+    if eligible_approvals and not blockers:
         return ReviewStatus(
             artifact_kind="circuit_library_review_status",
             packet_id=packet_id,
             state="approved",
-            reasons=[],
+            reasons=list(dict.fromkeys(grammar_reasons)),
             decisions=decisions,
         )
-    if latest_rejection is not None and not any(not item.valid for item in decisions):
+    if latest_rejection is not None and not blockers:
         return ReviewStatus(
             artifact_kind="circuit_library_review_status",
             packet_id=packet_id,
             state="rejected",
-            reasons=["human_review_rejected"],
+            reasons=list(dict.fromkeys([*grammar_reasons, "human_review_rejected"])),
             decisions=decisions,
         )
-    if status_reasons:
+    if blockers or grammar_reasons:
+        status_reasons.extend(integrity_reasons)
+        status_reasons.extend(grammar_reasons)
         if any(reason == "human_review_blind_mismatch" for reason in status_reasons):
             status_reasons = ["human_review_blind_mismatch"]
         return ReviewStatus(
@@ -1011,15 +1026,16 @@ def _crop_image(
     bbox: tuple[float, float, float, float],
     page: PageExtraction,
     field: str,
+    margin_pt: float = 12.0,
 ) -> _CropRecord:
     with Image.open(source_path) as opened:
         image: Image.Image = opened.convert("RGB")
     pixels_per_point = page.dpi / 72.0
     expanded = (
-        max(0.0, bbox[0] - 12.0),
-        max(0.0, bbox[1] - 12.0),
-        min(page.width_pt, bbox[2] + 12.0),
-        min(page.height_pt, bbox[3] + 12.0),
+        max(0.0, bbox[0] - margin_pt),
+        max(0.0, bbox[1] - margin_pt),
+        min(page.width_pt, bbox[2] + margin_pt),
+        min(page.height_pt, bbox[3] + margin_pt),
     )
     left = max(0, math.floor(expanded[0] * pixels_per_point))
     top = max(0, math.floor(expanded[1] * pixels_per_point))
@@ -1095,6 +1111,88 @@ def _cited_bboxes(
     return results
 
 
+def _drawing_id_bbox(
+    spec: PartSpec,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    page: int,
+) -> tuple[float, float, float, float] | None:
+    expected = re.sub(r"[\W_]+", "", spec.package.drawing_id.casefold())
+    if not expected:
+        return None
+    try:
+        words = datasheet.page_words(extraction, extraction_dir, page, lanes=("poppler",))
+    except (OSError, ValueError, datasheet.DatasheetError):
+        return None
+    words.sort(key=lambda word: ((word.top + word.bottom) / 2, word.x0))
+    page_text: list[str] = []
+    character_boxes: list[tuple[float, float, float, float]] = []
+    for word in words:
+        normalized = re.sub(r"[\W_]+", "", word.text.casefold())
+        if normalized:
+            page_text.append(normalized)
+            character_boxes.extend([(word.x0, word.top, word.x1, word.bottom)] * len(normalized))
+    match_start = "".join(page_text).find(expected)
+    if match_start < 0:
+        return None
+    return _union_bboxes(character_boxes[match_start : match_start + len(expected)])
+
+
+def _drawing_view_crops(
+    spec: PartSpec,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    packet_dir: Path,
+    crops: dict[str, _CropRecord],
+) -> dict[str, _CropRecord]:
+    page_by_number = {page.page: page for page in extraction.pages}
+    requests: list[tuple[str, int, list[tuple[float, float, float, float]]]] = []
+    package_page = spec.package.pin1_reading.page
+    package_boxes = [
+        crop.bbox
+        for crop in crops.values()
+        if crop.field.startswith("package.") and crop.page == package_page
+    ]
+    drawing_id_bbox = _drawing_id_bbox(spec, extraction, extraction_dir, package_page)
+    if drawing_id_bbox is not None:
+        package_boxes.append(drawing_id_bbox)
+    requests.append(("package.drawing_view", package_page, package_boxes))
+
+    land_pattern_pages = Counter(
+        crop.page for crop in crops.values() if crop.field.startswith("land_pattern.dimensions.")
+    )
+    if land_pattern_pages:
+        land_page = min(
+            land_pattern_pages,
+            key=lambda page: (-land_pattern_pages[page], page),
+        )
+        land_boxes = [
+            crop.bbox
+            for crop in crops.values()
+            if crop.field.startswith("land_pattern.dimensions.") and crop.page == land_page
+        ]
+        requests.append(("land_pattern.drawing_view", land_page, land_boxes))
+
+    records: dict[str, _CropRecord] = {}
+    for field, page_number, boxes in requests:
+        bbox = _union_bboxes(boxes)
+        page = page_by_number.get(page_number)
+        if bbox is None or page is None:
+            continue
+        target = packet_dir / "crops" / f"{field}.png"
+        record = _crop_image(
+            _page_path(extraction_dir, page),
+            target,
+            bbox=bbox,
+            page=page,
+            field=field,
+            margin_pt=36.0,
+        )
+        record.path = _relative_path(packet_dir, target)
+        records[field] = record
+    return records
+
+
 def _dimension_records(spec: PartSpec, crops: dict[str, _CropRecord]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for field, reading, dimension in _readings(spec):
@@ -1104,7 +1202,7 @@ def _dimension_records(spec: PartSpec, crops: dict[str, _CropRecord]) -> list[di
         records.append(
             {
                 "field": field,
-                "label": dimension.label or field,
+                "label": dimension.label or "—",
                 "kind": dimension.kind,
                 "min": dimension.min,
                 "nom": dimension.nom,
@@ -1143,7 +1241,7 @@ def _pin_table_rows(
     spec: PartSpec,
     extraction: DatasheetExtraction,
     extraction_dir: Path,
-) -> list[dict[str, str | int | None]]:
+) -> list[dict[str, Any]]:
     page = next((item for item in extraction.pages if item.page == spec.pin_table.page), None)
     if page is None:
         return []
@@ -1155,7 +1253,7 @@ def _pin_table_rows(
         return []
     rows = cast(list[Any], raw_rows)
     spec_pins = {pin.number: pin for pin in spec.pins}
-    output: list[dict[str, str | int | None]] = []
+    output: list[dict[str, Any]] = []
     for row_index in range(spec.pin_table.header_rows, len(rows)):
         row = rows[row_index]
         if not isinstance(row, list):
@@ -1177,7 +1275,24 @@ def _pin_table_rows(
         number_poppler = _cell_text(extraction, extraction_dir, page, number_bbox)
         name_poppler = _cell_text(extraction, extraction_dir, page, name_bbox)
         numbers = re.findall(r"(?<!\w)\d+(?!\w)", number)
-        expanded_numbers = numbers if numbers else [number.strip()]
+        exposed_label = name or name_poppler
+        exposed_row = (
+            spec.package.exposed_pad is not None
+            and not numbers
+            and re.search(
+                r"\b(exposed|thermal)\b|power.?pad",
+                exposed_label,
+                re.IGNORECASE,
+            )
+            is not None
+        )
+        expanded_numbers = (
+            [spec.package.exposed_pad.number]
+            if exposed_row and spec.package.exposed_pad is not None
+            else numbers
+            if numbers
+            else [number.strip()]
+        )
         for pin_number in expanded_numbers:
             pin = spec_pins.get(pin_number)
             output.append(
@@ -1193,13 +1308,24 @@ def _pin_table_rows(
                     "symbol_name": None,
                     "symbol_type": None,
                     "footprint_pad_present": None,
+                    "exposed_pad_row": exposed_row,
                 }
             )
     return output
 
 
+def _normalized_pin_name(value: str | None) -> str:
+    return " ".join((value or "").casefold().split())
+
+
+def _pin_number_tokens(value: Any) -> set[str]:
+    text = str(value or "").strip()
+    numbers = re.findall(r"(?<!\w)\d+(?!\w)", text)
+    return set(numbers) if numbers else ({text.casefold()} if text else set())
+
+
 def _augment_pin_rows(
-    rows: list[dict[str, str | int | None]],
+    rows: list[dict[str, Any]],
     symbol: SymbolDef | None,
     footprint: FootprintDef | None,
 ) -> list[dict[str, Any]]:
@@ -1214,6 +1340,33 @@ def _augment_pin_rows(
         row["symbol_name"] = symbol_pin.name if symbol_pin is not None else None
         row["symbol_type"] = symbol_pin.electrical_type if symbol_pin is not None else None
         row["footprint_pad_present"] = str(number) in pad_numbers if number is not None else False
+        mismatches: set[str] = set()
+        if number is not None and not row.get("exposed_pad_row"):
+            for field in ("pdfplumber_number", "poppler_number"):
+                value = row.get(field)
+                if str(number) not in _pin_number_tokens(value):
+                    mismatches.add(field)
+            if any(field in mismatches for field in ("pdfplumber_number", "poppler_number")):
+                mismatches.add("pin_number")
+        part_name = row.get("part_spec_name")
+        if part_name:
+            expected_name = _normalized_pin_name(str(part_name))
+            for field in ("pdfplumber_name", "poppler_name", "symbol_name"):
+                actual_name = row.get(field)
+                if not actual_name or _normalized_pin_name(str(actual_name)) != expected_name:
+                    mismatches.update((field, "part_spec_name"))
+        part_type = row.get("part_spec_type")
+        symbol_type = row.get("symbol_type")
+        if part_type and (
+            not symbol_type or str(part_type).casefold() != str(symbol_type).casefold()
+        ):
+            mismatches.update(("part_spec_type", "symbol_type"))
+        if number is not None and row["symbol_number"] is None:
+            mismatches.add("symbol_number")
+        if number is not None and not row["footprint_pad_present"]:
+            mismatches.add("footprint_pad_present")
+        row["mismatch_fields"] = sorted(mismatches)
+        row["mismatch"] = bool(mismatches)
     return rows
 
 
@@ -1295,9 +1448,9 @@ def _overlay_svg(
     esc = html.escape
     parts = [
         (
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width_mm * scale_px_per_mm:.2f}px" '
-            f'height="{height_mm * scale_px_per_mm:.2f}px" '
-            f'viewBox="{minimum_x:.5f} {minimum_y:.5f} {width_mm:.5f} {height_mm:.5f}">'
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width_mm * scale_px_per_mm:.8f}px" '
+            f'height="{height_mm * scale_px_per_mm:.8f}px" '
+            f'viewBox="{minimum_x:.8f} {minimum_y:.8f} {width_mm:.8f} {height_mm:.8f}">'
         ),
         '<defs><pattern id="hatch" width="0.12" height="0.12" patternUnits="userSpaceOnUse" '
         'patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="0.12" '
@@ -1367,14 +1520,13 @@ def _page_path(extraction_dir: Path, page: PageExtraction) -> Path:
 
 def _question_crop_field(question_id: str, spec: PartSpec) -> str:
     if question_id in {"drawing_id", "drawing_view", "pin1_corner"}:
-        return "package.pin1_reading"
+        return "package.drawing_view"
     if question_id == "pin_count":
         return "pin_table"
     if question_id == "exposed_pad" and spec.package.exposed_pad is not None:
         return "package.exposed_pad.length"
     if question_id.startswith("pin."):
-        number = question_id.removeprefix("pin.")
-        return f"pins.{number}.reading"
+        return "pin_table"
     return "pin_table"
 
 
@@ -1435,6 +1587,9 @@ def _blind_html(
 
 
 def _review_html(review: dict[str, Any]) -> str:
+    def escape(value: Any) -> str:
+        return html.escape(str(value))
+
     findings = review["findings"]
     findings_html = (
         "".join(
@@ -1445,53 +1600,82 @@ def _review_html(review: dict[str, Any]) -> str:
         )
         or "<li>None.</li>"
     )
+    evidence_pages = {
+        int(item["page"]): str(item["path"]) for item in review.get("evidence_pages", [])
+    }
+
+    def full_page_link(page: Any) -> str:
+        try:
+            page_number = int(page)
+        except (TypeError, ValueError):
+            return "—"
+        path = evidence_pages.get(page_number)
+        return f'<a href="{escape(path)}">Page {page_number}</a>' if path is not None else "—"
+
+    pin_cell_keys = (
+        "pin_number",
+        "pdfplumber_number",
+        "poppler_number",
+        "pdfplumber_name",
+        "poppler_name",
+        "part_spec_name",
+        "part_spec_type",
+        "symbol_number",
+        "symbol_name",
+        "symbol_type",
+        "footprint_pad_present",
+    )
+
+    def pin_cell(row: dict[str, Any], key: str) -> str:
+        value = row.get(key)
+        if key == "footprint_pad_present":
+            text = "—" if value is None else ("yes" if value else "no")
+        else:
+            text = "—" if value is None or value == "" else str(value)
+        class_name = ' class="mismatch"' if key in row.get("mismatch_fields", []) else ""
+        return f"<td{class_name}>{escape(text)}</td>"
+
     pin_rows = "".join(
         "<tr>"
-        + "".join(
-            f"<td>{html.escape(str(row.get(key) or ''))}</td>"
-            for key in (
-                "pin_number",
-                "pdfplumber_number",
-                "poppler_number",
-                "pdfplumber_name",
-                "poppler_name",
-                "part_spec_name",
-                "part_spec_type",
-                "symbol_number",
-                "symbol_name",
-                "symbol_type",
-                "footprint_pad_present",
-            )
-        )
+        + "".join(pin_cell(row, key) for key in pin_cell_keys)
+        + ('<td class="mismatch">Mismatch</td>' if row.get("mismatch") else "<td>—</td>")
         + "</tr>"
         for row in review["pin_comparisons"]
     )
+
+    def dimension_crop(row: dict[str, Any]) -> str:
+        path = row.get("crop_path")
+        if not path:
+            return "—"
+        escaped_path = escape(path)
+        alt = escape(row.get("field", "Dimension evidence"))
+        return (
+            f'<a href="{escaped_path}"><img src="{escaped_path}" alt="{alt} evidence crop" '
+            'style="max-height:120px;width:auto"></a>'
+        )
+
     dimension_rows = "".join(
         "<tr>"
         + "".join(
-            f"<td>{html.escape(str(row.get(key) if row.get(key) is not None else ''))}</td>"
-            for key in (
-                "field",
-                "label",
-                "kind",
-                "min",
-                "nom",
-                "max",
-                "page",
-                "crop_path",
-                "crop_sha256",
-            )
+            f"<td>{escape(row.get(key) if row.get(key) is not None else '—')}</td>"
+            for key in ("field", "label", "kind", "min", "nom", "max")
         )
+        + f"<td>{full_page_link(row.get('page'))}</td>"
+        + f"<td>{dimension_crop(row)}</td>"
+        + f"<td>{escape(row.get('crop_sha256') or '—')}</td>"
         + "</tr>"
         for row in review["dimensions"]
     )
     render_items = (
         "".join(
-            f'<li><a href="{html.escape(item["path"])}">{html.escape(item["kind"])}</a> '
-            f"SHA-256 {html.escape(item['sha256'])}</li>"
+            f'<figure><a href="{escape(item["path"])}">'
+            f'<img src="{escape(item["path"])}" alt="{escape(item["kind"])} render" '
+            'style="max-height:400px;width:auto"></a>'
+            f"<figcaption>{escape(item['kind'])} · SHA-256 "
+            f"{escape(item['sha256'])}</figcaption></figure>"
             for item in review["renders"]
         )
-        or "<li>No render artifacts available.</li>"
+        or "<p>No render artifacts available.</p>"
     )
     hashes_html = "".join(
         f"<li><code>{html.escape(str(name))}</code>: <code>{html.escape(str(value))}</code></li>"
@@ -1499,13 +1683,58 @@ def _review_html(review: dict[str, Any]) -> str:
     )
     overlay = review.get("overlay")
     land_crop = review.get("land_pattern_crop")
-    overlay_html = (
-        f'<div class="pair"><figure><img src="{html.escape(land_crop["path"])}">'
-        f"<figcaption>Land-pattern page crop</figcaption></figure><figure>"
-        f'<img src="{html.escape(overlay["path"])}"><figcaption>Same-scale placement overlay'
-        "</figcaption></figure></div>"
-        if overlay is not None and land_crop is not None
-        else "<p>Land-pattern overlay or cited page crop is unavailable.</p>"
+    overlay_caption = (
+        "Same-scale placement overlay"
+        if overlay is not None and overlay.get("scale_known")
+        else "Placement overlay — not to scale"
+    )
+    if overlay is not None and land_crop is not None:
+        overlay_html = (
+            f'<div class="pair"><figure><img src="{escape(land_crop["path"])}" '
+            'alt="Land-pattern drawing view">'
+            f"<figcaption>Land-pattern drawing-view crop · {full_page_link(land_crop.get('page'))}"
+            "</figcaption></figure><figure>"
+            f'<img src="{escape(overlay["path"])}" alt="Placement overlay">'
+            f"<figcaption>{overlay_caption}</figcaption></figure></div>"
+        )
+    elif overlay is not None:
+        overlay_html = (
+            f'<figure><img src="{escape(overlay["path"])}" alt="Placement overlay">'
+            f"<figcaption>{overlay_caption}</figcaption></figure>"
+        )
+    else:
+        overlay_html = "<p>Land-pattern overlay or cited page crop is unavailable.</p>"
+    crop_records = review.get("crops", [])
+
+    def crop_figure(item: dict[str, Any], caption: str) -> str:
+        path = escape(item["path"])
+        page = item.get("page")
+        return (
+            f'<figure><a href="{path}"><img src="{path}" alt="{escape(caption)}" '
+            'style="max-height:400px;width:auto"></a>'
+            f"<figcaption>{escape(caption)} · {full_page_link(page)}</figcaption></figure>"
+        )
+
+    pin1_crops = [
+        item
+        for item in crop_records
+        if item.get("field") in {"package.pin1_reading", "package.drawing_view"}
+    ]
+    pin1_html = (
+        "".join(crop_figure(item, str(item.get("field", "Pin-1 evidence"))) for item in pin1_crops)
+        or "<p>No pin-1 evidence crop is available.</p>"
+    )
+    orderable_crops = [
+        item
+        for item in crop_records
+        if str(item.get("field", "")).startswith("orderable.")
+        and str(item.get("field", "")).endswith(".row")
+    ]
+    orderable_html = (
+        "".join(
+            crop_figure(item, str(item.get("field", "Orderable row"))) for item in orderable_crops
+        )
+        or "<p>No orderable-row evidence crop is available.</p>"
     )
     message = html.escape(review["message_template"])
     unknowns = "".join(f"<li>{html.escape(item)}</li>" for item in review["unknowns"])
@@ -1515,7 +1744,8 @@ def _review_html(review: dict[str, Any]) -> str:
         "table{border-collapse:collapse;"
         "width:100%;font-size:13px}td,th{border:1px solid #bbb;padding:.3rem;text-align:left}"
         "img{max-width:100%;height:auto}.pair{display:flex;align-items:flex-start;gap:1rem}"
-        ".pair figure{margin:0}.pair img{display:block;max-width:none}</style></head><body>"
+        ".pair figure{margin:0}.pair img{display:block;max-width:none}"
+        ".mismatch{background:#f8d7da;color:#842029}</style></head><body>"
         f"<h1>Review packet {html.escape(review['packet_id'])}</h1>"
         "<h2>Contradictions and deterministic findings</h2><ul>"
         + findings_html
@@ -1524,13 +1754,18 @@ def _review_html(review: dict[str, Any]) -> str:
         "<th>PDFPlumber name</th><th>Poppler name</th><th>PartSpec name</th>"
         "<th>PartSpec type</th>"
         "<th>Symbol number</th><th>Symbol name</th><th>Symbol type</th><th>Footprint pad</th>"
+        "<th>Mismatch</th>"
         "</tr></thead><tbody>" + pin_rows + "</tbody></table><h2>Dimensions</h2><table><thead><tr>"
         "<th>Field</th><th>Label</th><th>Kind</th><th>Min</th><th>Nom</th><th>Max</th>"
-        "<th>Page</th><th>Crop</th><th>Crop SHA-256</th></tr></thead><tbody>"
+        "<th>Page</th><th>Evidence crop</th><th>Crop SHA-256</th></tr></thead><tbody>"
         + dimension_rows
-        + "</tbody></table><h2>KiCad renders</h2><ul>"
+        + "</tbody></table><h2>Pin-1 evidence</h2>"
+        + pin1_html
+        + "<h2>Orderable-row evidence</h2>"
+        + orderable_html
+        + "<h2>KiCad renders</h2>"
         + render_items
-        + "</ul><h2>Placement overlay</h2>"
+        + "<h2>Placement overlay</h2>"
         + overlay_html
         + "<h2>Artifact hashes</h2><ul>"
         + hashes_html
@@ -1749,6 +1984,26 @@ def build_review_packet(
                 )
     else:
         unknowns.append("evidence_extraction_unavailable")
+    if extraction is not None:
+        try:
+            crops.update(
+                _drawing_view_crops(
+                    spec,
+                    extraction,
+                    evidence_dir,
+                    packet_dir,
+                    crops,
+                )
+            )
+        except (OSError, ValueError, datasheet.DatasheetError) as exc:
+            findings.append(
+                ReviewFinding(
+                    code="evidence_crop_failed",
+                    severity="warning",
+                    field="drawing_view",
+                    message=str(exc),
+                )
+            )
 
     symbol_def: SymbolDef | None = None
     with suppress(OSError, ValueError):
@@ -1820,14 +2075,7 @@ def build_review_packet(
     unknowns.append("3D visual review not included yet")
 
     overlay_record: dict[str, Any] | None = None
-    land_crop_field = next(
-        (
-            field
-            for name in (spec.land_pattern.dimensions if spec.land_pattern is not None else {})
-            if (field := f"land_pattern.dimensions.{name}") in crops
-        ),
-        None,
-    )
+    land_crop_field = "land_pattern.drawing_view" if "land_pattern.drawing_view" in crops else None
     land_pattern_crop = crops.get(land_crop_field) if land_crop_field is not None else None
     if reference is not None and footprint_def is not None:
         try:
@@ -1838,9 +2086,15 @@ def build_review_packet(
             )
             pixel_scale = (
                 source_page.dpi / 25.4 * land_pattern_crop.scale
-                if source_page is not None and land_pattern_crop is not None
-                else 30.0
+                if source_page is not None and land_pattern_crop is not None and source_page.dpi > 0
+                else None
             )
+            if pixel_scale is None or pixel_scale <= 0:
+                pixel_scale = 30.0
+                scale_known = False
+                unknowns.append("placement overlay scale unavailable; overlay not to scale")
+            else:
+                scale_known = True
             overlay_path = packet_dir / "overlay.svg"
             _overlay_svg(
                 spec,
@@ -1853,6 +2107,7 @@ def build_review_packet(
                 "path": _relative_path(packet_dir, overlay_path),
                 "sha256": _sha256(overlay_path),
                 "scale_px_per_mm": pixel_scale,
+                "scale_known": scale_known,
             }
         except (OSError, ValueError) as exc:
             findings.append(
@@ -1872,6 +2127,7 @@ def build_review_packet(
                 "page": page.page,
                 "path": _relative_path(packet_dir, _page_path(evidence_dir, page)),
                 "sha256": page.png_sha256,
+                "dpi": page.dpi,
             }
             for page in extraction.pages
         ]
