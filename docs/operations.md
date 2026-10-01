@@ -110,6 +110,40 @@ their images at the `review_record_path` listed in `review.json`.
 The image fetches KLC with a depth-one Git fetch of the pinned commit, verifies
 the checked-out `HEAD` against that commit, and removes the checkout metadata.
 
+## 3D model generation and inspection
+
+`cadquery-ocp-novtk==8.0.1.0.0` supplies the Open Cascade STEP operations; no
+additional system package is needed beyond `uv sync`. OCP imports are confined
+to `src/circuit/occt.py`. The tools image installs this dependency through the
+project's exported requirements and checks `import OCP` during its self-check.
+The wheel bundles OCCT `libTK*.so` shared libraries; its OCP package metadata
+and upstream OCCT LGPL-2.1-with-exception reference are recorded in
+`THIRD_PARTY_NOTICES.md`.
+
+Generated models use PartSpec nominal dimensions and emit separate body,
+terminal, and exposed-pad solids with a deterministic STEP header and a
+hash-bound generation manifest. Only `.step` and `.stp` are accepted, and
+footprint model transforms must be identity. Supplied manufacturer/user STEP
+files are imported through the existing provenance/license gate; the workflow
+does not fetch models from manufacturers or aggregators.
+
+Model verification checks units, solid closure and validity, positive volume,
+round-trip geometry, body dimensions, terminal-to-pad bijection, courtyard,
+and pin-1 marker evidence. Terminal geometry is measured in the `z=[0, 0.02]`
+mm slab; terminal bboxes must fit their pads within `0.025 mm`, and row pitch
+must match the PartSpec within `0.01 mm`. The KiCad export oracle independently
+checks placement at 0 and 90 degrees, with relative volume tolerance `1e-4`
+and terminal-pad alignment tolerance `0.02 mm`. Generated and imported models
+are also cross-checked for body extents, terminal centers, and pin-1 quadrant.
+
+The 3D vision comparison reuses the tool-managed vision batch and answer path.
+It binds the PartSpec, footprint, STEP, and render hashes, and compares the
+datasheet drawing with a same-scale KiCad render plus mirrored control.
+Every image requires an answer and valid impression. Missing, stale, or
+failed-control evidence is an error; a mismatch is advisory but requires a
+human question and cannot override deterministic findings. See
+[ADR-0031](adr/ADR-0031-step-model-generation-and-inspection.md).
+
 Every project-library part also requires a human review bound to the current
 PDF, PartSpec, symbol, footprint, 3D-model hashes, and verification settings.
 Build a packet with `circuit_library_review_packet` or

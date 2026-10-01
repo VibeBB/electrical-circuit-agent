@@ -43,6 +43,7 @@
 | [0028](adr/ADR-0028-tool-managed-vision-and-blind-authoring.md) | Tool-managed vision and blind PartSpec authoring |
 | [0029](adr/ADR-0029-layered-rule-profiles-and-footprint-lineage.md) | Layered rule profiles and footprint lineage |
 | [0030](adr/ADR-0030-KLC-test-board-and-vision-oracles.md) | KLC, test-board, and vision oracles |
+| [0031](adr/ADR-0031-step-model-generation-and-inspection.md) | Deterministic STEP model generation and inspection |
 
 ## Research
 
