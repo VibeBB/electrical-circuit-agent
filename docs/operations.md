@@ -49,6 +49,13 @@ to a drawing ID and optional revision. Project-library verification is
 recomputed from recorded inputs by the project gate; a stored passing verdict
 is not authoritative. See [ADR-0025](adr/ADR-0025-part-library-evidence-authority.md).
 
+Pinout geometry is freshly derived for the four supported leaded and no-lead
+quad/dual families, then compared with footprint pad order and symbol names.
+Package pin-1 corners always use top-view coordinates; per-pin view metadata
+is recorded without changing pin interpretation. Review packets show a
+pinout-view question and name-at-position comparison; see
+[ADR-0027](adr/ADR-0027-pinout-orientation-oracles.md).
+
 Every project-library part also requires a human review bound to the current
 PDF, PartSpec, symbol, footprint, 3D-model hashes, and verification settings.
 Build a packet with `circuit_library_review_packet` or
