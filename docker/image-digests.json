@@ -1,10 +1,10 @@
 {
   "circuit_server": {
-    "digest": "sha256:5e8e3f38ad6c8a726be637c74cd079427e7b8c37a342ffa3994330f243e80385",
+    "digest": "sha256:014ed49e23c4a4c7e29e2f9198bf312aadb8ce10b54128a4c49bba44ec88ab7f",
     "dockerfile": "sdk:openhands-agent-server/v1.50.1",
     "image": "ghcr.io/vibebb/circuit-server",
-    "published_at": "2026-10-01T14:05:44Z",
-    "tag": "02d7e6aef993400de8139ce618aee9fbc3a15d49-latest-source",
+    "published_at": "2026-10-01T20:28:23Z",
+    "tag": "7465384b9e4efbb258ebbadcbe0e2270d73131c7-latest-source",
     "tools": {
       "cern_commit": "7618368c1cc70478024ed84882d54c0dade7dc86",
       "circuit": "0.0.1",
@@ -17,16 +17,16 @@
       "python": "Python 3.14.4",
       "semeru_jre": "27.0.0.0"
     },
-    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/36871527479"
+    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/36916295182"
   },
   "circuit_tools": {
-    "attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/51835241",
-    "digest": "sha256:7e38bdf7a42a8d1eebb349a9f5582b95544ba3c3b038b4ef637155e26dda9762",
+    "attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/51947128",
+    "digest": "sha256:dafeb3041d241a9f59455d57e44df557543baaae8992a1af42ba3dc0bb74996c",
     "dockerfile": "docker/circuit-tools.Dockerfile",
     "image": "ghcr.io/vibebb/circuit-tools",
-    "published_at": "2026-10-01T14:05:44Z",
-    "sbom_attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/51835732",
-    "tag": "02d7e6aef993400de8139ce618aee9fbc3a15d49-tools",
+    "published_at": "2026-10-01T20:28:23Z",
+    "sbom_attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/51947443",
+    "tag": "7465384b9e4efbb258ebbadcbe0e2270d73131c7-tools",
     "tools": {
       "cern_commit": "7618368c1cc70478024ed84882d54c0dade7dc86",
       "circuit": "0.0.1",
@@ -39,6 +39,6 @@
       "python": "Python 3.14.4",
       "semeru_jre": "27.0.0.0"
     },
-    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/36871527479"
+    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/36916295182"
   }
 }
