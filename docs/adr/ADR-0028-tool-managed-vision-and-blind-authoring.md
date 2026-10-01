@@ -61,6 +61,14 @@ need to remain blind to each other's conclusions until both have committed.
 - Review packets bind the A/B sealed hashes into packet identity, show each
   visual impression next to its answer, and render both author impressions
   verbatim with HTML escaping.
+- Footprint and symbol comparisons bind the PartSpec and current library
+  artifact hashes, and their mirrored-image control must be detected. A
+  mismatch remains a warning for deterministic verification and becomes a
+  mandatory blind yes/no question for the human reviewer.
+- Review packets list every overlay and comparison image with its SHA-256 and
+  expected `vision_review` record path. Approval requires a valid,
+  impression-bearing review record bound to every listed image; a missing,
+  stale, unreadable, or mismatched record blocks approval.
 - The lane guard prevents accidental cross-lane reads through the agent
   tools; it is a context-isolation policy, not a security boundary.
 

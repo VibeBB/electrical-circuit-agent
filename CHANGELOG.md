@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Layered, hash-bound manufacturing rule profiles and footprint lineage;
+  functional reuse ranking; pinned GPL-isolated KLC and KiCad test-board
+  verification; hash-bound footprint/symbol vision comparisons and a
+  per-image vision-review approval pre-check (ADR-0029, ADR-0030).
 - firmware-agent cooperation: brief parts may set `mcu: true`, the netlist
   parser keeps KiCad `pinfunction`, `circuit_firmware_export` /
   `firmware-export` writes `<design>.firmware.json`, and

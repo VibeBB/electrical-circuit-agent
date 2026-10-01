@@ -41,6 +41,8 @@
 | [0026](adr/ADR-0026-library-human-review-gate.md) | Human-reviewed library packets and hash-bound approval |
 | [0027](adr/ADR-0027-pinout-orientation-oracles.md) | Pinout orientation oracles |
 | [0028](adr/ADR-0028-tool-managed-vision-and-blind-authoring.md) | Tool-managed vision and blind PartSpec authoring |
+| [0029](adr/ADR-0029-layered-rule-profiles-and-footprint-lineage.md) | Layered rule profiles and footprint lineage |
+| [0030](adr/ADR-0030-KLC-test-board-and-vision-oracles.md) | KLC, test-board, and vision oracles |
 
 ## Research
 
