@@ -8,6 +8,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 import pytest
+import scripts.check_dependency_updates as dependency_updates_module
 from scripts.check_dependency_updates import (
     ProjectDependency,
     Status,
@@ -93,6 +94,10 @@ def test_publish_workflow_tracks_itself_and_provenance() -> None:
     assert "digest is None and tag is None" in locked_check
     assert "attestation: ${{ steps.lock.outputs.attestation }}" in locked_check
     assert 'gh attestation verify "oci://${IMAGE}@${DIGEST}"' in locked_check
+    assert 'python3 "$launcher" prewarm' in locked_check
+    assert 'python3 "$launcher" author \\' in locked_check
+    assert "locked-circuit-launcher-smoke" in locked_check
+    assert "if: always()" in locked_check
     assert locked_check.index("gh attestation verify") < locked_check.index(
         "scripts/pull_locked_image.py"
     )
@@ -398,6 +403,48 @@ def test_check_uv_pin_compares_required_version(tmp_path: Path) -> None:
         fetch_json=lambda url: {"info": {"version": "0.13.0"}},
     )
     assert statuses[0].outdated
+
+
+def test_fetch_failures_are_unknown_and_counted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def failed_json(url: str) -> Any:
+        raise OSError(url)
+
+    statuses = [
+        *check_uv_pin(dependency_updates_module.ROOT, fetch_json=failed_json),
+        *check_docker_base(dependency_updates_module.ROOT, fetch_json=failed_json),
+    ]
+    unknown = [status for status in statuses if status.fetch_failed]
+
+    assert unknown
+    assert all(not status.outdated for status in unknown)
+    assert {"Docker Hub", "PyPI"} <= {status.source for status in unknown}
+
+    def failed_report(_root: Path, **_kwargs: Any) -> list[Status]:
+        return unknown
+
+    monkeypatch.setattr(dependency_updates_module, "check_dependency_updates", failed_report)
+    report_json = tmp_path / "report.json"
+    report_markdown = tmp_path / "report.md"
+    assert (
+        dependency_updates_module.main(
+            [
+                "--repo-root",
+                str(dependency_updates_module.ROOT),
+                "--json",
+                str(report_json),
+                "--markdown",
+                str(report_markdown),
+            ]
+        )
+        == 0
+    )
+    report = json.loads(report_json.read_text(encoding="utf-8"))
+    assert report["unknown_count"] == len(unknown)
+    assert report["outdated_count"] == 0
+    assert "| unknown |" in report_markdown.read_text(encoding="utf-8")
 
 
 def test_check_python_versions_flags_older_minors(tmp_path: Path) -> None:

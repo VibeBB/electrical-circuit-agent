@@ -139,8 +139,9 @@ jobs:
               done
               started=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
               retry gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+              retry gh workflow run workflow-lint.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
               failed=0
-              for wf in ci.yml; do
+              for wf in ci.yml workflow-lint.yml; do
                 run_id=""
                 for _ in $(seq 1 30); do
                   sleep 10

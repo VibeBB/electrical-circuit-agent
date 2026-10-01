@@ -120,6 +120,7 @@ class Status:
     outdated: bool
     note: str = ""
     decision: str = ""
+    fetch_failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -424,6 +425,7 @@ def check_uv_pin(repo_root: Path, *, fetch_json: FetchJson = _default_json) -> l
             "pyproject.toml [tool.uv] required-version",
             outdated,
             "" if latest != "?" else "fetch failed",
+            fetch_failed=latest == "?",
         )
     ]
 
@@ -520,6 +522,7 @@ def check_docker_base(repo_root: Path, *, fetch_json: FetchJson = _default_json)
                         "Docker Hub",
                         latest is not None and latest != tag,
                         "" if latest else "fetch failed",
+                        fetch_failed=latest is None,
                     )
                 )
             elif image == "ghcr.io/astral-sh/uv":
@@ -535,6 +538,7 @@ def check_docker_base(repo_root: Path, *, fetch_json: FetchJson = _default_json)
                         "PyPI",
                         latest_uv != "?" and latest_uv != tag,
                         "" if latest_uv != "?" else "fetch failed",
+                        fetch_failed=latest_uv == "?",
                     )
                 )
             else:
@@ -831,6 +835,7 @@ def report(
     )
     return {
         "outdated_count": sum(item.outdated for item in statuses),
+        "unknown_count": sum(item.fetch_failed for item in statuses),
         "statuses": [asdict(item) for item in statuses],
     }
 
@@ -843,7 +848,13 @@ def render_markdown(payload: dict[str, Any]) -> str:
         "|---|---|---|---|---|",
     ]
     for item in payload["statuses"]:
-        state = item["decision"] or ("update available" if item["outdated"] else "up to date")
+        state = item["decision"] or (
+            "unknown"
+            if item["fetch_failed"]
+            else "update available"
+            if item["outdated"]
+            else "up to date"
+        )
         lines.append(
             f"| {item['name']} | `{item['current']}` | `{item['latest']}` | "
             f"{state} | {item['source']} |"

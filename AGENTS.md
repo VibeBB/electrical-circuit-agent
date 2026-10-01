@@ -107,3 +107,5 @@ Commit messages are written in English. Do not use `git add .`, amend,
 `--no-verify`, force-push, push to main, or destructive reset/clean/checkout.
 Split dependent changes into bottom-up stacked PRs, each independently
 verifiable.
+
+Shared workflows are canonical across the family; change all 11 copies together and update `EXPECTED` in `scripts/check_shared_workflows.py`.

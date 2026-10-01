@@ -8,12 +8,19 @@ import os
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "plugins" / "circuit"
 LAUNCHER = PLUGIN_ROOT / "scripts" / "circuit_launcher.py"
+
+
+class ImagePin(TypedDict):
+    ref: str
+    image: str | None
+    digest: str | None
+    attestation: str | None
 
 
 def _load_launcher() -> ModuleType:
@@ -85,7 +92,23 @@ def test_image_from_lock_reads_skill_pin(tmp_path: Path) -> None:
         "attestation": "https://example.invalid/attestation/1",
     }
     (skill_dir / "tools-image.json").write_text(json.dumps(entry), encoding="utf-8")
-    assert module._image_from_lock(tmp_path) == "ghcr.io/x/circuit-tools@sha256:abc"
+    assert module._image_from_lock(tmp_path) == {
+        "ref": "ghcr.io/x/circuit-tools@sha256:abc",
+        "image": "ghcr.io/x/circuit-tools",
+        "digest": "sha256:abc",
+        "attestation": "https://example.invalid/attestation/1",
+    }
+
+
+def test_socket_mounts_existing_kicad_api_socket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_launcher()
+    socket_path = tmp_path / "kicad.sock"
+    socket_path.touch()
+    monkeypatch.setenv("KICAD_API_SOCKET", f"ipc://{socket_path}")
+
+    assert module._socket_mounts() == ["-v", f"{socket_path}:{socket_path}"]
 
 
 def test_ensure_image_warn_mode_never_pulls(
@@ -115,8 +138,13 @@ def test_ensure_image_inspect_timeout_does_not_pull(
     calls: list[list[str]] = []
     monkeypatch.setattr(module, "_docker", lambda: "docker")
 
-    def fake_image_from_lock(_root: Path) -> str:
-        return "image"
+    def fake_image_from_lock(_root: Path) -> ImagePin:
+        return {
+            "ref": "image",
+            "image": None,
+            "digest": None,
+            "attestation": None,
+        }
 
     monkeypatch.setattr(module, "_image_from_lock", fake_image_from_lock)
 
@@ -138,8 +166,13 @@ def test_ensure_image_pull_timeout_is_reported(
     calls: list[list[str]] = []
     monkeypatch.setattr(module, "_docker", lambda: "docker")
 
-    def fake_image_from_lock(_root: Path) -> str:
-        return "image"
+    def fake_image_from_lock(_root: Path) -> ImagePin:
+        return {
+            "ref": "image",
+            "image": None,
+            "digest": None,
+            "attestation": None,
+        }
 
     monkeypatch.setattr(module, "_image_from_lock", fake_image_from_lock)
 
@@ -190,7 +223,7 @@ def test_main_mcp_server_argv_is_module_string(monkeypatch: pytest.MonkeyPatch) 
     def fake_execvp(file: str, args: list[str]) -> None:
         captured.append([file, *args])
 
-    def fake_ensure_image(_root: Path, *, pull: bool = True) -> str:
+    def fake_ensure_image(_root: Path, *, pull: bool = True, prewarm: bool = False) -> str:
         return "img@sha256:abc"
 
     def fake_resolve_source(_root: Path) -> Path | None:

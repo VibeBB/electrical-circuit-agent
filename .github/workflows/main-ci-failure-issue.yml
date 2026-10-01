@@ -11,6 +11,7 @@ on:
       - "PR branch cleanup"
       - "Publish circuit images"
       - "Release"
+      - "Scorecard"
       - "Workflow lint"
     types: [completed]
     branches: [main]
@@ -29,7 +30,8 @@ jobs:
     permissions:
       actions: read # reads the completed run's jobs
       contents: read
-      issues: write # file and close the main CI failure tracking Issue
+      # Files, comments on, and closes the main CI failure tracking issue.
+      issues: write
     steps:
       - name: Update tracking issue
         env:
@@ -40,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           gh label create ci-main-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
-            --description "Main CI or image verification is failing" --force || true
+            --description "a main-branch workflow is failing" --force || true
           issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label ci-main-failure \
             --json number --jq '.[0].number // empty')
           if [ "$CONCLUSION" = success ]; then
@@ -55,9 +57,9 @@ jobs:
           fi
           jobs=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
             --jq '[.jobs[] | select(.conclusion=="failure") | .name] | join(", ")')
-          body=$(printf '%s\n\n- run: %s\n- failed jobs: %s\n' "Main CI/image verification failed." "$RUN_URL" "${jobs:-unknown}")
+          body=$(printf '%s\n\n- run: %s\n- failed jobs: %s\n' "A main-branch workflow failed." "$RUN_URL" "${jobs:-unknown}")
           if [ -n "$issue" ]; then
             gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "Main CI failure report" --label ci-main-failure --body "$body"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "main CI failure report" --label ci-main-failure --body "$body"
           fi
