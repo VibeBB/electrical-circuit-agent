@@ -50,6 +50,11 @@ the immutable tags `<commit>-tools` and `<commit>-latest-source` plus the
 `latest` alias. Lock updates are separated into bot PRs that auto-merge only
 when that PR's CI succeeds.
 
+The tools image carries a GitHub build-provenance attestation. Its URL is
+stored with the `circuit_tools` entry in the root lock and mirrored plugin
+lock. `locked-image-check` verifies available provenance before pulling the
+image; locks without attestation metadata warn and continue.
+
 ```bash
 uv run python scripts/print_locked_image.py --entry circuit_tools
 uv run python scripts/pull_locked_image.py --entry circuit_tools

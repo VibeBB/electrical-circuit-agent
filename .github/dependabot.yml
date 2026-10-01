@@ -4,8 +4,19 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
     commit-message:
       prefix: "deps"
+  - package-ecosystem: docker
+    directory: "/docker"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
   # The uv ecosystem is intentionally absent: Dependabot's bundled uv
   # (currently 0.12.15) cannot satisfy [tool.uv] required-version in
   # pyproject.toml, so every uv update run failed with

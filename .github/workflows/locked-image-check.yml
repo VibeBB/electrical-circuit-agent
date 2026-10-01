@@ -20,18 +20,94 @@ jobs:
     timeout-minutes: 10
     outputs:
       present: ${{ steps.lock.outputs.present }}
+      image: ${{ steps.lock.outputs.image }}
+      digest: ${{ steps.lock.outputs.digest }}
+      attestation: ${{ steps.lock.outputs.attestation }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - id: lock
         run: |
-          if [ -s docker/image-digests.json ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          lock_path = Path("docker/image-digests.json")
+          present = "false"
+          image = ""
+          digest = ""
+          attestation = ""
+          if lock_path.exists():
+              lock = json.loads(lock_path.read_text(encoding="utf-8"))
+              if not isinstance(lock, dict):
+                  raise SystemExit("image lock must be a JSON object")
+              entry = lock.get("circuit_tools")
+              if not isinstance(entry, dict):
+                  raise SystemExit("image lock must contain a circuit_tools object")
+              if entry.get("image") != "ghcr.io/vibebb/circuit-tools":
+                  raise SystemExit(
+                      "circuit_tools image does not match ghcr.io/vibebb/circuit-tools"
+                  )
+              if "digest" not in entry or "tag" not in entry:
+                  raise SystemExit("circuit_tools lock must contain digest and tag fields")
+              digest = entry["digest"]
+              tag = entry["tag"]
+              if digest is None and tag is None:
+                  if entry.get("attestation") is not None:
+                      raise SystemExit(
+                          "circuit_tools attestation cannot exist without a pinned image"
+                      )
+              else:
+                  if (
+                      not isinstance(digest, str)
+                      or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+                      or digest == f"sha256:{'0' * 64}"
+                  ):
+                      raise SystemExit("circuit_tools digest must be null or a sha256 digest")
+                  if (
+                      not isinstance(tag, str)
+                      or re.fullmatch(r"[0-9a-f]{40}-tools", tag) is None
+                  ):
+                      raise SystemExit(
+                          "circuit_tools tag must be null or a 40-character tools tag"
+                      )
+                  present = "true"
+                  image = entry["image"]
+                  attestation_value = entry.get("attestation")
+                  if attestation_value is not None:
+                      parsed = (
+                          urlsplit(attestation_value)
+                          if isinstance(attestation_value, str)
+                          else None
+                      )
+                      if (
+                          parsed is None
+                          or parsed.scheme != "https"
+                          or not parsed.netloc
+                          or any(character.isspace() for character in attestation_value)
+                      ):
+                          raise SystemExit("circuit_tools attestation must be an HTTPS URL")
+                      attestation = attestation_value
+              digest = digest if present == "true" else ""
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"present={present}\n")
+              output.write(f"image={image}\n")
+              output.write(f"digest={digest}\n")
+              output.write(f"attestation={attestation}\n")
+          PY
   check:
     needs: check-lock
     if: needs.check-lock.outputs.present == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 60
+    permissions:
+      contents: read
+      attestations: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,7 +116,21 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "3.12"
+          cache-suffix: locked-image-check
       - run: uv sync --locked
+      - name: Warn that tools image has no attestation metadata
+        if: needs.check-lock.outputs.attestation == ''
+        run: echo "::warning::circuit_tools image lock has no attestation metadata; skipping provenance verification."
+      - name: Verify tools image provenance
+        if: needs.check-lock.outputs.attestation != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ needs.check-lock.outputs.image }}
+          DIGEST: ${{ needs.check-lock.outputs.digest }}
+        run: |
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
       - run: uv run python scripts/pull_locked_image.py --entry circuit_tools
       - id: image
         run: echo "ref=$(uv run python scripts/print_locked_image.py --entry circuit_tools)" >> "$GITHUB_OUTPUT"

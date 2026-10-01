@@ -36,3 +36,4 @@
 | [0021](adr/ADR-0021-openj9-freerouting-runtime.md) | Semeru OpenJ9 and FreeRouting runtime in the tools image |
 | [0022](adr/ADR-0022-tscircuit-not-adopted.md) | tscircuit evaluated and not adopted |
 | [0023](adr/ADR-0023-firmware-pinmap-interchange.md) | Firmware pin map interchange with firmware-agent |
+| [0024](adr/ADR-0024-attest-published-tools-images.md) | Attest published tools images |
