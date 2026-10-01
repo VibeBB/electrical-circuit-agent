@@ -25,7 +25,7 @@ when_to_use_examples:
   - Independently review ERC and DRC JSON
 hooks:
   pre_tool_use:
-    - matcher: file_editor|apply_patch|terminal
+    - matcher: "*"
       hooks:
         - type: command
           name: protect-libraries

@@ -62,8 +62,11 @@ impression for every image, including the control image; failed submissions
 write no answers. The fixed table prompt returns normalized rows of cell
 strings, which PartSpec checks compare with the cited pin and orderable cells.
 Pinout labels are also checked against freshly derived geometry when available.
-Control identity is held only in MCP process memory; after an MCP restart,
-recreate affected vision batches and their reads rather than trusting stale data.
+Control identity is stored in exclusive, hash-bound `.vision-control/` sidecars
+outside batches and authoring lanes, so later processes can re-derive reads.
+Agent pre-tool guards deny references to those sidecars as context isolation,
+not as a security boundary; see
+[ADR-0028](adr/ADR-0028-tool-managed-vision-and-blind-authoring.md).
 Image reads and author commits are recorded by their post-tool hooks when
 observation logging is enabled. Configure
 `vibebb-part-author-a` and `vibebb-part-author-b` independently for model

@@ -45,7 +45,7 @@
   ],
   "pre_tool_use": [
     {
-      "matcher": "file_editor|apply_patch|terminal",
+      "matcher": "*",
       "hooks": [
         {
           "type": "command",

@@ -37,6 +37,9 @@ VISION_SCRIPT = (
 PROTECT_SCRIPT = (
     Path(__file__).parents[1] / "plugins" / "circuit" / "hooks" / "scripts" / "protect_libraries.py"
 )
+AUTHOR_LANE_GUARD_SCRIPT = (
+    Path(__file__).parents[1] / "plugins" / "circuit" / "hooks" / "scripts" / "guard_author_lane.py"
+)
 LIBRARY_REVIEW_SCRIPT = (
     Path(__file__).parents[1]
     / "plugins"
@@ -62,6 +65,19 @@ def _run_protect_hook(payload: dict[str, Any]) -> subprocess.CompletedProcess[st
         text=True,
         capture_output=True,
         check=False,
+    )
+
+
+def _run_author_lane_guard(payload: dict[str, Any], lane: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["CIRCUIT_AUTHORING_LANE"] = lane
+    return subprocess.run(
+        [sys.executable, str(AUTHOR_LANE_GUARD_SCRIPT)],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
     )
 
 
@@ -137,6 +153,41 @@ def test_protect_allows_reading_agent_canvas_events() -> None:
         },
     }
     assert _run_protect_hook(payload).returncode == 0
+
+
+_VISION_CONTROL_READS: tuple[dict[str, Any], ...] = (
+    {
+        "tool_name": "terminal",
+        "tool_input": {"command": "cat /project/.vision-control/x.json"},
+    },
+    {
+        "tool_name": "terminal",
+        "tool_input": {"command": "rg . /project/.vision-control"},
+    },
+    {
+        "tool_name": "file_editor",
+        "tool_input": {"command": "view", "path": "/project/.vision-control/x.json"},
+    },
+    {
+        "tool_name": "circuit_vision_answer",
+        "tool_input": {"batch_path": "/project/.vision-control/x.json"},
+    },
+)
+
+
+def test_main_agent_guard_denies_vision_control_reads() -> None:
+    for payload in _VISION_CONTROL_READS:
+        result = _run_protect_hook(payload)
+        assert result.returncode == 2, payload
+        assert "vision control state is inaccessible" in result.stderr
+
+
+@pytest.mark.parametrize("lane", ["a", "b"])
+def test_author_lane_guard_denies_vision_control_reads(lane: str) -> None:
+    for payload in _VISION_CONTROL_READS:
+        result = _run_author_lane_guard(payload, lane)
+        assert result.returncode == 2, (lane, payload)
+        assert "blind authoring lane context is isolated" in result.stderr
 
 
 def test_part_author_profiles_use_first_distinct_model(tmp_path: Path) -> None:

@@ -37,11 +37,13 @@ def test_plugin_loads_all_assets() -> None:
     assert brief_trigger_types == {PathTrigger}
 
     protect_command = plugin.hooks.pre_tool_use[0].hooks[0].command
+    assert plugin.hooks.pre_tool_use[0].matcher == "*"
     assert plugin.hooks.stop[0].hooks[0].name == "report-design-status"
     assert all(agent.max_budget_per_run == 3.0 for agent in plugin.agents)
     assert all(len(agent.when_to_use_examples) >= 2 for agent in plugin.agents)
     for agent in plugin.agents:
         assert agent.hooks is not None
+        assert agent.hooks.pre_tool_use[0].matcher == "*"
         if agent.name.startswith("circuit-part-author-"):
             assert agent.hooks.pre_tool_use[0].hooks[0].name == "blind-author-lane-guard"
             assert agent.hooks.post_tool_use[0].hooks[0].name == "record-authoring-commit"

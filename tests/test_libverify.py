@@ -71,8 +71,7 @@ def _persist_vision_batch(batch_dir: Path, batch: VisionBatch) -> VisionBatch:
         for item in items
     }
     batch = batch.model_copy(update={"items": items, "field_bindings": field_bindings})
-    visionread._write_batch(batch_dir, batch)  # pyright: ignore[reportPrivateUsage]
-    return batch
+    return visionread._write_batch(batch_dir, batch)  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.fixture(autouse=True)

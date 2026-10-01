@@ -81,7 +81,6 @@ def prompt_for_kind(kind: VisionKind) -> str:
 
 _CONTROL_ALPHABET = "ACDEFHJKLMNPRTUVWXY34679"
 _PDFTOPPM_ENV = "CIRCUIT_PDFTOPPM"
-_CONTROL_STATE: dict[str, tuple[str, str, str]] = {}
 
 
 class VisionReadError(ValueError):
@@ -137,6 +136,8 @@ class VisionBatch(BaseModel):
     pdf_sha256: str
     items: list[VisionReadItem]
     field_bindings: dict[str, str] = Field(default_factory=dict)
+    control_state_path: str = ""
+    control_state_sha256: str = ""
     control_salt: str
     control_answer_sha256: str
     control_read_sha256: str
@@ -186,7 +187,13 @@ def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _atomic_json(path: Path, value: object, *, exclusive: bool = False) -> None:
+def _atomic_json(
+    path: Path,
+    value: object,
+    *,
+    exclusive: bool = False,
+    already_exists: str = "answers",
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
     fd, temporary = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
@@ -201,7 +208,7 @@ def _atomic_json(path: Path, value: object, *, exclusive: bool = False) -> None:
             os.replace(temp_path, path)
     except FileExistsError as exc:
         temp_path.unlink(missing_ok=True)
-        raise VisionReadError(f"answers already exist: {path}") from exc
+        raise VisionReadError(f"{already_exists} already exists: {path}") from exc
     except OSError:
         temp_path.unlink(missing_ok=True)
         raise
@@ -211,13 +218,57 @@ def _field_binding_key(control_salt: str, read_id: str) -> str:
     return _sha256(f"{control_salt}{read_id}".encode())
 
 
-def _write_batch(batch_dir: Path, batch: VisionBatch) -> None:
-    _atomic_json(batch_dir / "batch.json", _batch_payload(batch))
-    _CONTROL_STATE[batch.batch_id] = (
-        batch.control_salt,
-        batch.control_read_sha256,
-        batch.control_answer_sha256,
+def _control_root_for_source(source_path: Path, lane: str) -> Path:
+    source_root = source_path.resolve().parent
+    if lane in {"a", "b"}:
+        lane_dir = next(
+            (parent for parent in (source_root, *source_root.parents) if parent.name == lane),
+            None,
+        )
+        if lane_dir is not None:
+            return lane_dir.parent
+    return source_root
+
+
+def _control_root_for_batch(batch_dir: Path, lane: str) -> Path:
+    reads_dir = batch_dir.parent
+    root = reads_dir.parent if reads_dir.name == "vision-reads" else batch_dir.parent
+    if lane in {"a", "b"} and root.name == lane:
+        return root.parent
+    return root
+
+
+def _write_batch(
+    batch_dir: Path,
+    batch: VisionBatch,
+    control_root: Path | None = None,
+) -> VisionBatch:
+    sidecar_path = (
+        (control_root or _control_root_for_batch(batch_dir, batch.lane))
+        / (".vision-control")
+        / f"{batch.batch_id}.json"
     )
+    control_state = {
+        "batch_id": batch.batch_id,
+        "control_salt": batch.control_salt,
+        "control_read_sha256": batch.control_read_sha256,
+        "control_answer_sha256": batch.control_answer_sha256,
+    }
+    _atomic_json(
+        sidecar_path,
+        control_state,
+        exclusive=True,
+        already_exists="vision control state",
+    )
+    control_state_path = os.path.relpath(sidecar_path, start=batch_dir.resolve())
+    batch = batch.model_copy(
+        update={
+            "control_state_path": control_state_path,
+            "control_state_sha256": _sha256(sidecar_path.read_bytes()),
+        }
+    )
+    _atomic_json(batch_dir / "batch.json", _batch_payload(batch))
+    return batch
 
 
 def _request(value: VisionReadRequest | dict[str, object]) -> VisionReadRequest:
@@ -490,8 +541,7 @@ def create_comparison_batch(
         control_answer_sha256=_sha256(f"{control_salt}comparison-control".encode()),
         control_read_sha256=_sha256(f"{control_salt}{control_read_id}".encode()),
     )
-    _write_batch(batch_dir, batch)
-    return batch
+    return _write_batch(batch_dir, batch, _control_root_for_source(extraction_path, lane))
 
 
 def _control_image(path: Path, size: tuple[int, int]) -> str:
@@ -649,8 +699,7 @@ def create_read_batch(
         control_answer_sha256=_sha256(f"{control_salt}{normalized_control_answer}".encode()),
         control_read_sha256=_sha256(f"{control_salt}{control_read_id}".encode()),
     )
-    _write_batch(batch_dir, batch)
-    return batch
+    return _write_batch(batch_dir, batch, _control_root_for_source(extraction_path, lane))
 
 
 def _load_batch(batch_path: Path) -> VisionBatch:
@@ -673,12 +722,56 @@ def _load_batch(batch_path: Path) -> VisionBatch:
     batch_id = raw.get("batch_id")
     if not isinstance(batch_id, str) or not batch_id:
         raise VisionReadError("vision batch has an invalid batch_id")
-    control_state = _CONTROL_STATE.get(batch_id)
-    if control_state is None:
+    state_reference = raw.get("control_state_path")
+    state_digest = raw.get("control_state_sha256")
+    if not isinstance(state_reference, str) or not state_reference:
+        raise VisionReadError("vision batch has no control state sidecar reference; recreate it")
+    if not isinstance(state_digest, str) or re.fullmatch(r"[0-9a-f]{64}", state_digest) is None:
+        raise VisionReadError("vision batch has an invalid control state sidecar hash")
+    reference_path = Path(state_reference)
+    if reference_path.is_absolute():
+        raise VisionReadError("vision batch control state sidecar path is invalid")
+    try:
+        sidecar_path = (batch_path.parent / reference_path).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
         raise VisionReadError(
-            "vision batch control state is unavailable in this process; recreate the batch"
-        )
-    control_salt, control_read_sha256, control_answer_sha256 = control_state
+            f"vision batch control state sidecar is missing or unreadable: {exc}"
+        ) from exc
+    if (
+        sidecar_path.name != f"{batch_id}.json"
+        or sidecar_path.parent.name != ".vision-control"
+        or sidecar_path.is_relative_to(batch_path.parent.resolve())
+    ):
+        raise VisionReadError("vision batch control state sidecar path is invalid")
+    try:
+        sidecar_bytes = sidecar_path.read_bytes()
+    except OSError as exc:
+        raise VisionReadError(
+            f"vision batch control state sidecar is missing or unreadable: {exc}"
+        ) from exc
+    if _sha256(sidecar_bytes) != state_digest:
+        raise VisionReadError("vision batch control state sidecar SHA-256 mismatch")
+    try:
+        sidecar_value: object = json.loads(sidecar_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VisionReadError(f"vision batch control state sidecar is invalid: {exc}") from exc
+    if not isinstance(sidecar_value, dict):
+        raise VisionReadError("vision batch control state sidecar is invalid")
+    sidecar = cast(dict[str, object], sidecar_value)
+    if sidecar.get("batch_id") != batch_id:
+        raise VisionReadError("vision batch control state sidecar batch ID mismatch")
+    control_salt = sidecar.get("control_salt")
+    control_read_sha256 = sidecar.get("control_read_sha256")
+    control_answer_sha256 = sidecar.get("control_answer_sha256")
+    if (
+        not isinstance(control_salt, str)
+        or not control_salt
+        or not isinstance(control_read_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", control_read_sha256) is None
+        or not isinstance(control_answer_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", control_answer_sha256) is None
+    ):
+        raise VisionReadError("vision batch control state sidecar is invalid")
     expected_keys: set[str] = set()
     restored_items: list[dict[str, object]] = []
     for raw_item_value in cast(list[object], items_value):

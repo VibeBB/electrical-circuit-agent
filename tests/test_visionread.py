@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +22,7 @@ from circuit.visionread import (
     VisionReadRequest,
     _render_pdfium,  # pyright: ignore[reportPrivateUsage]
     _render_pdftoppm,  # pyright: ignore[reportPrivateUsage]
+    _write_batch,  # pyright: ignore[reportPrivateUsage]
     create_comparison_batch,
     create_read_batch,
     find_comparison_evidence,
@@ -266,8 +269,18 @@ def _assert_control_hidden(batch_path: Path) -> None:
     assert "control_salt" not in payload
     assert "control_read_sha256" not in payload
     assert "control_answer_sha256" not in payload
+    assert isinstance(payload["control_state_sha256"], str)
     assert len(payload["field_bindings"]) == len(items)
-    assert not (batch_path.parent / ".control.json").exists()
+    sidecar_path = (batch_path.parent / payload["control_state_path"]).resolve()
+    assert hashlib.sha256(sidecar_path.read_bytes()).hexdigest() == payload["control_state_sha256"]
+    assert sidecar_path.parent.name == ".vision-control"
+    assert not sidecar_path.is_relative_to(batch_path.parent.resolve())
+    assert set(json.loads(sidecar_path.read_text(encoding="utf-8"))) == {
+        "batch_id",
+        "control_salt",
+        "control_read_sha256",
+        "control_answer_sha256",
+    }
 
 
 def test_read_batch_blinds_persisted_items_and_restores_field_bindings(
@@ -294,6 +307,93 @@ def test_read_batch_blinds_persisted_items_and_restores_field_bindings(
     assert loaded_item.field == "pin_table"
     assert not loaded_item.control
     assert answer_record.batch_id == batch.batch_id
+
+
+def test_answer_write_and_load_work_after_a_fresh_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    item = next(entry for entry in batch.items if not entry.control)
+    answers = {
+        entry.read_id: {
+            "answer": FIXTURE_CONTROL if entry.control else '[["1", "SW"]]',
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for entry in batch.items
+    }
+    code = (
+        "import json,sys; from pathlib import Path; "
+        "from circuit.visionread import record_answers,load_vision_read; "
+        "p=json.load(sys.stdin); record_answers(Path(p['batch_path']),p['answers']); "
+        "_,item,record=load_vision_read(Path(p['spec_dir']),p['reference']); "
+        "assert item.field=='pin_table' and record.control_passed"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        input=json.dumps(
+            {
+                "batch_path": str(batch_path),
+                "spec_dir": str(tmp_path),
+                "reference": f"vision-batch/batch.json#{item.read_id}",
+                "answers": answers,
+            }
+        ),
+        text=True,
+        capture_output=True,
+        cwd=Path(__file__).parents[1],
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    loaded_batch, loaded_item, answer_record = load_vision_read(
+        tmp_path, f"vision-batch/batch.json#{item.read_id}"
+    )
+    assert loaded_batch.batch_id == batch.batch_id
+    assert loaded_item.field == "pin_table"
+    assert answer_record.control_passed
+
+
+@pytest.mark.parametrize("failure", ["missing", "tampered"])
+def test_control_state_sidecar_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    payload = json.loads(batch_path.read_text(encoding="utf-8"))
+    sidecar_path = (batch_path.parent / payload["control_state_path"]).resolve()
+    if failure == "missing":
+        sidecar_path.unlink()
+        message = "control state sidecar is missing or unreadable"
+    else:
+        sidecar_path.write_text(sidecar_path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+        message = "control state sidecar SHA-256 mismatch"
+
+    with pytest.raises(VisionReadError, match=message):
+        record_answers(
+            batch_path,
+            {
+                entry.read_id: {
+                    "answer": FIXTURE_CONTROL if entry.control else '[["1", "SW"]]',
+                    "impression": FIXTURE_IMPRESSION,
+                }
+                for entry in batch.items
+            },
+        )
+
+
+def test_control_state_sidecar_is_created_exclusively(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    original = batch_path.read_bytes()
+
+    with pytest.raises(VisionReadError, match="vision control state already exists"):
+        _write_batch(batch_path.parent, batch)
+
+    assert batch_path.read_bytes() == original
 
 
 def test_legacy_batch_without_field_bindings_fails_closed(

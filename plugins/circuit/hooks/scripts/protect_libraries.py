@@ -1,11 +1,11 @@
-"""Reject writes to bundled KiCad library trees and to design files.
+"""Reject protected design/library access through agent tools.
 
 Only path-bearing arguments decide the verdict: file bodies such as
 file_text/new_str may legitimately mention design suffixes or library paths, so
-payload content is never scanned. For the terminal, writes are detected from
-shell-level operators (redirects, tee, cp/mv destinations, dd, sed -i, rm,
-mkdir, chmod, ...) instead of any mention of a protected path, so read-only
-commands like `find` or `grep` on the libraries are allowed.
+payload content is not scanned for those rules. Vision-control references are
+blocked in every tool input. For the terminal, library writes are detected from
+shell-level operators rather than path mentions so read-only library commands
+remain available.
 """
 
 from __future__ import annotations
@@ -60,6 +60,15 @@ def _path_values(tool_input: dict[str, Any]) -> list[str]:
         if key in tool_input:
             values.extend(_strings(tool_input[key]))
     return values
+
+
+def _references_vision_control(payload: dict[str, Any]) -> bool:
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return False
+    return any(
+        ".vision-control" in value.replace("\\", "/").casefold() for value in _strings(tool_input)
+    )
 
 
 def _is_protected(value: str) -> bool:
@@ -219,6 +228,9 @@ def main() -> int:
         print("invalid hook input: not an object", file=sys.stderr)
         return 2
     payload = cast(dict[str, Any], payload)
+    if _references_vision_control(payload):
+        print("vision control state is inaccessible through agent tools", file=sys.stderr)
+        return 2
     if _is_design_write(payload):
         print(
             "design files (.kicad_sch/.kicad_pcb) are authored through the"

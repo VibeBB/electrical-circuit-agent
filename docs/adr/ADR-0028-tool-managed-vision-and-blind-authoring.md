@@ -21,9 +21,15 @@ need to remain blind to each other's conclusions until both have committed.
   300–1200 DPI, and rejected above the image-size limit rather than tiled.
   The public `batch.json` is written atomically without per-item field or
   control markers; salted field bindings are restored by the tool. Control
-  identity and validation secrets remain in MCP process memory and are never
-  written beside the public batch. If the MCP process restarts, recreate the
-  batch and its reads. Lane B uses pdfium; lane A and other lanes use Poppler, configurable through
+  identity and validation secrets are written atomically and exclusively to a
+  hash-bound sidecar in `.vision-control/`, rooted at the extraction context
+  (or at the authoring run root above lane A/B). Every loader resolves the
+  relative sidecar reference and verifies its SHA-256 before restoring the
+  salted bindings. The sidecar is written before `batch.json`. Pre-tool guards
+  deny every agent tool argument, file read, or terminal command that
+  references `.vision-control/`; only the MCP server reads it during normal
+  operation. This is context isolation, not a security boundary. Lane B uses
+  pdfium; lane A and other lanes use Poppler, configurable through
   `CIRCUIT_PDFTOPPM`. The tool returns prompts, metadata, and image paths, not
   mechanical extraction text.
 - Each visual answer, including the batch control, includes an answer and a
