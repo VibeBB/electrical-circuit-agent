@@ -30,6 +30,7 @@ from circuit.lineage import (
     pad_changes,
 )
 from circuit.model3d import generate_model
+from circuit.modeloracle import ModelExportReport
 from circuit.partspec import (
     CellRef,
     DatasheetRef,
@@ -136,6 +137,19 @@ def _stub_testboard_builder(monkeypatch: pytest.MonkeyPatch) -> None:
         "build_test_board",
         build_testboard,
     )
+
+
+@pytest.fixture(autouse=True)
+def _stub_model_export_oracle(monkeypatch: pytest.MonkeyPatch) -> None:
+    def verify(*_args: object, **_kwargs: object) -> ModelExportReport:
+        return ModelExportReport(
+            verdict="pass",
+            model_sha256=None,
+            runs=[],
+            findings=[],
+        )
+
+    monkeypatch.setattr(libverify_module, "verify_model_export", verify)
 
 
 def _dimension(

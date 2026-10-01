@@ -49,6 +49,7 @@ from .lineage import (
     lineage_path_for,
     pad_changes,
 )
+from .modeloracle import ModelExportReport, verify_model_export
 from .partspec import (
     Dimension,
     LandPad,
@@ -110,6 +111,7 @@ class VerifiedModel(BaseModel):
     resolved: bool
     sha256: str | None
     inspection: VerifiedModelInspection | None = None
+    export_oracle: ModelExportReport | None = None
 
 
 class VerificationInputs(BaseModel):
@@ -2044,6 +2046,7 @@ def _check_models(
     footprint: FootprintDef | None,
     footprint_path: Path,
     library_dir: Path | None,
+    rules: EffectiveRules,
     model_required: bool,
     tolerance_mm: float,
     findings: list[VerifyFinding],
@@ -2089,12 +2092,32 @@ def _check_models(
             tolerance_mm,
             findings,
         )
+        export_report: ModelExportReport
+        with tempfile.TemporaryDirectory(prefix="circuit-model-export-") as temporary_name:
+            export_report = verify_model_export(
+                spec,
+                footprint_path,
+                model_reference=str(resolved) if resolved is not None else expanded,
+                model_path=resolved,
+                rules=rules,
+                out_dir=Path(temporary_name),
+            )
+        for item in export_report.findings:
+            _finding(
+                findings,
+                item.code,
+                item.severity,
+                f"model.{path}",
+                item.message,
+                model_sha256=model_sha256,
+            )
         result.append(
             VerifiedModel(
                 path=path,
                 resolved=resolved is not None,
                 sha256=model_sha256,
                 inspection=inspection,
+                export_oracle=export_report,
             )
         )
     return result
@@ -2426,6 +2449,7 @@ def verify_library_part(
         footprint,
         footprint_path,
         library_dir,
+        rules,
         model_required,
         tolerance_mm,
         findings,
