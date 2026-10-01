@@ -961,7 +961,41 @@ def tool_specs() -> list[Tool]:
 _MAX_VISION_IMAGES = 8
 
 
+def _model_tool(name: str, args: dict[str, Any]) -> tuple[Any, list[Path]] | None:
+    if name not in {"circuit_model_generate", "circuit_model_inspect"}:
+        return None
+    spec_path = Path(str(args["part_spec_path"]))
+    spec = partspec.load_part_spec(spec_path)
+    footprint_path = Path(str(args["footprint_path"]))
+    if name == "circuit_model_generate":
+        output_dir = Path(str(args.get("output_dir") or spec_path.parent / "models"))
+        result = model3d.generate_model(spec, footprint_path, output_dir)
+        report_path = _output_path(
+            spec_path,
+            _optional_string(args.get("output_path")),
+            "model-generation",
+        )
+    else:
+        model_path = Path(str(args["model_path"]))
+        result = libverify.inspect_model_file(
+            spec,
+            footprint_path,
+            model_path,
+            tolerance_mm=float(args.get("tolerance_mm", 0.02)),
+        )
+        report_path = _output_path(
+            model_path,
+            _optional_string(args.get("output_path")),
+            "inspection",
+        )
+    report_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+    return result, []
+
+
 def _authoring_tool(name: str, args: dict[str, Any]) -> tuple[Any, list[Path]] | None:
+    model_result = _model_tool(name, args)
+    if model_result is not None:
+        return model_result
     if name == "circuit_vision_read":
         raw_requests = args.get("requests")
         if not isinstance(raw_requests, list) or not all(
@@ -1498,34 +1532,6 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 spec_path,
                 _optional_string(args.get("output_path")),
                 "part-spec",
-            )
-            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
-        elif name == "circuit_model_generate":
-            spec_path = Path(str(args["part_spec_path"]))
-            spec = partspec.load_part_spec(spec_path)
-            footprint_path = Path(str(args["footprint_path"]))
-            output_dir = Path(str(args.get("output_dir") or spec_path.parent / "models"))
-            result = model3d.generate_model(spec, footprint_path, output_dir)
-            output = _output_path(
-                spec_path,
-                _optional_string(args.get("output_path")),
-                "model-generation",
-            )
-            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
-        elif name == "circuit_model_inspect":
-            spec_path = Path(str(args["part_spec_path"]))
-            spec = partspec.load_part_spec(spec_path)
-            model_path = Path(str(args["model_path"]))
-            result = libverify.inspect_model_file(
-                spec,
-                Path(str(args["footprint_path"])),
-                model_path,
-                tolerance_mm=float(args.get("tolerance_mm", 0.02)),
-            )
-            output = _output_path(
-                model_path,
-                _optional_string(args.get("output_path")),
-                "inspection",
             )
             output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         elif name == "circuit_land_pattern":

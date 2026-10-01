@@ -482,20 +482,19 @@ def test_model_comparison_mismatch_adds_mandatory_human_question(tmp_path: Path)
         control_answer_sha256="2" * 64,
         control_read_sha256="3" * 64,
     )
+    model_normalized: dict[str, bool | list[str]] = {
+        "pin1_marker_matches": False,
+        "outline_matches": True,
+        "lead_arrangement_matches": True,
+        "differences": ["pin-1 marker is in a different quadrant"],
+    }
     answers = vision.VisionAnswerRecord(
         artifact_kind="circuit_vision_read_answers",
         batch_id=batch.batch_id,
         answered_at="2026-01-01T00:00:00Z",
         answers={item.read_id: "{}"},
         impressions={item.read_id: "The model is clear. The marker seems misplaced."},
-        normalized={
-            item.read_id: {
-                "pin1_marker_matches": False,
-                "outline_matches": True,
-                "lead_arrangement_matches": True,
-                "differences": ["pin-1 marker is in a different quadrant"],
-            }
-        },
+        normalized={item.read_id: model_normalized},
         status={item.read_id: "ok"},
         control_passed=True,
     )
@@ -504,7 +503,7 @@ def test_model_comparison_mismatch_adds_mandatory_human_question(tmp_path: Path)
         batch=batch,
         item=item,
         answers=answers,
-        normalized=answers.normalized[item.read_id],
+        normalized=model_normalized,
         impression=answers.impressions[item.read_id],
         impression_valid=True,
     )

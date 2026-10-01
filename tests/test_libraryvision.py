@@ -4,7 +4,10 @@ from typing import cast
 
 from PIL import Image, ImageDraw
 
-from circuit.libraryvision import _comparison_region, _scale_model_render
+from circuit.libraryvision import (
+    _comparison_region,  # pyright: ignore[reportPrivateUsage]
+    _scale_model_render,  # pyright: ignore[reportPrivateUsage]
+)
 from circuit.partspec import PartSpec
 
 
