@@ -45,7 +45,8 @@ legal advice.
 - License: GPL-3.0
 - Source: <https://gitlab.com/kicad/libraries/kicad-library-utils>
 - Commit: `90b0af91eaffcd91552027c3bfd166896f78c7de`
-- Archive SHA-256: `e6402826cecbcddd5c4812ba35f034854b3aa43d2738a1ecf0d5ff629a2ad1f9`
+- Acquisition: depth-one Git fetch of the pinned commit; checkout `HEAD` is
+  verified against the commit before `.git` is removed from the image.
 - Redistribution: the pinned source is used only as an unmodified subprocess;
   no checker code is imported or copied into the Python runtime.
 - In-image LICENSE and source record:

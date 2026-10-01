@@ -20,7 +20,6 @@ ARG SEMERU_JRE_SHA256=9e6d9c1131da124bd08eb4183f7787a9f90111fc3d62c1231976c2d373
 ARG FREEROUTING_VERSION=2.4.1
 ARG FREEROUTING_SHA256=251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9
 ARG KICAD_LIBRARY_UTILS_COMMIT=90b0af91eaffcd91552027c3bfd166896f78c7de
-ARG KICAD_LIBRARY_UTILS_SHA256=e6402826cecbcddd5c4812ba35f034854b3aa43d2738a1ecf0d5ff629a2ad1f9
 ARG CERN_COMMIT=unknown
 ARG IMAGE_REVISION=unknown
 
@@ -149,20 +148,20 @@ RUN mkdir -p /opt/jre /opt/freerouting \
         > /usr/share/doc/semeru-jre/SOURCE
 
 RUN mkdir -p /opt/kicad-library-utils /usr/share/doc/kicad-library-utils \
-    && curl --fail --location --silent --show-error \
-        --retry 5 --retry-delay 10 --retry-all-errors \
-        --output /tmp/kicad-library-utils.tar.gz \
-        "https://gitlab.com/kicad/libraries/kicad-library-utils/-/archive/${KICAD_LIBRARY_UTILS_COMMIT}/kicad-library-utils-${KICAD_LIBRARY_UTILS_COMMIT}.tar.gz" \
-    && echo "${KICAD_LIBRARY_UTILS_SHA256}  /tmp/kicad-library-utils.tar.gz" | sha256sum --check \
-    && tar -xzf /tmp/kicad-library-utils.tar.gz \
-        --strip-components=1 -C /opt/kicad-library-utils \
+    && git -C /opt/kicad-library-utils init \
+    && git -C /opt/kicad-library-utils fetch --depth 1 \
+        https://gitlab.com/kicad/libraries/kicad-library-utils.git \
+        "${KICAD_LIBRARY_UTILS_COMMIT}" \
+    && git -C /opt/kicad-library-utils checkout FETCH_HEAD \
+    && test "$(git -C /opt/kicad-library-utils rev-parse HEAD)" \
+        = "${KICAD_LIBRARY_UTILS_COMMIT}" \
     && cp /opt/kicad-library-utils/COPYING \
         /usr/share/doc/kicad-library-utils/LICENSE \
     && printf '%s\n' \
         "source=https://gitlab.com/kicad/libraries/kicad-library-utils" \
         "commit=${KICAD_LIBRARY_UTILS_COMMIT}" \
         > /usr/share/doc/kicad-library-utils/SOURCE \
-    && rm -f /tmp/kicad-library-utils.tar.gz
+    && rm -rf /opt/kicad-library-utils/.git
 
 COPY libraries/cern-kicad-libs /opt/circuit/libraries/cern-kicad-libs
 RUN printf '%s\n' "${CERN_COMMIT}" > /opt/circuit/libraries/cern-kicad-libs.commit

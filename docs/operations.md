@@ -62,6 +62,8 @@ impression for every image, including the control image; failed submissions
 write no answers. The fixed table prompt returns normalized rows of cell
 strings, which PartSpec checks compare with the cited pin and orderable cells.
 Pinout labels are also checked against freshly derived geometry when available.
+Control identity is held only in MCP process memory; after an MCP restart,
+recreate affected vision batches and their reads rather than trusting stale data.
 Image reads and author commits are recorded by their post-tool hooks when
 observation logging is enabled. Configure
 `vibebb-part-author-a` and `vibebb-part-author-b` independently for model
@@ -102,6 +104,8 @@ but mismatches require a blind human yes/no answer. Every packet-listed overlay
 or comparison image must have a current hash-bound `vision_review` record with
 a valid impression before approval. These review records are stored next to
 their images at the `review_record_path` listed in `review.json`.
+The image fetches KLC with a depth-one Git fetch of the pinned commit, verifies
+the checked-out `HEAD` against that commit, and removes the checkout metadata.
 
 Every project-library part also requires a human review bound to the current
 PDF, PartSpec, symbol, footprint, 3D-model hashes, and verification settings.

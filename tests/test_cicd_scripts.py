@@ -305,6 +305,26 @@ def test_check_git_commit_pins_tracks_klc_commit(
     ]
 
 
+def test_klc_docker_acquisition_uses_verified_git_commit() -> None:
+    dockerfile = Path("docker/circuit-tools.Dockerfile").read_text(encoding="utf-8")
+    dockerfile = " ".join(dockerfile.replace("\\", " ").split())
+
+    assert "ARG KICAD_LIBRARY_UTILS_COMMIT=90b0af91eaffcd91552027c3bfd166896f78c7de" in dockerfile
+    assert "KICAD_LIBRARY_UTILS_SHA256" not in dockerfile
+    assert "git -C /opt/kicad-library-utils init" in dockerfile
+    assert (
+        "git -C /opt/kicad-library-utils fetch --depth 1 "
+        "https://gitlab.com/kicad/libraries/kicad-library-utils.git" in dockerfile
+    )
+    assert "git -C /opt/kicad-library-utils checkout FETCH_HEAD" in dockerfile
+    assert (
+        'git -C /opt/kicad-library-utils rev-parse HEAD)" '
+        '= "${KICAD_LIBRARY_UTILS_COMMIT}"' in dockerfile
+    )
+    assert "rm -rf /opt/kicad-library-utils/.git" in dockerfile
+    assert "kicad-library-utils-${KICAD_LIBRARY_UTILS_COMMIT}.tar.gz" not in dockerfile
+
+
 def test_check_apt_packages_are_unpinned_rows() -> None:
     statuses = check_apt_packages()
     assert [status.name for status in statuses] == ["poppler-utils", "librsvg2-bin"]
