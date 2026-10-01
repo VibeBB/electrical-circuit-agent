@@ -259,7 +259,8 @@ latest `uv` release on PyPI), Python minor pins (`requires-python`, any
 `python-version:` entries in workflows — all compared to the latest stable
 CPython minor from `git ls-remote --tags`), and the Dockerfile `FROM` images:
 `ubuntu` tags from the Docker Hub tags API and the `ghcr.io/astral-sh/uv`
-image tag against the latest `uv` release.
+image tag against the latest `uv` release. `@sha256:` digest suffixes on
+`FROM` references are ignored for tag comparison.
 
 ## Updating pins
 

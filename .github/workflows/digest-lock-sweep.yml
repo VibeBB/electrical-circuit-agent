@@ -34,7 +34,7 @@ jobs:
             --json number,headRefName \
             --jq '.[] | select(.headRefName | startswith("bot/update-image-digests-")) | .number')
           if [ -z "$prs" ]; then
-            echo "no open digest-lock PRs" >> "$GITHUB_STEP_SUMMARY"
+            echo "no open digest-lock PRs" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           for pr in $prs; do
@@ -43,14 +43,14 @@ jobs:
             case "$state" in
               clean|blocked|behind|unstable)
                 if gh pr merge --repo "$GITHUB_REPOSITORY" --squash --delete-branch "$pr"; then
-                  echo "merged $pr_url (was $state)" >> "$GITHUB_STEP_SUMMARY"
+                  echo "merged $pr_url (was $state)" | tee -a "$GITHUB_STEP_SUMMARY"
                 else
                   gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch "$pr" || true
-                  echo "$pr_url left open ($state; auto-merge armed)" >> "$GITHUB_STEP_SUMMARY"
+                  echo "$pr_url left open ($state; auto-merge armed)" | tee -a "$GITHUB_STEP_SUMMARY"
                 fi
                 ;;
               *)
-                echo "$pr_url skipped (mergeable_state=$state)" >> "$GITHUB_STEP_SUMMARY"
+                echo "$pr_url skipped (mergeable_state=$state)" | tee -a "$GITHUB_STEP_SUMMARY"
                 ;;
             esac
           done

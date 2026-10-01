@@ -39,13 +39,24 @@ jobs:
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
         run: |
           set -euo pipefail
           gh label create ci-main-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "a main-branch workflow is failing" --force || true
-          issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label ci-main-failure \
-            --json number --jq '.[0].number // empty')
+          title="main CI failure: $WORKFLOW_NAME"
+          issue_for() {
+            gh issue list --repo "$GITHUB_REPOSITORY" --state open --label ci-main-failure \
+              --limit 100 --json number,title \
+              --jq "[.[] | select(.title == \"$1\")] | .[0].number // empty"
+          }
           if [ "$CONCLUSION" = success ]; then
+            issue=$(issue_for "$title")
+            if [ -n "$issue" ]; then
+              gh issue close "$issue" --repo "$GITHUB_REPOSITORY" \
+                --comment "Back to green: $RUN_URL"
+            fi
+            issue=$(issue_for "main CI failure report")
             if [ -n "$issue" ]; then
               gh issue close "$issue" --repo "$GITHUB_REPOSITORY" \
                 --comment "Back to green: $RUN_URL"
@@ -57,9 +68,10 @@ jobs:
           fi
           jobs=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
             --jq '[.jobs[] | select(.conclusion=="failure") | .name] | join(", ")')
-          body=$(printf '%s\n\n- run: %s\n- failed jobs: %s\n' "A main-branch workflow failed." "$RUN_URL" "${jobs:-unknown}")
+          body=$(printf '%s\n\n- workflow: %s\n- run: %s\n- failed jobs: %s\n' "A main-branch workflow failed." "$WORKFLOW_NAME" "$RUN_URL" "${jobs:-unknown}")
+          issue=$(issue_for "$title")
           if [ -n "$issue" ]; then
             gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "main CI failure report" --label ci-main-failure --body "$body"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label ci-main-failure --body "$body"
           fi
