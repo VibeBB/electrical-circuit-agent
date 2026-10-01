@@ -1,0 +1,472 @@
+"""Dual-lane extraction of PDF datasheets and deterministic page artifacts."""
+
+from __future__ import annotations
+
+import csv
+import difflib
+import hashlib
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import tempfile
+import xml.etree.ElementTree as ET
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any, Literal, cast
+
+import pdfplumber
+from pydantic import BaseModel, ConfigDict
+
+from .raster import RasterizeError, rasterize
+
+DRAWING_VECTOR_THRESHOLD = 500
+_PDFTOTEXT_ENV = "CIRCUIT_PDFTOTEXT"
+_TESSERACT_ENV = "CIRCUIT_TESSERACT"
+
+
+class DatasheetError(RuntimeError):
+    """Raised when a datasheet extraction cannot be completed safely."""
+
+
+class PdfWord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    x0: float
+    top: float
+    x1: float
+    bottom: float
+
+
+class LaneResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    lane: Literal["poppler", "pdfplumber", "ocr"]
+    status: Literal["ok", "empty", "unavailable", "error"]
+    words_path: str | None
+    word_count: int
+    detail: str = ""
+
+
+class PageExtraction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    page: int
+    width_pt: float
+    height_pt: float
+    png_path: str
+    png_sha256: str
+    dpi: int
+    text_layer: bool
+    lanes: list[LaneResult]
+    tables_path: str | None
+    table_count: int
+    vector_objects: int
+    drawing_page: bool
+    order_similarity: float | None
+
+
+class DatasheetExtraction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_kind: Literal["circuit_datasheet_extraction"]
+    pdf_path: str
+    pdf_sha256: str
+    page_count: int
+    pages: list[PageExtraction]
+    tools: dict[str, str]
+
+
+def _command(env_name: str, default: str) -> list[str]:
+    return shlex.split(os.environ.get(env_name, default))
+
+
+def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+        check=False,
+    )
+
+
+def _tool_version(command: list[str], *, stderr: bool = False) -> str:
+    try:
+        result = _run(command)
+    except (OSError, subprocess.TimeoutExpired):
+        return "unavailable"
+    output = result.stderr if stderr else result.stdout
+    if not output.strip() and stderr:
+        output = result.stdout
+    return output.splitlines()[0].strip() if output.strip() else "unavailable"
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _relative(path: Path, out_dir: Path) -> str:
+    return path.relative_to(out_dir).as_posix()
+
+
+def _poppler_words(pdf_path: Path, page_number: int) -> tuple[list[PdfWord], str]:
+    command = _command(_PDFTOTEXT_ENV, "pdftotext")
+    with tempfile.TemporaryDirectory(prefix="circuit-pdftotext-") as temporary:
+        html_path = Path(temporary) / "page.html"
+        try:
+            result = _run(
+                [
+                    *command,
+                    "-bbox-layout",
+                    "-f",
+                    str(page_number),
+                    "-l",
+                    str(page_number),
+                    str(pdf_path),
+                    str(html_path),
+                ]
+            )
+        except FileNotFoundError:
+            return [], f"{command[0]} is not available; install poppler-utils"
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return [], f"pdftotext failed: {exc}"
+        if result.returncode:
+            return [], result.stderr.strip() or f"pdftotext exited with {result.returncode}"
+        try:
+            root = ET.parse(html_path).getroot()
+            words: list[PdfWord] = []
+            for element in root.iter():
+                if element.tag.rsplit("}", 1)[-1] != "word":
+                    continue
+                words.append(
+                    PdfWord(
+                        text="".join(element.itertext()),
+                        x0=float(element.attrib["xMin"]),
+                        top=float(element.attrib["yMin"]),
+                        x1=float(element.attrib["xMax"]),
+                        bottom=float(element.attrib["yMax"]),
+                    )
+                )
+        except (OSError, ET.ParseError, KeyError, ValueError) as exc:
+            return [], f"could not parse pdftotext XHTML: {exc}"
+        return words, ""
+
+
+def _pdfplumber_words(page: Any) -> list[PdfWord]:
+    words: list[PdfWord] = []
+    for word in cast(list[dict[str, Any]], page.extract_words()):
+        words.append(
+            PdfWord(
+                text=str(word["text"]),
+                x0=float(word["x0"]),
+                top=float(word["top"]),
+                x1=float(word["x1"]),
+                bottom=float(word["bottom"]),
+            )
+        )
+    return words
+
+
+def _ocr_words(png_path: Path, dpi: int) -> tuple[list[PdfWord], str]:
+    command = _command(_TESSERACT_ENV, "tesseract")
+    try:
+        result = _run([*command, str(png_path), "stdout", "--psm", "3", "tsv"])
+    except FileNotFoundError:
+        return [], f"{command[0]} is not available; install tesseract-ocr"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [], f"tesseract failed: {exc}"
+    if result.returncode:
+        return [], result.stderr.strip() or f"tesseract exited with {result.returncode}"
+    words: list[PdfWord] = []
+    try:
+        rows = csv.DictReader(result.stdout.splitlines(), delimiter="\t")
+        for row in rows:
+            if row.get("level") != "5" or not (text := (row.get("text") or "").strip()):
+                continue
+            left = float(row["left"])
+            top = float(row["top"])
+            width = float(row["width"])
+            height = float(row["height"])
+            factor = 72 / dpi
+            words.append(
+                PdfWord(
+                    text=text,
+                    x0=left * factor,
+                    top=top * factor,
+                    x1=(left + width) * factor,
+                    bottom=(top + height) * factor,
+                )
+            )
+    except (KeyError, TypeError, ValueError) as exc:
+        return [], f"could not parse tesseract TSV: {exc}"
+    return words, ""
+
+
+def _write_lane(
+    out_dir: Path,
+    page_number: int,
+    lane: Literal["poppler", "pdfplumber", "ocr"],
+    words: list[PdfWord],
+    status: Literal["ok", "empty", "unavailable", "error"],
+    detail: str = "",
+) -> LaneResult:
+    path = out_dir / f"page-{page_number:03d}.{lane}.json"
+    _write_json(path, [word.model_dump(mode="json") for word in words])
+    return LaneResult(
+        lane=lane,
+        status=status,
+        words_path=_relative(path, out_dir),
+        word_count=len(words),
+        detail=detail,
+    )
+
+
+def _status(words: list[PdfWord], detail: str) -> Literal["ok", "empty", "unavailable", "error"]:
+    if detail:
+        return "unavailable" if "is not available" in detail else "error"
+    return "ok" if words else "empty"
+
+
+def extract_datasheet(
+    pdf_path: Path,
+    out_dir: Path,
+    *,
+    pages: Sequence[int] | None = None,
+    dpi: int = 300,
+) -> DatasheetExtraction:
+    """Extract text, tables, and page images from a PDF datasheet."""
+    if not pdf_path.is_file():
+        raise DatasheetError(f"datasheet file is missing: {pdf_path}")
+    try:
+        with pdf_path.open("rb") as source:
+            if source.read(5) != b"%PDF-":
+                raise DatasheetError(f"not a PDF file: {pdf_path}")
+    except OSError as exc:
+        raise DatasheetError(f"could not read datasheet {pdf_path}: {exc}") from exc
+    if not 72 <= dpi <= 1200:
+        raise DatasheetError("dpi must be between 72 and 1200")
+
+    try:
+        pdf = pdfplumber.open(pdf_path)
+    except Exception as exc:
+        raise DatasheetError(f"could not open PDF (possibly encrypted): {exc}") from exc
+
+    with pdf:
+        try:
+            page_count = len(pdf.pages)
+        except Exception as exc:
+            raise DatasheetError(f"could not read PDF pages: {exc}") from exc
+        if page_count == 0:
+            raise DatasheetError("PDF contains no pages")
+        selected_pages = list(pages) if pages is not None else list(range(1, page_count + 1))
+        if any(page < 1 or page > page_count for page in selected_pages):
+            raise DatasheetError(f"requested page is outside 1..{page_count}")
+        if len(set(selected_pages)) != len(selected_pages):
+            raise DatasheetError("requested pages must be unique")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            pdf_digest = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise DatasheetError(f"could not read datasheet {pdf_path}: {exc}") from exc
+        poppler_command = _command(_PDFTOTEXT_ENV, "pdftotext")
+        tesseract_command = _command(_TESSERACT_ENV, "tesseract")
+        tools = {
+            "pdfplumber": pdfplumber.__version__,
+            "pdftotext": _tool_version([*poppler_command, "-v"], stderr=True),
+            "tesseract": _tool_version([*tesseract_command, "--version"]),
+        }
+        extracted_pages: list[PageExtraction] = []
+        for page_number in selected_pages:
+            image_path = out_dir / f"page-{page_number:03d}.png"
+            try:
+                with tempfile.TemporaryDirectory(prefix=".raster-", dir=out_dir) as temporary:
+                    images = rasterize(
+                        pdf_path,
+                        Path(temporary),
+                        dpi=dpi,
+                        first_page=page_number,
+                        last_page=page_number,
+                    )
+                    if len(images) != 1:
+                        raise DatasheetError(
+                            f"rasterizer returned {len(images)} images for page {page_number}"
+                        )
+                    shutil.copyfile(images[0], image_path)
+            except (RasterizeError, OSError) as exc:
+                raise DatasheetError(f"could not rasterize page {page_number}: {exc}") from exc
+
+            page = cast(Any, pdf.pages[page_number - 1])
+            poppler_words, poppler_detail = _poppler_words(pdf_path, page_number)
+            try:
+                plumber_words = _pdfplumber_words(page)
+                tables: list[dict[str, object]] = []
+                for table in page.find_tables():
+                    rows = table.extract()
+                    tables.append(
+                        {
+                            "bbox": [float(value) for value in table.bbox],
+                            "rows": rows,
+                        }
+                    )
+                vector_objects = len(page.lines) + len(page.rects) + len(page.curves)
+            except Exception as exc:
+                raise DatasheetError(f"could not read PDF page {page_number}: {exc}") from exc
+            plumber_detail = ""
+            try:
+                width_pt = float(page.width)
+                height_pt = float(page.height)
+                has_chars = bool(page.chars)
+            except Exception as exc:
+                raise DatasheetError(f"could not read PDF page {page_number}: {exc}") from exc
+            table_path = out_dir / f"page-{page_number:03d}.tables.json"
+            _write_json(table_path, {"tables": tables})
+            lanes = [
+                _write_lane(
+                    out_dir,
+                    page_number,
+                    "poppler",
+                    poppler_words,
+                    _status(poppler_words, poppler_detail),
+                    poppler_detail,
+                ),
+                _write_lane(
+                    out_dir,
+                    page_number,
+                    "pdfplumber",
+                    plumber_words,
+                    _status(plumber_words, plumber_detail),
+                    plumber_detail,
+                ),
+            ]
+            text_layer = has_chars or bool(poppler_words)
+            ocr_words: list[PdfWord] = []
+            if not text_layer:
+                ocr_words, ocr_detail = _ocr_words(image_path, dpi)
+                lanes.append(
+                    _write_lane(
+                        out_dir,
+                        page_number,
+                        "ocr",
+                        ocr_words,
+                        _status(ocr_words, ocr_detail),
+                        ocr_detail,
+                    )
+                )
+            similarity: float | None = None
+            poppler_lane = lanes[0]
+            plumber_lane = lanes[1]
+            if poppler_lane.status in ("ok", "empty") and plumber_lane.status in ("ok", "empty"):
+                similarity = round(
+                    difflib.SequenceMatcher(
+                        None,
+                        [word.text for word in poppler_words],
+                        [word.text for word in plumber_words],
+                        autojunk=False,
+                    ).ratio(),
+                    4,
+                )
+            extracted_pages.append(
+                PageExtraction(
+                    page=page_number,
+                    width_pt=width_pt,
+                    height_pt=height_pt,
+                    png_path=_relative(image_path, out_dir),
+                    png_sha256=hashlib.sha256(image_path.read_bytes()).hexdigest(),
+                    dpi=dpi,
+                    text_layer=text_layer,
+                    lanes=lanes,
+                    tables_path=_relative(table_path, out_dir),
+                    table_count=len(tables),
+                    vector_objects=vector_objects,
+                    drawing_page=vector_objects >= DRAWING_VECTOR_THRESHOLD,
+                    order_similarity=similarity,
+                )
+            )
+
+    extraction = DatasheetExtraction(
+        artifact_kind="circuit_datasheet_extraction",
+        pdf_path=str(pdf_path),
+        pdf_sha256=pdf_digest,
+        page_count=page_count,
+        pages=extracted_pages,
+        tools=tools,
+    )
+    _write_json(out_dir / "extraction.json", extraction.model_dump(mode="json"))
+    return extraction
+
+
+def load_extraction(path: Path) -> DatasheetExtraction:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return DatasheetExtraction.model_validate(value)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise DatasheetError(f"could not load datasheet extraction {path}: {exc}") from exc
+
+
+def _read_words(extraction_dir: Path, lane: LaneResult) -> list[PdfWord]:
+    if lane.status != "ok" or lane.words_path is None:
+        return []
+    try:
+        value = json.loads((extraction_dir / lane.words_path).read_text(encoding="utf-8"))
+        if not isinstance(value, list):
+            return []
+        return [PdfWord.model_validate(item) for item in cast(list[object], value)]
+    except (OSError, json.JSONDecodeError, ValueError):
+        return []
+
+
+def page_words(
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    page: int,
+    lanes: Sequence[Literal["poppler", "pdfplumber", "ocr"]] = (
+        "poppler",
+        "pdfplumber",
+        "ocr",
+    ),
+) -> list[PdfWord]:
+    """Load successful lane words for a page in the requested lane order."""
+    page_result = next((item for item in extraction.pages if item.page == page), None)
+    if page_result is None:
+        return []
+    by_lane = {item.lane: item for item in page_result.lanes}
+    return [
+        word
+        for lane_name in lanes
+        if (lane := by_lane.get(lane_name)) is not None
+        for word in _read_words(extraction_dir, lane)
+    ]
+
+
+def page_tables(
+    extraction: DatasheetExtraction, extraction_dir: Path, page: int
+) -> list[list[list[str | None]]]:
+    """Load extracted table rows for a page."""
+    page_result = next((item for item in extraction.pages if item.page == page), None)
+    if page_result is None or page_result.tables_path is None:
+        return []
+    try:
+        value: object = json.loads(
+            (extraction_dir / page_result.tables_path).read_text(encoding="utf-8")
+        )
+        if not isinstance(value, dict):
+            return []
+        table_container = cast(dict[str, object], value)
+        raw_tables = table_container.get("tables", [])
+        if not isinstance(raw_tables, list):
+            return []
+        tables: list[list[list[str | None]]] = []
+        for raw_table in cast(list[object], raw_tables):
+            if not isinstance(raw_table, dict):
+                continue
+            table = cast(dict[str, object], raw_table)
+            rows = table.get("rows")
+            if isinstance(rows, list):
+                tables.append(cast(list[list[str | None]], rows))
+        return tables
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        return []

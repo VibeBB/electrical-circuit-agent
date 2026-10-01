@@ -34,6 +34,9 @@ VisualChecklist = Literal[
     "board_layers",
     "schematic",
     "footprint",
+    "datasheet",
+    "symbol",
+    "model3d",
 ]
 
 VisualFindingCategory = Literal[
