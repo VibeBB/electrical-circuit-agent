@@ -14,14 +14,16 @@ from collections import Counter
 from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
+from statistics import median
 from typing import Any, Literal, cast
 
+import pdfplumber
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
 from . import datasheet, kicad_cli
 from .datasheet import DatasheetExtraction, PageExtraction
-from .landpattern import Density, LandPatternResult, compute_land_pattern, lead_rects
+from .landpattern import Density, LandPatternResult, compute_land_pattern
 from .libitems import FootprintDef, PadDef, SymbolDef, parse_footprint, parse_symbol
 from .libverify import LibraryVerification, VerifiedModel, VerifyFinding, verify_library_part
 from .partspec import (
@@ -132,6 +134,39 @@ class _CropRecord(BaseModel):
     bbox: tuple[float, float, float, float]
     crop_bbox: tuple[float, float, float, float]
     scale: float
+
+
+type _PdfPoint = tuple[float, float]
+type _PdfBBox = tuple[float, float, float, float]
+type _PdfEdge = tuple[_PdfPoint, _PdfPoint]
+
+
+class _OverlayGeometry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scale_pt_per_mm: float | None = None
+    pad_size_estimate_pt_per_mm: float | None = None
+    pitch_estimate_pt_per_mm: float | None = None
+    scale_px_per_mm: float | None = None
+    anchor_kind: Literal["exposed_pad", "candidate_centroid"] | None = None
+    anchor_page_pt: tuple[float, float] | None = None
+    anchor_crop_px: tuple[float, float] | None = None
+    anchor_footprint_mm: tuple[float, float] | None = None
+    candidate_pad_count: int = 0
+
+    @property
+    def scale_known(self) -> bool:
+        return (
+            self.scale_pt_per_mm is not None
+            and self.scale_px_per_mm is not None
+            and self.anchor_page_pt is not None
+            and self.anchor_crop_px is not None
+            and self.anchor_footprint_mm is not None
+        )
+
+
+def _overlay_unknown_codes(geometry: _OverlayGeometry) -> list[str]:
+    return [] if geometry.scale_known else ["overlay_scale_unknown"]
 
 
 def packet_id(
@@ -1399,114 +1434,403 @@ def _pad_corners(pad: PadDef) -> list[tuple[float, float]]:
     ]
 
 
-def _overlay_svg(
+def _pdf_bbox(item: Any) -> _PdfBBox | None:
+    if not isinstance(item, dict):
+        return None
+    data = cast(dict[str, Any], item)
+    values = [data.get(key) for key in ("x0", "top", "x1", "bottom")]
+    if not all(isinstance(value, (int, float)) for value in values):
+        return None
+    x0, top, x1, bottom = (float(cast(float, value)) for value in values)
+    return min(x0, x1), min(top, bottom), max(x0, x1), max(top, bottom)
+
+
+def _bbox_in_crop(
+    bbox: _PdfBBox,
+    crop_bbox: _PdfBBox,
+) -> bool:
+    center_x = (bbox[0] + bbox[2]) / 2
+    center_y = (bbox[1] + bbox[3]) / 2
+    return crop_bbox[0] <= center_x <= crop_bbox[2] and crop_bbox[1] <= center_y <= crop_bbox[3]
+
+
+def _curve_is_closed(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    data = cast(dict[str, Any], item)
+    path = data.get("path")
+    if isinstance(path, list):
+        commands = cast(list[tuple[Any, ...]], path)
+        if any(command and command[0] == "h" for command in commands):
+            return True
+    points = data.get("pts")
+    if not isinstance(points, list):
+        return False
+    typed_points = cast(list[_PdfPoint], points)
+    if len(typed_points) < 3:
+        return False
+    return math.dist(typed_points[0], typed_points[-1]) <= 0.05
+
+
+def _pdf_vector_shapes(
+    page: Any,
+    crop_bbox: _PdfBBox,
+) -> list[_PdfBBox]:
+    shapes: dict[_PdfBBox, _PdfBBox] = {}
+
+    def add_shape(bbox: _PdfBBox | None) -> None:
+        if bbox is None or not _bbox_in_crop(bbox, crop_bbox):
+            return
+        key: _PdfBBox = (
+            round(bbox[0], 2),
+            round(bbox[1], 2),
+            round(bbox[2], 2),
+            round(bbox[3], 2),
+        )
+        shapes[key] = bbox
+
+    for item in getattr(page, "rects", []):
+        add_shape(_pdf_bbox(item))
+    for item in getattr(page, "curves", []):
+        bbox = _pdf_bbox(item)
+        if _curve_is_closed(item):
+            add_shape(bbox)
+
+    edges: dict[_PdfEdge, _PdfBBox] = {}
+    for collection_name in ("lines", "curves"):
+        for item in getattr(page, collection_name, []):
+            bbox = _pdf_bbox(item)
+            if bbox is None or not _bbox_in_crop(bbox, crop_bbox):
+                continue
+            if not isinstance(item, dict):
+                continue
+            points = cast(dict[str, Any], item).get("pts")
+            if not isinstance(points, list):
+                continue
+            typed_points = cast(list[_PdfPoint], points)
+            if len(typed_points) < 2:
+                continue
+            start, end = typed_points[0], typed_points[-1]
+            start_node = (round(float(start[0]), 2), round(float(start[1]), 2))
+            end_node = (round(float(end[0]), 2), round(float(end[1]), 2))
+            if start_node == end_node:
+                continue
+            edge: _PdfEdge = (
+                (start_node, end_node) if start_node <= end_node else (end_node, start_node)
+            )
+            edges.setdefault(edge, bbox)
+
+    parents: dict[_PdfPoint, _PdfPoint] = {}
+
+    def find(node: _PdfPoint) -> _PdfPoint:
+        parents.setdefault(node, node)
+        if parents[node] != node:
+            parents[node] = find(parents[node])
+        return parents[node]
+
+    for start, end in edges:
+        start_root, end_root = find(start), find(end)
+        if start_root != end_root:
+            parents[end_root] = start_root
+
+    components: dict[_PdfPoint, list[tuple[_PdfEdge, _PdfBBox]]] = {}
+    for edge, bbox in edges.items():
+        components.setdefault(find(edge[0]), []).append((edge, bbox))
+
+    for component in components.values():
+        degrees: Counter[_PdfPoint] = Counter()
+        vertices: set[_PdfPoint] = set()
+        for edge, _ in component:
+            vertices.update(edge)
+            degrees.update(edge)
+        if len(vertices) < 4 or any(degrees[vertex] != 2 for vertex in vertices):
+            continue
+        add_shape(
+            (
+                min(bbox[0] for _, bbox in component),
+                min(bbox[1] for _, bbox in component),
+                max(bbox[2] for _, bbox in component),
+                max(bbox[3] for _, bbox in component),
+            )
+        )
+    return list(shapes.values())
+
+
+def _nearest_row_spacing(
+    shapes: list[_PdfBBox],
+) -> float | None:
+    if len(shapes) < 2:
+        return None
+    short_sides = [min(bbox[2] - bbox[0], bbox[3] - bbox[1]) for bbox in shapes]
+    alignment_tolerance = max(0.25, median(short_sides) * 0.15)
+    rows: dict[Literal["x", "y"], list[list[tuple[float, float]]]] = {"x": [], "y": []}
+    for bbox in shapes:
+        width, height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        center_x, center_y = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+        row_axis: Literal["x", "y"] = "y" if width >= height else "x"
+        cross_coordinate, along_coordinate = (
+            (center_x, center_y) if row_axis == "y" else (center_y, center_x)
+        )
+        row = next(
+            (
+                candidate
+                for candidate in rows[row_axis]
+                if abs(median(point[0] for point in candidate) - cross_coordinate)
+                <= alignment_tolerance
+            ),
+            None,
+        )
+        if row is None:
+            rows[row_axis].append([(cross_coordinate, along_coordinate)])
+        else:
+            row.append((cross_coordinate, along_coordinate))
+
+    row_spacings: list[float] = []
+    for row_groups in rows.values():
+        for row in row_groups:
+            along_coordinates = [point[1] for point in row]
+            if len(along_coordinates) < 2:
+                continue
+            nearest = [
+                min(
+                    abs(value - other)
+                    for other_index, other in enumerate(along_coordinates)
+                    if other_index != index
+                )
+                for index, value in enumerate(along_coordinates)
+            ]
+            row_spacings.append(median(nearest))
+    return median(row_spacings) if row_spacings else None
+
+
+def _view_x(x: float, spec: PartSpec) -> float:
+    return -x if spec.package.drawing_view == "bottom" else x
+
+
+def _derive_overlay_geometry(
+    page: Any,
+    crop: _CropRecord,
     spec: PartSpec,
     footprint: FootprintDef,
     reference: LandPatternResult,
+    *,
+    dpi: int,
+) -> _OverlayGeometry:
+    exposed_number = (
+        spec.package.exposed_pad.number if spec.package.exposed_pad is not None else None
+    )
+    reference_pads = [pad for pad in reference.pads if pad.number != exposed_number]
+    pad_lengths = [
+        max(pad.width, pad.height) for pad in reference_pads if min(pad.width, pad.height) > 0
+    ]
+    pad_widths = [
+        min(pad.width, pad.height) for pad in reference_pads if min(pad.width, pad.height) > 0
+    ]
+    if spec.package.pitch is None:
+        return _OverlayGeometry()
+    pitch_mm = _format_dim(spec.package.pitch)
+    if not pad_lengths or not pad_widths or pitch_mm <= 0:
+        return _OverlayGeometry()
+
+    pad_length_mm = median(pad_lengths)
+    pad_width_mm = median(pad_widths)
+    target_ratio = pad_length_mm / pad_width_mm
+    page_shapes = _pdf_vector_shapes(page, crop.crop_bbox)
+    ratio_matches: list[tuple[float, float, float, float]] = []
+    for bbox in page_shapes:
+        width_pt, height_pt = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        if width_pt <= 0 or height_pt <= 0:
+            continue
+        ratio = max(width_pt, height_pt) / min(width_pt, height_pt)
+        if abs(ratio - target_ratio) / target_ratio <= 0.15:
+            ratio_matches.append(bbox)
+    if not ratio_matches:
+        return _OverlayGeometry()
+
+    candidate_clusters: dict[frozenset[_PdfBBox], list[_PdfBBox]] = {}
+    for seed in ratio_matches:
+        seed_long = max(seed[2] - seed[0], seed[3] - seed[1])
+        seed_short = min(seed[2] - seed[0], seed[3] - seed[1])
+        cluster = [
+            bbox
+            for bbox in ratio_matches
+            if abs(max(bbox[2] - bbox[0], bbox[3] - bbox[1]) - seed_long) / seed_long <= 0.15
+            and abs(min(bbox[2] - bbox[0], bbox[3] - bbox[1]) - seed_short) / seed_short <= 0.15
+        ]
+        candidate_clusters.setdefault(frozenset(cluster), cluster)
+
+    cluster_metrics: list[tuple[list[_PdfBBox], float, float | None, float]] = []
+    for cluster in candidate_clusters.values():
+        median_long_pt = median(max(bbox[2] - bbox[0], bbox[3] - bbox[1]) for bbox in cluster)
+        size_estimate = median_long_pt / pad_length_mm
+        nearest_spacing = _nearest_row_spacing(cluster)
+        pitch_estimate = nearest_spacing / pitch_mm if nearest_spacing is not None else None
+        agreement = (
+            abs(size_estimate - pitch_estimate) / ((size_estimate + pitch_estimate) / 2)
+            if pitch_estimate is not None and size_estimate + pitch_estimate > 0
+            else math.inf
+        )
+        cluster_metrics.append((cluster, size_estimate, pitch_estimate, agreement))
+
+    valid_clusters = [
+        item
+        for item in cluster_metrics
+        if len(item[0]) >= 4 and item[2] is not None and item[3] <= 0.03
+    ]
+    candidate_shapes, size_estimate, pitch_estimate, scale_disagreement = max(
+        valid_clusters or cluster_metrics,
+        key=lambda item: (len(item[0]), -item[3]),
+    )
+    centers = [((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2) for bbox in candidate_shapes]
+    scale_agrees = (
+        len(candidate_shapes) >= 4 and pitch_estimate is not None and scale_disagreement <= 0.03
+    )
+    scale_pt_per_mm = size_estimate if scale_agrees else None
+
+    candidate_centroid = (
+        (sum(x for x, _ in centers) / len(centers), sum(y for _, y in centers) / len(centers))
+        if centers
+        else None
+    )
+    anchor_kind: Literal["exposed_pad", "candidate_centroid"] | None = None
+    anchor_page_pt: tuple[float, float] | None = None
+    anchor_footprint_mm: tuple[float, float] | None = None
+    if spec.package.exposed_pad is not None:
+        exposed_pad = spec.package.exposed_pad
+        expected_ratio = max(_format_dim(exposed_pad.length), _format_dim(exposed_pad.width)) / min(
+            _format_dim(exposed_pad.length), _format_dim(exposed_pad.width)
+        )
+        expected_long_pt = (
+            max(_format_dim(exposed_pad.length), _format_dim(exposed_pad.width)) * size_estimate
+        )
+        exposed_shapes = [
+            bbox
+            for bbox in page_shapes
+            if abs(
+                (max(bbox[2] - bbox[0], bbox[3] - bbox[1]))
+                / (min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
+                - expected_ratio
+            )
+            / expected_ratio
+            <= 0.15
+            and abs(max(bbox[2] - bbox[0], bbox[3] - bbox[1]) - expected_long_pt) / expected_long_pt
+            <= 0.20
+        ]
+        if exposed_shapes and candidate_centroid is not None:
+            ep_bbox = min(
+                exposed_shapes,
+                key=lambda bbox: math.dist(
+                    ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2),
+                    candidate_centroid,
+                ),
+            )
+            anchor_page_pt = ((ep_bbox[0] + ep_bbox[2]) / 2, (ep_bbox[1] + ep_bbox[3]) / 2)
+            anchor_kind = "exposed_pad"
+        footprint_ep = next(
+            (pad for pad in footprint.pads if pad.number == exposed_pad.number), None
+        )
+        reference_ep = next(
+            (pad for pad in reference.pads if pad.number == exposed_pad.number), None
+        )
+        if footprint_ep is not None:
+            anchor_footprint_mm = (_view_x(footprint_ep.x, spec), footprint_ep.y)
+        elif reference_ep is not None:
+            anchor_footprint_mm = (_view_x(reference_ep.x, spec), reference_ep.y)
+    else:
+        if candidate_centroid is not None:
+            anchor_page_pt = candidate_centroid
+            anchor_kind = "candidate_centroid"
+        footprint_pads = [pad for pad in footprint.pads if pad.type != "np_thru_hole"]
+        if not footprint_pads:
+            footprint_pads = reference_pads
+        if footprint_pads:
+            anchor_footprint_mm = (
+                median([_view_x(pad.x, spec) for pad in footprint_pads]),
+                median([pad.y for pad in footprint_pads]),
+            )
+
+    scale_px_per_mm = (
+        scale_pt_per_mm * dpi / 72.0 * crop.scale
+        if scale_pt_per_mm is not None and dpi > 0
+        else None
+    )
+    anchor_crop_px = (
+        (
+            (anchor_page_pt[0] - crop.crop_bbox[0]) * dpi / 72.0 * crop.scale,
+            (anchor_page_pt[1] - crop.crop_bbox[1]) * dpi / 72.0 * crop.scale,
+        )
+        if anchor_page_pt is not None and dpi > 0
+        else None
+    )
+    return _OverlayGeometry(
+        scale_pt_per_mm=scale_pt_per_mm,
+        pad_size_estimate_pt_per_mm=size_estimate,
+        pitch_estimate_pt_per_mm=pitch_estimate,
+        scale_px_per_mm=scale_px_per_mm,
+        anchor_kind=anchor_kind,
+        anchor_page_pt=anchor_page_pt,
+        anchor_crop_px=anchor_crop_px,
+        anchor_footprint_mm=anchor_footprint_mm,
+        candidate_pad_count=len(candidate_shapes),
+    )
+
+
+def _overlay_svg(
+    spec: PartSpec,
+    footprint: FootprintDef,
+    crop_image_path: Path,
+    crop_image_href: str,
     output_path: Path,
     *,
-    scale_px_per_mm: float,
+    geometry: _OverlayGeometry,
 ) -> None:
-    all_x: list[float] = []
-    all_y: list[float] = []
-
-    def include(rect: tuple[float, float, float, float]) -> None:
-        all_x.extend((rect[0], rect[2]))
-        all_y.extend((rect[1], rect[3]))
-
-    body_length = _format_dim(spec.package.body_length)
-    body_width = _format_dim(spec.package.body_width)
-    include((-body_width / 2, -body_length / 2, body_width / 2, body_length / 2))
-    for pad in footprint.pads:
-        points = _pad_corners(pad)
-        include(
-            (
-                min(point[0] for point in points),
-                min(point[1] for point in points),
-                max(point[0] for point in points),
-                max(point[1] for point in points),
-            )
-        )
-    for pad in reference.pads:
-        include(
-            (
-                pad.x - pad.width / 2,
-                pad.y - pad.height / 2,
-                pad.x + pad.width / 2,
-                pad.y + pad.height / 2,
-            )
-        )
-    leads = lead_rects(spec)
-    for rectangles in leads.values():
-        for rect in rectangles:
-            include((rect.x0, rect.y0, rect.x1, rect.y1))
-    minimum_x = min(all_x) - 1.0
-    minimum_y = min(all_y) - 1.0
-    maximum_x = max(all_x) + 1.0
-    maximum_y = max(all_y) + 1.0
-    width_mm, height_mm = maximum_x - minimum_x, maximum_y - minimum_y
+    with Image.open(crop_image_path) as image:
+        image_width, image_height = image.size
     esc = html.escape
     parts = [
         (
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width_mm * scale_px_per_mm:.8f}px" '
-            f'height="{height_mm * scale_px_per_mm:.8f}px" '
-            f'viewBox="{minimum_x:.8f} {minimum_y:.8f} {width_mm:.8f} {height_mm:.8f}">'
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{image_width}px" '
+            f'height="{image_height}px" viewBox="0 0 {image_width} {image_height}">'
         ),
-        '<defs><pattern id="hatch" width="0.12" height="0.12" patternUnits="userSpaceOnUse" '
-        'patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="0.12" '
-        'stroke="#aa5500" stroke-width="0.035"/></pattern></defs>',
-        '<rect width="100%" height="100%" fill="white"/>',
         (
-            f'<rect x="{-body_width / 2:.5f}" y="{-body_length / 2:.5f}" '
-            f'width="{body_width:.5f}" height="{body_length:.5f}" fill="none" '
-            'stroke="#333" stroke-width="0.04"/>'
+            f'<image href="{esc(crop_image_href)}" x="0" y="0" width="{image_width}" '
+            f'height="{image_height}" preserveAspectRatio="none"/>'
         ),
     ]
-    for pad in reference.pads:
-        parts.append(
-            f'<rect x="{pad.x - pad.width / 2:.5f}" y="{pad.y - pad.height / 2:.5f}" '
-            f'width="{pad.width:.5f}" height="{pad.height:.5f}" fill="none" '
-            'stroke="#1769aa" stroke-width="0.04" stroke-dasharray="0.12 0.08"/>'
-        )
-    for pad in footprint.pads:
-        corners = _pad_corners(pad)
-        points = " ".join(f"{x:.5f},{y:.5f}" for x, y in corners)
-        parts.append(
-            f'<polygon points="{points}" fill="#d4e8f4" fill-opacity="0.75" '
-            'stroke="#114477" stroke-width="0.035"/>'
-        )
-        parts.append(
-            f'<text x="{pad.x:.5f}" y="{pad.y:.5f}" font-size="0.18" '
-            f'text-anchor="middle" dominant-baseline="central">{esc(pad.number)}</text>'
-        )
-    for rectangles in leads.values():
-        for rect in rectangles:
+    if geometry.scale_known:
+        anchor_x, anchor_y = geometry.anchor_footprint_mm or (0.0, 0.0)
+        crop_anchor_x, crop_anchor_y = geometry.anchor_crop_px or (0.0, 0.0)
+        pixel_scale = geometry.scale_px_per_mm or 0.0
+        parts.append('<g id="candidate-pads">')
+        for pad in footprint.pads:
+            if pad.type == "np_thru_hole":
+                continue
+            pad_corners = _pad_corners(pad)
+            points = [
+                (
+                    crop_anchor_x + (_view_x(x, spec) - anchor_x) * pixel_scale,
+                    crop_anchor_y + (y - anchor_y) * pixel_scale,
+                )
+                for x, y in pad_corners
+            ]
+            point_text = " ".join(f"{x:.3f},{y:.3f}" for x, y in points)
+            pin_one = pad.number == "1"
             parts.append(
-                f'<rect x="{rect.x0:.5f}" y="{rect.y0:.5f}" '
-                f'width="{rect.x1 - rect.x0:.5f}" height="{rect.y1 - rect.y0:.5f}" '
-                'fill="url(#hatch)" stroke="#aa5500" stroke-width="0.025"/>'
+                f'<polygon data-pad-number="{esc(pad.number)}" points="{point_text}" '
+                f'fill="#ff3333" fill-opacity="{0.72 if pin_one else 0.42}" '
+                f'stroke="{("#ffbf00" if pin_one else "#d00000")}" '
+                f'stroke-width="{4 if pin_one else 2}"/>'
             )
-    pin_one = next((pad for pad in reference.pads if pad.number == "1"), None)
-    if pin_one is not None:
-        marker_x, marker_y = pin_one.x, pin_one.y
-        parts.append(
-            f'<circle cx="{marker_x:.5f}" cy="{marker_y:.5f}" r="0.12" '
-            'fill="none" stroke="#cc2222" stroke-width="0.04"/>'
-        )
-    bar_x, bar_y = minimum_x + 0.2, maximum_y - 0.25
-    parts.extend(
-        [
-            f'<line x1="{bar_x:.5f}" y1="{bar_y:.5f}" x2="{bar_x + 1:.5f}" '
-            f'y2="{bar_y:.5f}" stroke="#111" stroke-width="0.05"/>',
-            f'<text x="{bar_x:.5f}" y="{bar_y - 0.08:.5f}" font-size="0.16">1 mm</text>',
-            (
-                f'<text x="{minimum_x + 0.2:.5f}" y="{minimum_y + 0.28:.5f}" '
-                'font-size="0.18">Top-view placement · drawing view '
-                f"{esc(spec.package.drawing_view)}</text>"
-            ),
-            "</svg>",
-        ]
-    )
+            center_x = crop_anchor_x + (_view_x(pad.x, spec) - anchor_x) * pixel_scale
+            center_y = crop_anchor_y + (pad.y - anchor_y) * pixel_scale
+            font_size = max(8.0, min(24.0, min(pad.width, pad.height) * pixel_scale * 0.55))
+            parts.append(
+                f'<text x="{center_x:.3f}" y="{center_y:.3f}" font-size="{font_size:.3f}" '
+                f'fill="#540000" text-anchor="middle" dominant-baseline="central">'
+                f"{esc(pad.number)}</text>"
+            )
+        parts.append("</g>")
+    parts.append("</svg>")
     output_path.write_text("\n".join(parts) + "\n", encoding="utf-8")
 
 
@@ -1670,7 +1994,8 @@ def _review_html(review: dict[str, Any]) -> str:
         "".join(
             f'<figure><a href="{escape(item["path"])}">'
             f'<img src="{escape(item["path"])}" alt="{escape(item["kind"])} render" '
-            'style="max-height:400px;width:auto"></a>'
+            f'style="width:{480 if item["kind"] == "footprint_svg" else 360}px;'
+            'height:auto;max-width:100%"></a>'
             f"<figcaption>{escape(item['kind'])} · SHA-256 "
             f"{escape(item['sha256'])}</figcaption></figure>"
             for item in review["renders"]
@@ -1682,24 +2007,16 @@ def _review_html(review: dict[str, Any]) -> str:
         for name, value in sorted(review["artifact_hashes"].items())
     )
     overlay = review.get("overlay")
-    land_crop = review.get("land_pattern_crop")
     overlay_caption = (
-        "Same-scale placement overlay"
+        "Data-derived placement overlay"
         if overlay is not None and overlay.get("scale_known")
         else "Placement overlay — not to scale"
     )
-    if overlay is not None and land_crop is not None:
+    if overlay is not None:
         overlay_html = (
-            f'<div class="pair"><figure><img src="{escape(land_crop["path"])}" '
-            'alt="Land-pattern drawing view">'
-            f"<figcaption>Land-pattern drawing-view crop · {full_page_link(land_crop.get('page'))}"
-            "</figcaption></figure><figure>"
-            f'<img src="{escape(overlay["path"])}" alt="Placement overlay">'
-            f"<figcaption>{overlay_caption}</figcaption></figure></div>"
-        )
-    elif overlay is not None:
-        overlay_html = (
-            f'<figure><img src="{escape(overlay["path"])}" alt="Placement overlay">'
+            f'<figure><img src="{escape(overlay["path"])}" '
+            'alt="Land-pattern drawing with footprint placement overlay" '
+            'style="max-width:100%;height:auto">'
             f"<figcaption>{overlay_caption}</figcaption></figure>"
         )
     else:
@@ -1743,8 +2060,7 @@ def _review_html(review: dict[str, Any]) -> str:
         "<style>body{font:15px sans-serif;max-width:1200px;margin:2rem auto}"
         "table{border-collapse:collapse;"
         "width:100%;font-size:13px}td,th{border:1px solid #bbb;padding:.3rem;text-align:left}"
-        "img{max-width:100%;height:auto}.pair{display:flex;align-items:flex-start;gap:1rem}"
-        ".pair figure{margin:0}.pair img{display:block;max-width:none}"
+        "img{max-width:100%;height:auto}"
         ".mismatch{background:#f8d7da;color:#842029}</style></head><body>"
         f"<h1>Review packet {html.escape(review['packet_id'])}</h1>"
         "<h2>Contradictions and deterministic findings</h2><ul>"
@@ -2077,37 +2393,54 @@ def build_review_packet(
     overlay_record: dict[str, Any] | None = None
     land_crop_field = "land_pattern.drawing_view" if "land_pattern.drawing_view" in crops else None
     land_pattern_crop = crops.get(land_crop_field) if land_crop_field is not None else None
-    if reference is not None and footprint_def is not None:
+    if reference is not None and footprint_def is not None and land_pattern_crop is not None:
         try:
-            source_page = (
-                page_by_number.get(land_pattern_crop.page)
-                if land_pattern_crop is not None
-                else None
-            )
-            pixel_scale = (
-                source_page.dpi / 25.4 * land_pattern_crop.scale
-                if source_page is not None and land_pattern_crop is not None and source_page.dpi > 0
-                else None
-            )
-            if pixel_scale is None or pixel_scale <= 0:
-                pixel_scale = 30.0
-                scale_known = False
-                unknowns.append("placement overlay scale unavailable; overlay not to scale")
-            else:
-                scale_known = True
+            source_page = page_by_number.get(land_pattern_crop.page)
+            dpi = source_page.dpi if source_page is not None else 0
+            geometry = _OverlayGeometry()
+            try:
+                with pdfplumber.open(pdf_path) as pdf:
+                    if 1 <= land_pattern_crop.page <= len(pdf.pages):
+                        geometry = _derive_overlay_geometry(
+                            pdf.pages[land_pattern_crop.page - 1],
+                            land_pattern_crop,
+                            spec,
+                            footprint_def,
+                            reference,
+                            dpi=dpi,
+                        )
+            except Exception:
+                geometry = _OverlayGeometry()
             overlay_path = packet_dir / "overlay.svg"
+            crop_image_path = packet_dir / land_pattern_crop.path
             _overlay_svg(
                 spec,
                 footprint_def,
-                reference,
+                crop_image_path,
+                _relative_path(packet_dir, crop_image_path),
                 overlay_path,
-                scale_px_per_mm=pixel_scale,
+                geometry=geometry,
+            )
+            unknowns.extend(
+                code for code in _overlay_unknown_codes(geometry) if code not in unknowns
             )
             overlay_record = {
                 "path": _relative_path(packet_dir, overlay_path),
                 "sha256": _sha256(overlay_path),
-                "scale_px_per_mm": pixel_scale,
-                "scale_known": scale_known,
+                "scale_known": geometry.scale_known,
+                "scale_pt_per_mm": geometry.scale_pt_per_mm,
+                "pad_size_estimate_pt_per_mm": geometry.pad_size_estimate_pt_per_mm,
+                "pitch_estimate_pt_per_mm": geometry.pitch_estimate_pt_per_mm,
+                "scale_px_per_mm": geometry.scale_px_per_mm,
+                "candidate_pad_count": geometry.candidate_pad_count,
+                "page_dpi": dpi,
+                "crop_upscale": land_pattern_crop.scale,
+                "anchor": {
+                    "kind": geometry.anchor_kind,
+                    "page_pt": geometry.anchor_page_pt,
+                    "crop_px": geometry.anchor_crop_px,
+                    "footprint_mm": geometry.anchor_footprint_mm,
+                },
             }
         except (OSError, ValueError) as exc:
             findings.append(
@@ -2118,6 +2451,10 @@ def build_review_packet(
                     message=str(exc),
                 )
             )
+            if "overlay_scale_unknown" not in unknowns:
+                unknowns.append("overlay_scale_unknown")
+    elif "overlay_scale_unknown" not in unknowns:
+        unknowns.append("overlay_scale_unknown")
 
     questions = blind_questions(spec, current_id)
     dimensions = _dimension_records(spec, crops)

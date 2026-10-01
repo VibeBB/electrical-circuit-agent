@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -427,8 +428,181 @@ def test_review_html_renders_inline_evidence_renders_and_mismatch_cells() -> Non
     assert '<img src="renders/symbol.svg"' in rendered
     assert '<td class="mismatch">passive</td>' in rendered
     assert "<th>Mismatch</th>" in rendered
-    assert "Same-scale placement overlay" in rendered
+    assert "Data-derived placement overlay" in rendered
+    assert (
+        '<img src="overlay.svg" alt="Land-pattern drawing with footprint placement overlay" '
+        'style="max-width:100%;height:auto">'
+    ) in rendered
+    assert 'style="width:480px;height:auto;max-width:100%"' in rendered
+    assert 'style="width:360px;height:auto;max-width:100%"' in rendered
+    assert ".pair img" not in rendered
     assert "package.pitch</td><td>—</td>" in rendered
+
+
+def test_overlay_scale_uses_pdf_vector_size_and_pitch(tmp_path: Path) -> None:
+    private_api: Any = libreview
+    spec = _spec()
+    fixture_pads = [
+        LandPad(number="1", x=-1.5, y=-2.0, width=0.8, height=0.4, shape="rect"),
+        LandPad(number="2", x=-1.5, y=0.0, width=0.8, height=0.4, shape="rect"),
+        LandPad(number="3", x=-1.5, y=1.0, width=0.8, height=0.4, shape="rect"),
+        LandPad(number="4", x=1.5, y=-2.0, width=0.8, height=0.4, shape="rect"),
+        LandPad(number="5", x=1.5, y=0.0, width=0.8, height=0.4, shape="rect"),
+        LandPad(number="6", x=1.5, y=1.0, width=0.8, height=0.4, shape="rect"),
+        LandPad(number="7", x=-1.5, y=3.0, width=0.4, height=0.8, shape="rect"),
+        LandPad(number="8", x=1.5, y=3.0, width=0.4, height=0.8, shape="rect"),
+    ]
+    assert spec.land_pattern is not None
+    spec = spec.model_copy(
+        update={"land_pattern": spec.land_pattern.model_copy(update={"pads": fixture_pads})}
+    )
+    reference = private_api.compute_land_pattern(spec, "nominal")
+    footprint = FootprintDef(
+        name="Synthetic",
+        attributes=["smd"],
+        pads=[
+            PadDef(
+                number=pad.number,
+                type="smd",
+                shape="rect",
+                x=pad.x,
+                y=pad.y,
+                rotation=0,
+                width=pad.width,
+                height=pad.height,
+                drill=None,
+                layers=["F.Cu"],
+            )
+            for pad in fixture_pads
+        ],
+        graphics=[],
+        models=[],
+        properties={},
+    )
+
+    def vector_objects(center_scale: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        rects: list[dict[str, Any]] = []
+        curves: list[dict[str, Any]] = []
+        for index, pad in enumerate(fixture_pads):
+            center_x, center_y = 100 + pad.x * center_scale, 100 + pad.y * center_scale
+            half_width, half_height = pad.width * 10, pad.height * 10
+            x0, x1 = center_x - half_width, center_x + half_width
+            top, bottom = center_y - half_height, center_y + half_height
+            bbox = {"x0": x0, "top": top, "x1": x1, "bottom": bottom}
+            if index < 2:
+                rects.append(bbox)
+            else:
+                curves.append(
+                    {
+                        **bbox,
+                        "pts": [(x0, top), (x1, top), (x1, bottom), (x0, bottom), (x0, top)],
+                        "path": [
+                            ("m", (x0, top)),
+                            ("l", (x1, top)),
+                            ("l", (x1, bottom)),
+                            ("l", (x0, bottom)),
+                            ("h",),
+                        ],
+                    }
+                )
+        for index in range(4):
+            center_x, center_y = 160.0, 20.0 + index * 12.0
+            half_width = fixture_pads[0].width * 2.5
+            half_height = fixture_pads[0].height * 2.5
+            rects.append(
+                {
+                    "x0": center_x - half_width,
+                    "top": center_y - half_height,
+                    "x1": center_x + half_width,
+                    "bottom": center_y + half_height,
+                }
+            )
+        return rects, curves
+
+    rects, curves = vector_objects(20.0)
+    synthetic_page = type("SyntheticPage", (), {"rects": rects, "curves": curves, "lines": []})()
+    crop = private_api._CropRecord(
+        field="land_pattern.drawing_view",
+        page=1,
+        path="crops/land_pattern.drawing_view.png",
+        sha256="a" * 64,
+        source_png_sha256="b" * 64,
+        bbox=(0, 0, 200, 200),
+        crop_bbox=(0, 0, 200, 200),
+        scale=1.0,
+    )
+    geometry = private_api._derive_overlay_geometry(
+        synthetic_page,
+        crop,
+        spec,
+        footprint,
+        reference,
+        dpi=72,
+    )
+    assert geometry.scale_known
+    assert geometry.scale_pt_per_mm == pytest.approx(20.0, rel=0.01)
+    assert geometry.pad_size_estimate_pt_per_mm == pytest.approx(20.0)
+    assert geometry.pitch_estimate_pt_per_mm == pytest.approx(20.0)
+    assert geometry.scale_px_per_mm == pytest.approx(20.0)
+    assert geometry.candidate_pad_count == 8
+    crop_path = tmp_path / "land-pattern.png"
+    Image.new("RGB", (200, 200), "white").save(crop_path)
+    overlay_path = tmp_path / "overlay.svg"
+    private_api._overlay_svg(
+        spec,
+        footprint,
+        crop_path,
+        "crops/land_pattern.drawing_view.png",
+        overlay_path,
+        geometry=geometry,
+    )
+    svg_root = ET.parse(overlay_path).getroot()
+    svg_namespace = "{http://www.w3.org/2000/svg}"
+    image = svg_root.find(f"{svg_namespace}image")
+    assert image is not None
+    assert image.attrib["href"] == "crops/land_pattern.drawing_view.png"
+    assert image.attrib["width"] == "200"
+    polygons = {
+        item.attrib["data-pad-number"]: item
+        for item in svg_root.findall(f".//{svg_namespace}polygon")
+    }
+    assert polygons["1"].attrib["fill-opacity"] == "0.72"
+    assert polygons["1"].attrib["stroke"] == "#ffbf00"
+    for pad in fixture_pads:
+        actual = {
+            tuple(float(value) for value in point.split(","))
+            for point in polygons[pad.number].attrib["points"].split()
+        }
+        center_x, center_y = 100 + pad.x * 20, 100 + pad.y * 20
+        expected = {
+            (center_x - pad.width * 10, center_y - pad.height * 10),
+            (center_x + pad.width * 10, center_y - pad.height * 10),
+            (center_x + pad.width * 10, center_y + pad.height * 10),
+            (center_x - pad.width * 10, center_y + pad.height * 10),
+        }
+        assert all(
+            min(math.dist(actual_point, expected_point) for expected_point in expected) <= 1.0
+            for actual_point in actual
+        )
+
+    mismatched_rects, mismatched_curves = vector_objects(24.0)
+    mismatched_page = type(
+        "MismatchedPage",
+        (),
+        {"rects": mismatched_rects, "curves": mismatched_curves, "lines": []},
+    )()
+    mismatched_geometry = private_api._derive_overlay_geometry(
+        mismatched_page,
+        crop,
+        spec,
+        footprint,
+        reference,
+        dpi=72,
+    )
+    assert mismatched_geometry.scale_pt_per_mm is None
+    assert mismatched_geometry.pad_size_estimate_pt_per_mm == pytest.approx(20.0)
+    assert mismatched_geometry.pitch_estimate_pt_per_mm == pytest.approx(24.0)
+    assert private_api._overlay_unknown_codes(mismatched_geometry) == ["overlay_scale_unknown"]
 
 
 def test_review_status_approves_normalized_answers_and_rejects_corrections(
@@ -1047,9 +1221,10 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert "<script" not in review_html.lower()
     assert "base64," not in review_html.lower()
     assert "http://" not in review_html.lower()
-    assert "Land-pattern drawing-view crop" in review_html
-    assert "Same-scale placement overlay" in review_html
+    assert "Land-pattern drawing-view crop" not in review_html
+    assert "Placement overlay — not to scale" in review_html
     assert "render_unavailable" in review["unknowns"]
+    assert "overlay_scale_unknown" in review["unknowns"]
     assert "3D visual review not included yet" in review["unknowns"]
     assert "model:0" in review["artifact_hashes"]
     assert review["overlay"] is not None
@@ -1071,30 +1246,22 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
         assert hashlib.sha256(crop_path.read_bytes()).hexdigest() == crop_record["sha256"]
         assert crop_record["source_png_sha256"] == page_hashes[crop_record["page"]]
     overlay_svg = (packet.packet_dir / review["overlay"]["path"]).read_text(encoding="utf-8")
-    assert overlay_svg.count("<polygon ") == len(libreview.parse_footprint(footprint_path).pads)
-    assert overlay_svg.count('fill="url(#hatch)"') == sum(
-        len(rectangles) for rectangles in libreview.lead_rects(spec).values()
-    )
-    assert overlay_svg.count('stroke-dasharray="0.12 0.08"') == len(
-        libreview.compute_land_pattern(spec, "nominal").pads
-    )
-    assert "1 mm" in overlay_svg
-    assert "<circle " in overlay_svg
-    assert "Top-view placement" in overlay_svg
-    assert "drawing view top" in overlay_svg
-    assert review["overlay"]["scale_known"] is True
+    assert overlay_svg.count("<polygon ") == 0
+    assert 'href="crops/land_pattern.drawing_view.png"' in overlay_svg
+    assert review["overlay"]["scale_known"] is False
     crop = review["land_pattern_crop"]
     crop_path = packet.packet_dir / crop["path"]
     assert hashlib.sha256(crop_path.read_bytes()).hexdigest() == crop["sha256"]
     with Image.open(crop_path) as image:
         assert min(image.size) >= 400
-    land_page = next(item for item in review["evidence_pages"] if item["page"] == crop["page"])
-    crop_scale = land_page["dpi"] / 25.4 * crop_fields["land_pattern.drawing_view"]["scale"]
-    assert review["overlay"]["scale_px_per_mm"] == pytest.approx(crop_scale)
     svg_root = ET.fromstring(overlay_svg)
-    view_box = [float(item) for item in svg_root.attrib["viewBox"].split()]
-    overlay_width_px = float(svg_root.attrib["width"].removesuffix("px"))
-    assert overlay_width_px / view_box[2] == pytest.approx(crop_scale)
+    svg_namespace = "{http://www.w3.org/2000/svg}"
+    composite_image = svg_root.find(f"{svg_namespace}image")
+    assert composite_image is not None
+    assert composite_image.attrib["href"] == "crops/land_pattern.drawing_view.png"
+    assert svg_root.findall(f".//{svg_namespace}polygon") == []
+    assert review["overlay"]["scale_known"] is False
+    assert review["overlay"]["scale_pt_per_mm"] is None
     private_api: Any = libreview
 
     def no_drawing_view_crops(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
@@ -1114,9 +1281,9 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
         (no_scale_packet.packet_dir / "review.json").read_text(encoding="utf-8")
     )
     no_scale_html = (no_scale_packet.packet_dir / "02-review.html").read_text(encoding="utf-8")
-    assert no_scale_review["overlay"]["scale_known"] is False
-    assert any("overlay not to scale" in item for item in no_scale_review["unknowns"])
-    assert "Placement overlay — not to scale" in no_scale_html
+    assert no_scale_review["overlay"] is None
+    assert "overlay_scale_unknown" in no_scale_review["unknowns"]
+    assert "Land-pattern overlay or cited page crop is unavailable." in no_scale_html
     assert (
         extraction_holder["extraction"].pages[0].png_sha256 == review["evidence_pages"][0]["sha256"]
     )
