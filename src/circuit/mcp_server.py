@@ -585,11 +585,18 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
     ),
     (
         "circuit_library_candidates",
-        "Search installed and project libraries for reusable items",
+        "Search installed and project libraries for reusable items, including "
+        "product-tuned candidates",
         {
             "type": "object",
             "properties": {
                 "part_spec_path": {"type": "string"},
+                "product": {
+                    "type": "string",
+                    "description": (
+                        "Product name for preferring valid product-layer tuned footprints"
+                    ),
+                },
                 "density": {
                     "type": "string",
                     "enum": ["most", "nominal", "least"],
@@ -1463,6 +1470,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 roots=libraries.default_roots(),
                 project_library_dir=spec_path.parent / "library",
                 reference=reference,
+                product=_optional_string(args.get("product")),
             )
             output = _output_path(
                 spec_path,

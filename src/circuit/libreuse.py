@@ -64,6 +64,7 @@ class FootprintCandidate(BaseModel):
     lineage_layer: Literal["organization", "product"] | None
     lineage_product: str | None
     functional: FunctionalCheck
+    preferred_tuned: bool
 
 
 class SymbolCandidate(BaseModel):
@@ -344,6 +345,7 @@ def _footprint_candidates(
     reference: LandPatternResult,
     organization_dirs: Sequence[Path],
     rules: EffectiveRules,
+    product: str | None,
 ) -> list[FootprintCandidate]:
     reference_boxes = _reference_boxes(reference)
     reference_pads = reference.pads
@@ -392,8 +394,13 @@ def _footprint_candidates(
                 origin = source_origin
                 break
         lineage_sidecar = lineage_path_for(path)
-        lineage_path = str(lineage_sidecar) if lineage_sidecar.is_file() else None
+        lineage_path = (
+            str(lineage_sidecar)
+            if lineage_sidecar.exists() or lineage_sidecar.is_symlink()
+            else None
+        )
         lineage: FootprintLineage | None = None
+        preferred_tuned = False
         if lineage_path is not None:
             lineage_library_dir = next(
                 (
@@ -410,8 +417,24 @@ def _footprint_candidates(
                 lineage_library_dir,
                 lineage_findings,
             )
-            if valid_lineage:
+            if valid_lineage and candidate_lineage is not None:
                 lineage = candidate_lineage
+                preferred_tuned = functional.passed and (
+                    lineage.layer == "organization"
+                    or (lineage.layer == "product" and lineage.product == product)
+                )
+            else:
+                lineage_failures = [
+                    f"{finding.code}: {finding.subject}: {finding.message}"
+                    for finding in lineage_findings
+                ]
+                if not lineage_failures:
+                    lineage_failures.append("lineage_invalid: validation failed")
+                functional = FunctionalCheck(
+                    passed=False,
+                    failures=[*functional.failures, *lineage_failures],
+                )
+                classification = "near"
         candidates.append(
             FootprintCandidate(
                 name=footprint.name,
@@ -428,11 +451,13 @@ def _footprint_candidates(
                 lineage_layer=lineage.layer if lineage is not None else None,
                 lineage_product=lineage.product if lineage is not None else None,
                 functional=functional,
+                preferred_tuned=preferred_tuned,
             )
         )
     return sorted(
         candidates,
         key=lambda candidate: (
+            not candidate.preferred_tuned,
             _CLASS_RANK[candidate.classification],
             _ORIGIN_RANK[candidate.origin],
             max(candidate.max_center_delta, candidate.max_size_delta),
@@ -546,6 +571,7 @@ def find_candidates(
     reference: LandPatternResult,
     organization_dirs: Sequence[Path] = (),
     rules: EffectiveRules | None = None,
+    product: str | None = None,
 ) -> CandidateReport:
     """Find geometrically and electrically compatible KiCad library items."""
 
@@ -561,6 +587,7 @@ def find_candidates(
             reference,
             organization_dirs,
             effective_rules,
+            product,
         ),
         symbols=_symbol_candidates(spec, roots, project_library_dir),
     )

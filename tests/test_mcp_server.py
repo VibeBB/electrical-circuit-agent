@@ -96,6 +96,12 @@ def test_mcp_server_lists_expected_tools() -> None:
     )
     assert land_pattern_schema["properties"]["rule_profile"]["type"] == "string"
     assert "library_dir" in land_pattern_schema["properties"]
+    candidate_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_library_candidates"
+    )
+    assert candidate_schema["properties"]["product"]["type"] == "string"
     assert {
         name
         for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -394,6 +400,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
     captured_sources: list[SourceInfoInput] = []
     verification_options: list[bool] = []
     verification_rule_chains: list[list[str] | None] = []
+    candidate_products: list[str | None] = []
 
     def fake_import(
         source_file: Path,
@@ -413,6 +420,18 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
         )
 
     monkeypatch.setattr(mcp_server.libsource, "import_library_item", fake_import)
+
+    def fake_candidates(_spec: PartSpec, **kwargs: Any) -> mcp_server.libreuse.CandidateReport:
+        candidate_products.append(cast(str | None, kwargs.get("product")))
+        return mcp_server.libreuse.CandidateReport(
+            artifact_kind="circuit_library_candidates",
+            part_spec_sha256="a" * 64,
+            reference_source="ipc7351b",
+            footprints=[],
+            symbols=[],
+        )
+
+    monkeypatch.setattr(mcp_server.libreuse, "find_candidates", fake_candidates)
 
     def fake_verify(_spec: PartSpec, **kwargs: Any) -> LibraryVerification:
         verification_options.append(cast(bool, kwargs["test_board"]))
@@ -475,10 +494,14 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
             Any,
             await mcp_server.call_tool(
                 "circuit_library_candidates",
-                {"part_spec_path": str(spec_path)},
+                {
+                    "part_spec_path": str(spec_path),
+                    "product": "controller-board",
+                },
             ),
         )
         assert candidates.isError is False
+        assert candidate_products == ["controller-board"]
         assert (tmp_path / "circuit-reports" / "part.library-candidates.json").is_file()
 
         imported = cast(

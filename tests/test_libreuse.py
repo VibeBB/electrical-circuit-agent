@@ -1,5 +1,6 @@
 import hashlib
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -149,6 +150,46 @@ def _write_footprint(
         lines.append(f'  (model "{model}")')
     lines.append(")")
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_candidate_lineage(
+    footprint_path: Path,
+    library_dir: Path,
+    base_pads: list[tuple[str, float, float, float, float, float]],
+    *,
+    layer: Literal["organization", "product"],
+    product: str | None = None,
+) -> Path:
+    project_root = library_dir.parent
+    base_path = project_root / "base.kicad_mod"
+    _write_footprint(base_path, "Base", base_pads)
+    evidence_path = project_root / "prototype.txt"
+    evidence_path.write_text("prototype results", encoding="utf-8")
+    base = parse_footprint(base_path)
+    footprint = parse_footprint(footprint_path)
+    lineage = FootprintLineage(
+        artifact_kind="circuit_footprint_lineage",
+        footprint_sha256=hashlib.sha256(footprint_path.read_bytes()).hexdigest(),
+        layer=layer,
+        product=product,
+        base=FootprintBase(
+            kind="manufacturer",
+            path=base_path.name,
+            sha256=hashlib.sha256(base_path.read_bytes()).hexdigest(),
+        ),
+        changes=pad_changes(base, footprint),
+        reason="validated prototype tuning",
+        evidence=[
+            EvidenceRef(
+                kind="prototype",
+                path=evidence_path.name,
+                sha256=hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+            )
+        ],
+    )
+    sidecar = Path(f"{footprint_path}.lineage.json")
+    sidecar.write_text(lineage.model_dump_json(), encoding="utf-8")
+    return sidecar
 
 
 def _symbol_text(
@@ -473,6 +514,133 @@ def test_organization_candidates_rank_before_official_within_class(
         "kicad_official",
     ]
     assert result.footprints[0].name == "Organization"
+
+
+def test_organization_tuned_candidate_ranks_ahead_of_official_exact(
+    tmp_path: Path,
+) -> None:
+    spec = _spec()
+    reference = _reference(spec)
+    roots = _roots(tmp_path)
+    pads = _pad_tuples(reference)
+    _write_footprint(
+        roots.footprint_dirs[0]
+        / "Package_SO.pretty"
+        / "SOIC-4_3.9x4.9mm_P1.27mm_official.kicad_mod",
+        "Official",
+        pads,
+    )
+    organization = tmp_path / "organization" / "library"
+    tuned_pads = [
+        (number, x + 0.06, y, width, height, rotation)
+        for number, x, y, width, height, rotation in pads
+    ]
+    tuned_path = organization / "Package_SO.pretty" / ("SOIC-4_3.9x4.9mm_P1.27mm_tuned.kicad_mod")
+    _write_footprint(tuned_path, "OrganizationTuned", tuned_pads)
+    _write_candidate_lineage(
+        tuned_path,
+        organization,
+        pads,
+        layer="organization",
+    )
+
+    result = find_candidates(
+        spec,
+        roots=roots,
+        project_library_dir=None,
+        reference=reference,
+        organization_dirs=[organization],
+    )
+
+    assert result.footprints[0].name == "OrganizationTuned"
+    assert result.footprints[0].classification == "functional"
+    assert result.footprints[0].functional.passed
+    assert result.footprints[0].preferred_tuned
+    official = next(candidate for candidate in result.footprints if candidate.name == "Official")
+    assert official.classification == "exact"
+    assert not official.preferred_tuned
+
+
+def test_product_tuned_preference_requires_matching_product(tmp_path: Path) -> None:
+    spec = _spec()
+    reference = _reference(spec)
+    roots = _roots(tmp_path)
+    pads = _pad_tuples(reference)
+    _write_footprint(
+        roots.footprint_dirs[0]
+        / "Package_SO.pretty"
+        / "SOIC-4_3.9x4.9mm_P1.27mm_official.kicad_mod",
+        "Official",
+        pads,
+    )
+    organization = tmp_path / "organization" / "library"
+    tuned_pads = [
+        (number, x + 0.06, y, width, height, rotation)
+        for number, x, y, width, height, rotation in pads
+    ]
+    tuned_path = organization / "Package_SO.pretty" / ("SOIC-4_3.9x4.9mm_P1.27mm_tuned.kicad_mod")
+    _write_footprint(tuned_path, "ProductTuned", tuned_pads)
+    _write_candidate_lineage(
+        tuned_path,
+        organization,
+        pads,
+        layer="product",
+        product="controller-board",
+    )
+
+    matching = find_candidates(
+        spec,
+        roots=roots,
+        project_library_dir=None,
+        reference=reference,
+        organization_dirs=[organization],
+        product="controller-board",
+    )
+    mismatching = find_candidates(
+        spec,
+        roots=roots,
+        project_library_dir=None,
+        reference=reference,
+        organization_dirs=[organization],
+        product="other-board",
+    )
+
+    assert matching.footprints[0].name == "ProductTuned"
+    assert matching.footprints[0].preferred_tuned
+    assert mismatching.footprints[0].name == "Official"
+    tuned_candidate = next(
+        candidate for candidate in mismatching.footprints if candidate.name == "ProductTuned"
+    )
+    assert not tuned_candidate.preferred_tuned
+
+
+def test_invalid_lineage_demotes_candidate_and_fails_functional_check(
+    tmp_path: Path,
+) -> None:
+    spec = _spec()
+    reference = _reference(spec)
+    roots = _roots(tmp_path)
+    organization = tmp_path / "organization" / "library"
+    footprint_path = (
+        organization / "Package_SO.pretty" / ("SOIC-4_3.9x4.9mm_P1.27mm_invalid.kicad_mod")
+    )
+    _write_footprint(footprint_path, "InvalidLineage", _pad_tuples(reference))
+    sidecar = Path(f"{footprint_path}.lineage.json")
+    sidecar.write_text("{not json", encoding="utf-8")
+
+    result = find_candidates(
+        spec,
+        roots=roots,
+        project_library_dir=None,
+        reference=reference,
+        organization_dirs=[organization],
+    )
+
+    candidate = result.footprints[0]
+    assert candidate.classification == "near"
+    assert not candidate.functional.passed
+    assert any(failure.startswith("lineage_invalid:") for failure in candidate.functional.failures)
+    assert not candidate.preferred_tuned
 
 
 def test_geometrically_near_but_functional_candidate_gets_functional_class(
