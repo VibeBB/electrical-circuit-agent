@@ -923,3 +923,9 @@ was removed).
 ## CI runner network auditing
 
 CI and image-publishing jobs use `step-security/harden-runner` in audit-only mode. It observes network egress without blocking requests; per-run insights are available in the GitHub Actions job summary.
+
+## Digest-lock PR verification
+
+The publisher dispatches `ci.yml` and `workflow-lint.yml` on the lock branch, then polls the authoritative required-check set for up to 30 minutes. Non-required failures do not block publishing; a concluded required-check failure or a PR closed without merge fails the job. A PR merged externally triggers the existing post-merge main workflows without waiting for their results. If required checks remain pending at the deadline, the publisher arms squash auto-merge with branch deletion and exits successfully so branch protection can complete the merge.
+
+SPDX SBOM generation prefers the GHCR registry source, writes temporary data under the runner's temporary directory, and disables file metadata. A guard reports disk space and SBOM size immediately after generation and fails above 16 MiB, the attestation service's maximum.
