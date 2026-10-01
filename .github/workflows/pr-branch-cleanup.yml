@@ -15,9 +15,7 @@ on:
     - cron: "37 4 * * *"
   workflow_dispatch:
 
-permissions:
-  contents: write # git ref deletion
-  pull-requests: read # the sweep checks for open pull requests
+permissions: {}
 
 concurrency:
   group: pr-branch-cleanup
@@ -27,6 +25,9 @@ jobs:
   cleanup:
     runs-on: ubuntu-26.04
     timeout-minutes: 5
+    permissions:
+      contents: write # git ref deletion
+      pull-requests: read # the sweep checks for open pull requests
     steps:
       - name: Delete the closed pull request's automation branch
         if: >-

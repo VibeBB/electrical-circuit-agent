@@ -554,6 +554,30 @@ def test_check_docker_base_tracks_ubuntu_and_uv_images(tmp_path: Path) -> None:
     assert by_name["Docker base debian"].note == "unhandled image"
 
 
+def test_check_docker_base_strips_digest_pins(tmp_path: Path) -> None:
+    docker = tmp_path / "docker"
+    docker.mkdir()
+    (docker / "circuit-tools.Dockerfile").write_text(
+        "FROM ghcr.io/astral-sh/uv:0.12.21@sha256:aaa AS uv\nFROM ubuntu:26.04@sha256:bbb\n",
+        encoding="utf-8",
+    )
+
+    def fetch_json(url: str) -> Any:
+        host = urlsplit(url).hostname
+        if host == "hub.docker.com":
+            return {"results": [{"name": "26.04"}], "next": None}
+        if host == "pypi.org":
+            return {"info": {"version": "0.12.21"}}
+        raise ValueError(url)
+
+    statuses = check_docker_base(tmp_path, fetch_json=fetch_json)
+    by_name = {status.name: status for status in statuses}
+    assert by_name["Docker base ubuntu"].current == "26.04"
+    assert not by_name["Docker base ubuntu"].outdated
+    assert by_name["uv base image"].current == "0.12.21"
+    assert not by_name["uv base image"].outdated
+
+
 def test_check_python_versions_fails_closed_without_stable_tags(
     tmp_path: Path,
 ) -> None:
