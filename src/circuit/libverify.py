@@ -37,6 +37,7 @@ from .partspec import (
     Dimension,
     LandPad,
     PartSpec,
+    PartSpecReport,
     check_part_spec,
     part_spec_sha256,
 )
@@ -1058,6 +1059,7 @@ def verify_library_part(
     spec: PartSpec,
     *,
     spec_path: Path,
+    spec_check_path: Path | None = None,
     symbol_lib: Path,
     symbol_name: str,
     footprint_path: Path,
@@ -1074,16 +1076,19 @@ def verify_library_part(
     findings: list[VerifyFinding] = []
     spec_hash = part_spec_sha256(spec_path) if spec_path.is_file() else ""
     try:
-        extraction_path = Path(spec.datasheet.extraction_path)
-        if not extraction_path.is_absolute():
-            extraction_path = spec_path.resolve().parent / extraction_path
-        extraction = load_extraction(extraction_path)
-        check = check_part_spec(
-            spec,
-            extraction,
-            spec_path=spec_path,
-            extraction_path=extraction_path,
-        )
+        if spec_check_path is not None:
+            check = PartSpecReport.model_validate_json(spec_check_path.read_text(encoding="utf-8"))
+        else:
+            extraction_path = Path(spec.datasheet.extraction_path)
+            if not extraction_path.is_absolute():
+                extraction_path = spec_path.resolve().parent / extraction_path
+            extraction = load_extraction(extraction_path)
+            check = check_part_spec(
+                spec,
+                extraction,
+                spec_path=spec_path,
+                extraction_path=extraction_path,
+            )
         check_ok = check.verdict == "pass" and check.part_spec_sha256 == spec_hash
         check_detail = "" if check_ok else "fresh PartSpec check failed or is stale"
     except Exception as exc:

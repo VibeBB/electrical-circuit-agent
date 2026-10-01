@@ -35,6 +35,7 @@ from . import (
     landpattern,
     libraries,
     libreuse,
+    libreview,
     libsource,
     libverify,
     netlist,
@@ -376,9 +377,10 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 },
                 "source_path": {
                     "type": "string",
-                    "description": "KiCad source path; for fp_svg a footprint "
-                    "library directory containing .kicad_mod files",
+                    "description": "KiCad source path; fp_svg expects a footprint "
+                    "library directory and sym_svg expects a symbol library file",
                 },
+                "symbol_name": {"type": "string"},
                 "output_dir": {"type": "string"},
             },
             "required": ["kind", "source_path", "output_dir"],
@@ -610,6 +612,80 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_library_review_packet",
+        "Build a fresh, hash-bound human review packet for a library part",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "symbol_lib_path": {"type": "string"},
+                "symbol_name": {"type": "string"},
+                "footprint_path": {"type": "string"},
+                "library_dir": {"type": "string"},
+                "density": {
+                    "type": "string",
+                    "enum": ["most", "nominal", "least"],
+                    "default": "nominal",
+                },
+                "tolerance_mm": {"type": "number", "default": 0.02},
+                "model_required": {"type": "boolean", "default": True},
+                "out_dir": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": [
+                "part_spec_path",
+                "symbol_lib_path",
+                "symbol_name",
+                "footprint_path",
+                "library_dir",
+            ],
+        },
+    ),
+    (
+        "circuit_library_review_status",
+        "Recompute the current packet identity and report its human review state",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "symbol_lib_path": {"type": "string"},
+                "symbol_name": {"type": "string"},
+                "footprint_path": {"type": "string"},
+                "library_dir": {"type": "string"},
+                "density": {
+                    "type": "string",
+                    "enum": ["most", "nominal", "least"],
+                    "default": "nominal",
+                },
+                "tolerance_mm": {"type": "number", "default": 0.02},
+                "model_required": {"type": "boolean", "default": True},
+                "output_path": {"type": "string"},
+            },
+            "required": [
+                "part_spec_path",
+                "symbol_lib_path",
+                "symbol_name",
+                "footprint_path",
+                "library_dir",
+            ],
+        },
+    ),
+    (
+        "circuit_library_review_apply",
+        "Apply corrections from a validated reject event; never creates decision events",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "library_dir": {"type": "string"},
+                "packet_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+                "event_sha12": {"type": "string", "pattern": "^[0-9a-f]{12}$"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["part_spec_path", "library_dir", "packet_id", "event_sha12"],
+        },
+    ),
+    (
         "circuit_konnect_call",
         "Invoke Konnect operations through a managed stdio session when "
         "dynamically loaded toolsets are not visible to the harness; "
@@ -695,6 +771,9 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_library_import": _anno("Library import", write=True),
     "circuit_library_record": _anno("Library provenance record", write=True),
     "circuit_library_verify": _anno("Library verification", write=True),
+    "circuit_library_review_packet": _anno("Library review packet", write=True),
+    "circuit_library_review_status": _anno("Library review status", write=True),
+    "circuit_library_review_apply": _anno("Apply review corrections", write=True),
     "circuit_konnect_call": _anno("Konnect call", write=True, destructive=True, idempotent=False),
     "circuit_kicad_version": _anno("KiCad version", write=False),
 }
@@ -1008,11 +1087,24 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             record = _output_path(project, None, "jobset")
             record.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         elif name == "circuit_export":
-            result = kicad_cli.export(
+            export_kind = cast(
+                kicad_cli.ExportKind,
                 _literal(args, "kind", kicad_cli.EXPORT_KINDS, context="circuit_export"),
-                Path(str(args["source_path"])),
-                Path(str(args["output_dir"])),
             )
+            export_source = Path(str(args["source_path"]))
+            export_output = Path(str(args["output_dir"]))
+            symbol_name = (
+                str(args["symbol_name"]) if isinstance(args.get("symbol_name"), str) else None
+            )
+            if export_kind == "sym_svg":
+                result = kicad_cli.export(
+                    export_kind,
+                    export_source,
+                    export_output,
+                    symbol_name=symbol_name,
+                )
+            else:
+                result = kicad_cli.export(export_kind, export_source, export_output)
         elif name == "circuit_import":
             result = kicad_cli.import_file(
                 _literal(args, "kind", kicad_cli.IMPORT_KINDS, context="circuit_import"),
@@ -1249,6 +1341,121 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 model_required=bool(args.get("model_required", True)),
                 output_path=output,
             )
+        elif name == "circuit_library_review_packet":
+            spec_path = Path(str(args["part_spec_path"]))
+            library_dir = Path(str(args["library_dir"]))
+            density = cast(
+                landpattern.Density,
+                _literal(
+                    args,
+                    "density",
+                    ("most", "nominal", "least"),
+                    "nominal",
+                    context="circuit_library_review_packet",
+                ),
+            )
+            output_dir = Path(str(args.get("out_dir") or (library_dir / "reviews")))
+            result = libreview.build_review_packet(
+                spec_path,
+                symbol_lib=Path(str(args["symbol_lib_path"])),
+                symbol_name=str(args["symbol_name"]),
+                footprint_path=Path(str(args["footprint_path"])),
+                library_dir=library_dir,
+                density=density,
+                tolerance_mm=float(args.get("tolerance_mm", 0.02)),
+                model_required=bool(args.get("model_required", True)),
+                out_dir=output_dir,
+            )
+            output = _output_path(
+                spec_path,
+                _optional_string(args.get("output_path")),
+                "library-review-packet",
+            )
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_library_review_status":
+            spec_path = Path(str(args["part_spec_path"]))
+            library_dir = Path(str(args["library_dir"]))
+            density = cast(
+                landpattern.Density,
+                _literal(
+                    args,
+                    "density",
+                    ("most", "nominal", "least"),
+                    "nominal",
+                    context="circuit_library_review_status",
+                ),
+            )
+            symbol_lib = Path(str(args["symbol_lib_path"]))
+            symbol_name = str(args["symbol_name"])
+            footprint_path = Path(str(args["footprint_path"]))
+            tolerance_mm = float(args.get("tolerance_mm", 0.02))
+            model_required = bool(args.get("model_required", True))
+            current_id = libreview.current_packet_id(
+                spec_path,
+                symbol_lib=symbol_lib,
+                symbol_name=symbol_name,
+                footprint_path=footprint_path,
+                library_dir=library_dir,
+                density=density,
+                tolerance_mm=tolerance_mm,
+                model_required=model_required,
+            )
+            result = libreview.review_status(
+                library_dir,
+                partspec.load_part_spec(spec_path),
+                current_id,
+            )
+            output = _output_path(
+                spec_path,
+                _optional_string(args.get("output_path")),
+                "library-review-status",
+            )
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_library_review_apply":
+            spec_path = Path(str(args["part_spec_path"]))
+            library_dir = Path(str(args["library_dir"]))
+            packet_id = str(args["packet_id"])
+            event_sha12 = str(args["event_sha12"])
+            if len(event_sha12) != 12 or any(
+                character not in "0123456789abcdef" for character in event_sha12
+            ):
+                raise ValueError("event_sha12 must be 12 lowercase hexadecimal characters")
+            decisions = libreview.load_decisions(library_dir, packet_id)
+            if any(not item.valid for item in decisions):
+                result = libreview.CorrectionResult(
+                    artifact_kind="circuit_library_review_correction",
+                    applied=False,
+                    packet_id=packet_id,
+                    applied_pointers=[],
+                    reasons=["decision_invalid"],
+                )
+            else:
+                rejects = [
+                    item
+                    for item in decisions
+                    if item.decision == "reject"
+                    and item.corrections
+                    and item.event_sha256 is not None
+                    and item.event_sha256.startswith(event_sha12)
+                ]
+                decision = rejects[0] if len(rejects) == 1 else None
+                result = (
+                    libreview.apply_corrections(spec_path, decision)
+                    if decision is not None
+                    else libreview.CorrectionResult(
+                        artifact_kind="circuit_library_review_correction",
+                        applied=False,
+                        packet_id=packet_id,
+                        applied_pointers=[],
+                        reasons=["matching_valid_reject_with_corrections_missing"],
+                    )
+                )
+            output = _output_path(
+                spec_path,
+                _optional_string(args.get("output_path")),
+                "library-review-apply",
+            )
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         elif name == "circuit_konnect_call":
             konnect_arguments = args.get("arguments")
             ops = args.get("ops")

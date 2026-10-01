@@ -11,6 +11,7 @@ from .workspace import workspace_path
 __all__ = [
     "_footprint_library_path",
     "_installed_footprint_roots",
+    "_installed_symbol_roots",
     "_is_path_argument",
     "_json",
     "_literal",
@@ -20,6 +21,7 @@ __all__ = [
     "_output_path",
     "_required_string",
     "_socket_url",
+    "_symbol_library_path",
     "_workspace_arguments",
     "_workspace_path_argument",
 ]
@@ -33,6 +35,12 @@ def _installed_footprint_roots() -> tuple[Path, ...]:
     kicad_share = Path(os.environ.get("CIRCUIT_KICAD_SHARE", "/usr/share/kicad-nightly"))
     cern = Path(os.environ.get("CIRCUIT_CERN_LIBS", "/opt/circuit/libraries/cern-kicad-libs"))
     return kicad_share / "footprints", cern / "PcbLib"
+
+
+def _installed_symbol_roots() -> tuple[Path, ...]:
+    kicad_share = Path(os.environ.get("CIRCUIT_KICAD_SHARE", "/usr/share/kicad-nightly"))
+    cern = Path(os.environ.get("CIRCUIT_CERN_LIBS", "/opt/circuit/libraries/cern-kicad-libs"))
+    return kicad_share / "symbols", cern / "SchLib"
 
 
 def _footprint_library_path(value: str) -> Path:
@@ -49,6 +57,38 @@ def _footprint_library_path(value: str) -> Path:
         raise ValueError(
             "footprint library must be inside the workspace or an installed KiCad/CERN library"
         ) from workspace_error
+
+
+def _symbol_library_path(value: str) -> Path:
+    try:
+        return workspace_path(value)
+    except ValueError as workspace_error:
+        candidate = Path(value)
+        if candidate.is_absolute():
+            for root in _installed_symbol_roots():
+                try:
+                    return workspace_path(candidate, root=root)
+                except ValueError:
+                    pass
+        raise ValueError(
+            "symbol library must be inside the workspace or an installed KiCad/CERN library"
+        ) from workspace_error
+
+
+def _installed_item_path(value: str, roots: tuple[Path, ...], label: str) -> Path:
+    try:
+        return workspace_path(value)
+    except ValueError as workspace_error:
+        candidate = Path(value)
+        if candidate.is_absolute():
+            for root in roots:
+                try:
+                    return workspace_path(candidate, root=root)
+                except ValueError:
+                    pass
+        raise ValueError(f"{label} must be inside the workspace or an installed library") from (
+            workspace_error
+        )
 
 
 def _is_path_argument(key: str) -> bool:
@@ -92,8 +132,25 @@ def _workspace_path_argument(
                     return str(workspace_path(value, root=root))
                 except ValueError:
                     continue
+    if name in {
+        "circuit_library_verify",
+        "circuit_library_review_packet",
+        "circuit_library_review_status",
+    }:
+        if key == "symbol_lib_path":
+            return str(_symbol_library_path(value))
+        if key == "footprint_path":
+            return str(
+                _installed_item_path(
+                    value,
+                    _installed_footprint_roots(),
+                    "footprint",
+                )
+            )
     if name == "circuit_export" and key == "source_path" and arguments.get("kind") == "fp_svg":
         return str(_footprint_library_path(value))
+    if name == "circuit_export" and key == "source_path" and arguments.get("kind") == "sym_svg":
+        return str(_symbol_library_path(value))
     return str(workspace_path(value))
 
 

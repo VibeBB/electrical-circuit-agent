@@ -14,6 +14,7 @@ from mcp.types import ImageContent, TextContent
 from circuit import mcp_server
 from circuit.advisory import AdvisoryResult
 from circuit.kicad_cli import DiffReport, JobsetResult
+from circuit.landpattern import Density
 from circuit.libsource import ImportReport, SourceInfoInput
 from circuit.libverify import LibraryVerification, VerifiedFootprint, VerifiedSymbol
 from circuit.netlist import ConnectivityReport
@@ -64,6 +65,9 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_library_import",
         "circuit_library_record",
         "circuit_library_verify",
+        "circuit_library_review_packet",
+        "circuit_library_review_status",
+        "circuit_library_review_apply",
         "circuit_konnect_call",
         "circuit_kicad_version",
         "circuit_sch_lint",
@@ -75,6 +79,15 @@ def test_mcp_server_lists_expected_tools() -> None:
         if name == "circuit_library_verify"
     )
     assert "part_spec_check_path" not in verification_schema["properties"]
+    assert {
+        name
+        for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name.startswith("circuit_library_review_")
+    } == {
+        "circuit_library_review_packet",
+        "circuit_library_review_status",
+        "circuit_library_review_apply",
+    }
 
 
 def test_output_path_defaults_to_report_directory(tmp_path: Path) -> None:
@@ -305,6 +318,202 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
         assert verified.isError is False
         assert (tmp_path / "circuit-reports" / "part.library-verification.json").is_file()
 
+        def build_packet(
+            _spec_path: Path,
+            *,
+            symbol_lib: Path,
+            symbol_name: str,
+            footprint_path: Path,
+            library_dir: Path,
+            density: Density,
+            tolerance_mm: float = 0.02,
+            model_required: bool = True,
+            out_dir: Path,
+        ) -> mcp_server.libreview.ReviewPacket:
+            del symbol_lib, symbol_name, footprint_path, density, tolerance_mm
+            del model_required, out_dir
+            return mcp_server.libreview.ReviewPacket(
+                artifact_kind="circuit_library_review_packet",
+                packet_id="a" * 16,
+                packet_dir=library_dir / "reviews" / "part" / ("a" * 16),
+                approvable=True,
+                inputs={},
+                findings=[],
+                unknowns=[],
+            )
+
+        def current_packet(
+            _spec_path: Path,
+            *,
+            symbol_lib: Path,
+            symbol_name: str,
+            footprint_path: Path,
+            library_dir: Path | None,
+            density: Density,
+            tolerance_mm: float,
+            model_required: bool,
+        ) -> str:
+            del (
+                symbol_lib,
+                symbol_name,
+                footprint_path,
+                library_dir,
+                density,
+                tolerance_mm,
+                model_required,
+            )
+            return "a" * 16
+
+        def approved_status(
+            _library_dir: Path,
+            _spec: PartSpec,
+            _packet_id: str,
+        ) -> mcp_server.libreview.ReviewStatus:
+            return mcp_server.libreview.ReviewStatus(
+                artifact_kind="circuit_library_review_status",
+                packet_id="a" * 16,
+                state="approved",
+                reasons=[],
+                decisions=[],
+            )
+
+        def no_decisions(
+            _library_dir: Path, _packet_id: str
+        ) -> list[mcp_server.libreview.ReviewDecision]:
+            return []
+
+        monkeypatch.setattr(mcp_server.libreview, "build_review_packet", build_packet)
+        monkeypatch.setattr(mcp_server.libreview, "current_packet_id", current_packet)
+        monkeypatch.setattr(mcp_server.libreview, "review_status", approved_status)
+        monkeypatch.setattr(mcp_server.libreview, "load_decisions", no_decisions)
+        packet = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_library_review_packet",
+                {
+                    "part_spec_path": str(spec_path),
+                    "symbol_lib_path": str(symbol_path),
+                    "symbol_name": "TEST-1",
+                    "footprint_path": str(footprint_path),
+                    "library_dir": str(library_dir),
+                },
+            ),
+        )
+        assert packet.isError is False
+        assert (tmp_path / "circuit-reports" / "part.library-review-packet.json").is_file()
+
+        status = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_library_review_status",
+                {
+                    "part_spec_path": str(spec_path),
+                    "symbol_lib_path": str(symbol_path),
+                    "symbol_name": "TEST-1",
+                    "footprint_path": str(footprint_path),
+                    "library_dir": str(library_dir),
+                },
+            ),
+        )
+        assert status.isError is False
+        assert (tmp_path / "circuit-reports" / "part.library-review-status.json").is_file()
+
+        applied = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_library_review_apply",
+                {
+                    "part_spec_path": str(spec_path),
+                    "library_dir": str(library_dir),
+                    "packet_id": "a" * 16,
+                    "event_sha12": "b" * 12,
+                },
+            ),
+        )
+        assert applied.isError is False
+        assert (tmp_path / "circuit-reports" / "part.library-review-apply.json").is_file()
+
+        decisions = [
+            mcp_server.libreview.ReviewDecision(
+                packet_id="a" * 16,
+                decision="reject",
+                reviewer="Reviewer",
+                answers={},
+                corrections=[
+                    mcp_server.libreview.ReviewCorrection(
+                        pointer="/manufacturer",
+                        old="Example",
+                        new="Corrected",
+                        reason="source correction",
+                        page=1,
+                    )
+                ],
+                event_path=tmp_path / "event-a.json",
+                event_sha256="c" * 64,
+                event_mtime_ns=1,
+                event_name="event-a.json",
+                valid=True,
+                reasons=[],
+            ),
+            mcp_server.libreview.ReviewDecision(
+                packet_id="a" * 16,
+                decision="reject",
+                reviewer="Reviewer",
+                answers={},
+                corrections=[
+                    mcp_server.libreview.ReviewCorrection(
+                        pointer="/manufacturer",
+                        old="Example",
+                        new="Corrected",
+                        reason="source correction",
+                        page=1,
+                    )
+                ],
+                event_path=tmp_path / "event-b.json",
+                event_sha256="b" * 64,
+                event_mtime_ns=2,
+                event_name="event-b.json",
+                valid=True,
+                reasons=[],
+            ),
+        ]
+        selected: list[str | None] = []
+
+        def selected_decisions(
+            _library_dir: Path, _packet_id: str
+        ) -> list[mcp_server.libreview.ReviewDecision]:
+            return decisions
+
+        def apply_selected(
+            _spec_path: Path,
+            decision: mcp_server.libreview.ReviewDecision,
+        ) -> mcp_server.libreview.CorrectionResult:
+            selected.append(decision.event_sha256)
+            return mcp_server.libreview.CorrectionResult(
+                artifact_kind="circuit_library_review_correction",
+                applied=True,
+                packet_id=decision.packet_id,
+                applied_pointers=["/manufacturer"],
+                reasons=[],
+            )
+
+        monkeypatch.setattr(mcp_server.libreview, "load_decisions", selected_decisions)
+        monkeypatch.setattr(mcp_server.libreview, "apply_corrections", apply_selected)
+        selected_apply = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_library_review_apply",
+                {
+                    "part_spec_path": str(spec_path),
+                    "library_dir": str(library_dir),
+                    "packet_id": "a" * 16,
+                    "event_sha12": "b" * 12,
+                },
+            ),
+        )
+        assert selected_apply.isError is False
+        assert selected == ["b" * 64]
+
     asyncio.run(exercise())
 
 
@@ -329,7 +538,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 33
+            assert len(tools.tools) == 36
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title
@@ -338,9 +547,13 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
             konnect = annotations_by_name["circuit_konnect_call"]
             doctor = annotations_by_name["circuit_doctor"]
             erc = annotations_by_name["circuit_erc"]
+            review_status = annotations_by_name["circuit_library_review_status"]
+            review_apply = annotations_by_name["circuit_library_review_apply"]
             assert konnect is not None and konnect.destructiveHint is True
             assert doctor is not None and doctor.readOnlyHint is True
             assert erc is not None and erc.readOnlyHint is False
+            assert review_status is not None and review_status.readOnlyHint is False
+            assert review_apply is not None and review_apply.readOnlyHint is False
             result = await session.call_tool("circuit_kicad_version", {})
             assert result.isError is False
             content = result.content[0]

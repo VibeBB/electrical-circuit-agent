@@ -14,6 +14,7 @@ from . import sexpr
 from .brief import DesignBrief, brief_sha256
 from .landpattern import compute_land_pattern
 from .libitems import LibItemError, parse_footprint
+from .libreview import correction_regressions, current_packet_id, review_status
 from .libverify import LibraryVerification, verify_library_part
 from .partspec import load_part_spec
 
@@ -155,15 +156,15 @@ def _project_verification_matches(
     symbol_path: Path,
     symbol_name: str,
     footprint_path: Path,
-) -> bool:
+) -> LibraryVerification | None:
     symbol_sha256 = _file_sha256(symbol_path)
     footprint_sha256 = _file_sha256(footprint_path)
     if symbol_sha256 is None or footprint_sha256 is None:
-        return False
+        return None
     try:
         footprint_name = parse_footprint(footprint_path).name
     except (OSError, LibItemError):
-        return False
+        return None
     project_root = project_dir.resolve()
     library_root = project_library.resolve()
 
@@ -174,6 +175,7 @@ def _project_verification_matches(
         resolved.relative_to(project_root)
         return resolved
 
+    failed_match: LibraryVerification | None = None
     for verification_path in sorted(verification_dir.glob("*.verification.json")):
         try:
             report = LibraryVerification.model_validate_json(
@@ -205,14 +207,27 @@ def _project_verification_matches(
                 )
         except Exception:
             continue
-        if fresh.verdict == "pass" and (
+        fresh = fresh.model_copy(
+            update={
+                "inputs": fresh.inputs.model_copy(
+                    update={
+                        "part_spec_path": part_spec_path,
+                        "symbol_lib": input_symbol_path,
+                        "footprint_path": input_footprint_path,
+                    }
+                )
+            }
+        )
+        if (
             fresh.symbol.sha256 == symbol_sha256
             and fresh.footprint.sha256 == footprint_sha256
             and fresh.symbol.name == symbol_name
             and fresh.footprint.name == footprint_name
         ):
-            return True
-    return False
+            if fresh.verdict == "pass":
+                return fresh
+            failed_match = fresh
+    return failed_match
 
 
 def check_libraries(
@@ -326,10 +341,9 @@ def check_libraries(
         nickname, symbol_name = lib_id.split(":", 1)
         symbol_path = selected_symbol_paths.get(nickname)
         footprint_path = selected_footprint_paths.get(part.footprint)
-        if (
-            symbol_path is None
-            or footprint_path is None
-            or not _project_verification_matches(
+        fresh: LibraryVerification | None = None
+        if symbol_path is not None and footprint_path is not None:
+            fresh = _project_verification_matches(
                 project_library / "verification",
                 project_library=project_library,
                 project_dir=brief_path.parent,
@@ -337,8 +351,42 @@ def check_libraries(
                 symbol_name=symbol_name,
                 footprint_path=footprint_path,
             )
-        ):
+        if fresh is None:
             reasons.append(f"unverified project library part: {lib_id}")
+            continue
+        try:
+            spec = load_part_spec(fresh.inputs.part_spec_path)
+            regressions = correction_regressions(project_library, spec)
+        except (OSError, ValueError):
+            reasons.append(f"human_review_invalid: {lib_id}")
+            continue
+        if regressions:
+            reasons.append(f"correction_regressed: {lib_id}")
+        if fresh.verdict != "pass":
+            reasons.append(f"unverified project library part: {lib_id}")
+            continue
+        try:
+            current_id = current_packet_id(
+                fresh.inputs.part_spec_path,
+                symbol_lib=fresh.inputs.symbol_lib,
+                symbol_name=fresh.inputs.symbol_name,
+                footprint_path=fresh.inputs.footprint_path,
+                library_dir=project_library,
+                density=fresh.inputs.density,
+                tolerance_mm=fresh.inputs.tolerance_mm,
+                model_required=fresh.inputs.model_required,
+            )
+            status = review_status(project_library, spec, current_id)
+        except (OSError, ValueError):
+            reasons.append(f"human_review_invalid: {lib_id}")
+            continue
+        if status.state != "approved":
+            state = {
+                "rejected": "rejected",
+                "invalid": "invalid",
+                "pending": "missing",
+            }[status.state]
+            reasons.append(f"human_review_{state}: {lib_id}")
 
     failed = bool(
         missing_symbol_libraries
@@ -349,6 +397,8 @@ def check_libraries(
         or any("could not parse" in reason for reason in reasons)
         or "library_nickname_conflict" in reasons
         or any(reason.startswith("unverified project library part:") for reason in reasons)
+        or any(reason.startswith("human_review_") for reason in reasons)
+        or any(reason.startswith("correction_regressed:") for reason in reasons)
     )
     return LibraryReport(
         brief_path=brief_path,

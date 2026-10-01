@@ -537,6 +537,50 @@ def test_part_spec_must_pass_fresh_check(
     assert "part_spec_unchecked" in _codes(report)
 
 
+def test_supplied_part_spec_check_is_bound_to_current_spec(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(tmp_path, monkeypatch)
+    spec, reference, spec_path, check_path, symbol_path, footprint_path = case
+    check = PartSpecReport(
+        artifact_kind="circuit_part_spec_check",
+        verdict="pass",
+        part_spec_sha256=part_spec_sha256(spec_path),
+        extraction_sha256="c" * 64,
+        pdf_sha256="b" * 64,
+        checked_readings=1,
+        findings=[],
+    )
+    check_path.write_text(check.model_dump_json(), encoding="utf-8")
+
+    report = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        spec_check_path=check_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+    )
+    assert report.verdict == "pass"
+
+    check.part_spec_sha256 = "d" * 64
+    check_path.write_text(check.model_dump_json(), encoding="utf-8")
+    stale = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        spec_check_path=check_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+    )
+    assert "part_spec_unchecked" in _codes(stale)
+
+
 def test_kicad_cli_failures_are_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

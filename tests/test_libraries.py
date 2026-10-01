@@ -1,4 +1,5 @@
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -9,6 +10,7 @@ from circuit.brief import DesignBrief
 from circuit.landpattern import LandPatternResult
 from circuit.libitems import parse_footprint
 from circuit.libraries import LibraryRoots, check_libraries, symbol_pins
+from circuit.libreview import ReviewFinding, ReviewStatus
 from circuit.libverify import (
     LibraryVerification,
     VerificationInputs,
@@ -143,6 +145,7 @@ def _fake_project_verifier(
     spec: PartSpec,
     *,
     spec_path: Path,
+    spec_check_path: Path | None = None,
     symbol_lib: Path,
     symbol_name: str,
     footprint_path: Path,
@@ -152,7 +155,7 @@ def _fake_project_verifier(
     model_required: bool = True,
     output_path: Path | None = None,
 ) -> LibraryVerification:
-    del spec, library_dir, reference
+    del spec, spec_check_path, library_dir, reference
     footprint = parse_footprint(footprint_path)
     text = footprint_path.read_text(encoding="utf-8")
     verdict = "fail" if "(at 0.1 0)" in text else "pass"
@@ -185,6 +188,41 @@ def _fake_project_verifier(
     if output_path is not None:
         output_path.write_text(report.model_dump_json(), encoding="utf-8")
     return report
+
+
+def _packet_id_stub(packet: str) -> Callable[..., str]:
+    def fake_current_packet_id(
+        _spec_path: Path,
+        *,
+        symbol_lib: Path,
+        symbol_name: str,
+        footprint_path: Path,
+        library_dir: Path | None,
+        density: Literal["most", "nominal", "least"],
+        tolerance_mm: float,
+        model_required: bool,
+    ) -> str:
+        del symbol_lib, symbol_name, footprint_path, library_dir
+        del density, tolerance_mm, model_required
+        return packet
+
+    return fake_current_packet_id
+
+
+def _review_status_stub(
+    packet: str,
+    state: Literal["approved", "rejected", "pending", "invalid"],
+) -> Callable[..., ReviewStatus]:
+    def fake_review_status(_library_dir: Path, _spec: PartSpec, _packet_id: str) -> ReviewStatus:
+        return ReviewStatus(
+            artifact_kind="circuit_library_review_status",
+            packet_id=packet,
+            state=state,
+            reasons=[],
+            decisions=[],
+        )
+
+    return fake_review_status
 
 
 def test_library_resolution_pass_and_extends(tmp_path: Path) -> None:
@@ -373,6 +411,11 @@ def test_project_library_precedes_default_roots_and_requires_verification(
         "LED",
         footprint_paths["Y"],
     )
+    (tmp_path / "part.pdf").write_bytes(b"fixture PDF")
+    monkeypatch.setattr(libraries_module, "current_packet_id", _packet_id_stub("a" * 16))
+    monkeypatch.setattr(
+        libraries_module, "review_status", _review_status_stub("a" * 16, "approved")
+    )
     verified = check_libraries(_brief(), brief_path=brief_path, roots=roots)
     assert verified.verdict == "pass"
     assert verified.symbols["Device:R"].library_path == symbol_path
@@ -412,9 +455,146 @@ def test_project_nickname_conflicts_and_stale_verification_fail(
     result = check_libraries(_brief(), brief_path=brief_path, roots=roots)
     assert result.verdict == "fail"
     assert "unverified project library part: Device:R" in result.reasons
-
     conflict = check_libraries(_brief(), brief_path=brief_path, roots=roots)
     assert "library_nickname_conflict" in conflict.reasons
+
+
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [
+        ("pending", "human_review_missing: Device:R"),
+        ("rejected", "human_review_rejected: Device:R"),
+        ("invalid", "human_review_invalid: Device:R"),
+    ],
+)
+def test_project_library_gate_requires_approval_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: Literal["pending", "rejected", "invalid"],
+    reason: str,
+) -> None:
+    monkeypatch.setattr(
+        libraries_module,
+        "verify_library_part",
+        _fake_project_verifier,
+    )
+    monkeypatch.setattr(libraries_module, "current_packet_id", _packet_id_stub("b" * 16))
+    monkeypatch.setattr(
+        libraries_module,
+        "review_status",
+        _review_status_stub("b" * 16, state),
+    )
+    roots = _empty_roots(tmp_path / "defaults")
+    symbol_path, footprint_paths = _write_project_library(tmp_path)
+    brief_path = tmp_path / "brief.json"
+    brief_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "part.pdf").write_bytes(b"fixture PDF")
+    _write_project_verification(tmp_path / "library", symbol_path, "R", footprint_paths["X"])
+    _write_project_verification(tmp_path / "library", symbol_path, "LED", footprint_paths["Y"])
+
+    result = check_libraries(_brief(), brief_path=brief_path, roots=roots)
+
+    assert result.verdict == "fail"
+    assert reason in result.reasons
+
+
+def test_project_library_approval_does_not_override_fresh_verification_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        libraries_module,
+        "verify_library_part",
+        _fake_project_verifier,
+    )
+    monkeypatch.setattr(
+        libraries_module,
+        "current_packet_id",
+        _packet_id_stub("c" * 16),
+    )
+    monkeypatch.setattr(
+        libraries_module,
+        "review_status",
+        _review_status_stub("c" * 16, "approved"),
+    )
+    roots = _empty_roots(tmp_path / "defaults")
+    symbol_path, footprint_paths = _write_project_library(tmp_path)
+    footprint_paths["X"].write_text(
+        '(footprint "X" (layer "F.Cu") (pad "1" smd rect (at 0.1 0) (size 1 1) (layers "F.Cu")))',
+        encoding="utf-8",
+    )
+    brief_path = tmp_path / "brief.json"
+    brief_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "part.pdf").write_bytes(b"fixture PDF")
+    _write_project_verification(
+        tmp_path / "library",
+        symbol_path,
+        "R",
+        footprint_paths["X"],
+    )
+    _write_project_verification(
+        tmp_path / "library",
+        symbol_path,
+        "LED",
+        footprint_paths["Y"],
+    )
+
+    result = check_libraries(_brief(), brief_path=brief_path, roots=roots)
+
+    assert result.verdict == "fail"
+    assert "unverified project library part: Device:R" in result.reasons
+    assert "human_review_missing: Device:R" not in result.reasons
+
+
+def test_project_library_gate_rejects_correction_regressions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        libraries_module,
+        "verify_library_part",
+        _fake_project_verifier,
+    )
+    monkeypatch.setattr(libraries_module, "current_packet_id", _packet_id_stub("d" * 16))
+    monkeypatch.setattr(
+        libraries_module,
+        "review_status",
+        _review_status_stub("d" * 16, "approved"),
+    )
+
+    def correction_regressions(_library_dir: Path, _spec: PartSpec) -> list[ReviewFinding]:
+        return [
+            ReviewFinding(
+                code="correction_regressed",
+                severity="error",
+                field="/manufacturer",
+                message="current value differs from the accepted correction",
+            )
+        ]
+
+    monkeypatch.setattr(libraries_module, "correction_regressions", correction_regressions)
+    roots = _empty_roots(tmp_path / "defaults")
+    symbol_path, footprint_paths = _write_project_library(tmp_path)
+    brief_path = tmp_path / "brief.json"
+    brief_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "part.pdf").write_bytes(b"fixture PDF")
+    _write_project_verification(
+        tmp_path / "library",
+        symbol_path,
+        "R",
+        footprint_paths["X"],
+    )
+    _write_project_verification(
+        tmp_path / "library",
+        symbol_path,
+        "LED",
+        footprint_paths["Y"],
+    )
+
+    result = check_libraries(_brief(), brief_path=brief_path, roots=roots)
+
+    assert result.verdict == "fail"
+    assert "correction_regressed: Device:R" in result.reasons
 
 
 def test_project_gate_rejects_verification_inputs_outside_project(

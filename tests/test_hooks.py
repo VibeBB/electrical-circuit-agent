@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -35,6 +36,14 @@ VISION_SCRIPT = (
 
 PROTECT_SCRIPT = (
     Path(__file__).parents[1] / "plugins" / "circuit" / "hooks" / "scripts" / "protect_libraries.py"
+)
+LIBRARY_REVIEW_SCRIPT = (
+    Path(__file__).parents[1]
+    / "plugins"
+    / "circuit"
+    / "hooks"
+    / "scripts"
+    / "record_library_review.py"
 )
 
 
@@ -86,9 +95,40 @@ def test_protect_denies_library_writes() -> None:
         "rm libraries/cern-kicad-libs/foo.kicad_sym",
         "sed -i s/a/b/ libraries/cern-kicad-libs/foo.kicad_sym",
         "mkdir -p libraries/cern-kicad-libs/new",
+        "cp event.json .openhands/agent-canvas/session/events/event-1.json",
+        "tee .openhands/agent-canvas/session/events/event-2.json",
+        "rm .openhands/agent-canvas/session/events/event-3.json",
     ):
         payload = {"tool_name": "terminal", "tool_input": {"command": command}}
         assert _run_protect_hook(payload).returncode == 2, command
+    for payload in (
+        {
+            "tool_name": "file_editor",
+            "tool_input": {
+                "command": "create",
+                "path": ".openhands/agent-canvas/dev_conversations/session/events/event-1.json",
+            },
+        },
+        {
+            "tool_name": "terminal",
+            "tool_input": {
+                "command": (
+                    "echo x > .openhands/agent-canvas/dev_conversations/session/events/event-1.json"
+                )
+            },
+        },
+    ):
+        assert _run_protect_hook(payload).returncode == 2
+
+
+def test_protect_allows_reading_agent_canvas_events() -> None:
+    payload = {
+        "tool_name": "terminal",
+        "tool_input": {
+            "command": "cat .openhands/agent-canvas/dev_conversations/session/events/event-1.json"
+        },
+    }
+    assert _run_protect_hook(payload).returncode == 0
 
 
 def test_protect_denies_terminal_design_writes() -> None:
@@ -373,6 +413,24 @@ def _write_event(events: Path, name: str, source: str, urls: list[str]) -> None:
     (events / name).write_text(json.dumps(event), encoding="utf-8")
 
 
+def _write_review_event(events: Path, name: str, source: str, text: str) -> Path:
+    event_path = events / name
+    event_path.write_text(
+        json.dumps(
+            {
+                "id": name,
+                "source": source,
+                "llm_message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": text}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return event_path
+
+
 def _run_attach_hook(
     payload: dict[str, Any], events_dir: Path | None
 ) -> subprocess.CompletedProcess[str]:
@@ -467,6 +525,85 @@ def test_intake_attachments_uses_session_default_path(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert list((workdir / "intake" / "attachments").glob("*.png"))
+
+
+def test_record_library_review_pointer_is_user_only_and_idempotent(tmp_path: Path) -> None:
+    events = tmp_path / "events"
+    events.mkdir()
+    packet_id = "0123456789abcdef"
+    event_text = (
+        f"CIRCUIT-LIBRARY-REVIEW {packet_id}\ndecision: approve\nreviewer: Human Reviewer\n"
+    )
+    event_path = _write_review_event(events, "event-1.json", "user", event_text)
+    _write_review_event(events, "event-2.json", "agent", event_text)
+    payload = {"working_dir": str(tmp_path / "project")}
+    env = dict(os.environ)
+    env["CIRCUIT_AGENT_EVENTS_DIR"] = str(events)
+
+    for _ in range(2):
+        result = subprocess.run(
+            [sys.executable, str(LIBRARY_REVIEW_SCRIPT)],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+        assert result.returncode == 0
+
+    pointers = list((tmp_path / "project" / "library" / "reviews" / "decisions").glob("*.json"))
+    assert len(pointers) == 1
+    pointer = json.loads(pointers[0].read_text(encoding="utf-8"))
+    event_sha = hashlib.sha256(event_path.read_bytes()).hexdigest()
+    assert pointer == {
+        "artifact_kind": "circuit_library_review_pointer",
+        "packet_id": packet_id,
+        "event_path": str(event_path.resolve()),
+        "event_sha256": event_sha,
+        "recorded_at": pointer["recorded_at"],
+    }
+
+
+def test_record_library_review_pointer_without_events_exits_zero(tmp_path: Path) -> None:
+    env = dict(os.environ)
+    env["CIRCUIT_AGENT_EVENTS_DIR"] = str(tmp_path / "unreadable")
+    result = subprocess.run(
+        [sys.executable, str(LIBRARY_REVIEW_SCRIPT)],
+        input=json.dumps({"working_dir": str(tmp_path)}),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0
+    assert not (tmp_path / "library").exists()
+
+
+def test_record_library_review_pointer_unreadable_events_exits_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = tmp_path / "events"
+    events.mkdir()
+    module_spec = importlib.util.spec_from_file_location(
+        "record_library_review_under_test", LIBRARY_REVIEW_SCRIPT
+    )
+    assert module_spec is not None and module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    def unreadable_glob(_path: Path, _pattern: str) -> Any:
+        raise PermissionError("event directory is unreadable")
+
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(events))
+    monkeypatch.setattr(Path, "glob", unreadable_glob)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps({"working_dir": str(tmp_path / "project")})),
+    )
+
+    assert module.main() == 0
 
 
 OBSERVE_SCRIPT = (
