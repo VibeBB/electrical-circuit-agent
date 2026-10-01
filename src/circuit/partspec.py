@@ -21,6 +21,13 @@ _NUMBER = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)")
 _SYMBOL_PREFIX = re.compile(r"^([□⌀ØR])\s*")
 _TOKEN_SPLIT = re.compile(r"[\s,]+")
 _PIN1_CORNER = re.compile(r"\b(?P<corner>(?:top|bottom)[\s_-]+(?:left|right))\b", re.IGNORECASE)
+PinCorner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
+_MIRRORED_CORNERS: dict[PinCorner, PinCorner] = {
+    "top_left": "top_right",
+    "top_right": "top_left",
+    "bottom_left": "bottom_right",
+    "bottom_right": "bottom_left",
+}
 
 
 class Reading(BaseModel):
@@ -66,6 +73,8 @@ class PackageSpec(BaseModel):
 
     `body_length` is the Y extent along the pin-1 row of dual packages and
     along the left/right sides of quad packages; `body_width` is the X extent.
+    `pin1_corner` is always expressed in top view; `drawing_view` identifies
+    the view shown in the cited pin-1 evidence.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -91,7 +100,8 @@ class PackageSpec(BaseModel):
     lead_width: Dimension | None = None
     exposed_pad: ExposedPad | None = None
     pins_per_side: tuple[int, int, int, int] | None = None
-    pin1_corner: Literal["top_left", "top_right", "bottom_left", "bottom_right"]
+    drawing_view: Literal["top", "bottom"]
+    pin1_corner: PinCorner
     pin1_reading: Reading
 
     @model_validator(mode="after")
@@ -130,6 +140,8 @@ class LandPattern(BaseModel):
 
 
 class PinSpec(BaseModel):
+    """A pin's optional view identifies the datasheet drawing view for its reading."""
+
     model_config = ConfigDict(extra="forbid")
 
     number: str
@@ -148,6 +160,15 @@ class PinSpec(BaseModel):
         "open_emitter",
         "no_connect",
     ]
+    view: Literal["top", "bottom"] | None = None
+    reading: Reading
+
+
+class OrderableVariant(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mpn: str
+    package_code: str
     reading: Reading
 
 
@@ -171,6 +192,7 @@ class PartSpec(BaseModel):
     package: PackageSpec
     land_pattern: LandPattern | None = None
     pins: list[PinSpec] = Field(min_length=1)
+    orderable: list[OrderableVariant] = Field(min_length=1)
 
 
 class ParsedDimension(BaseModel):
@@ -330,6 +352,10 @@ def _all_readings(spec: PartSpec) -> list[tuple[str, Reading, Dimension | None]]
     ]
     readings.append(("package.pin1_reading", spec.package.pin1_reading, None))
     readings.extend((f"pins[{index}]", pin.reading, None) for index, pin in enumerate(spec.pins))
+    readings.extend(
+        (f"orderable[{index}]", variant.reading, None)
+        for index, variant in enumerate(spec.orderable)
+    )
     return readings
 
 
@@ -461,13 +487,19 @@ def _pin1_corner_findings(
         )
         return
     corner = re.sub(r"[\s-]+", "_", matches[0].group("corner").lower())
-    if corner != package.pin1_corner:
+    expected = package.pin1_corner
+    if package.drawing_view == "bottom":
+        expected = _MIRRORED_CORNERS[expected]
+    if corner != expected:
         findings.append(
             SpecFinding(
                 code="pin1_mismatch",
                 severity="error",
                 field=field,
-                message=f"pin-1 vision corner {corner} differs from {package.pin1_corner}",
+                message=(
+                    f"pin-1 vision corner {corner} differs from {expected} "
+                    f"in {package.drawing_view} view"
+                ),
                 page=reading.page,
             )
         )
@@ -698,6 +730,47 @@ def _pin_checks(
         )
 
 
+def _orderable_variant_checks(
+    spec: PartSpec,
+    variant: OrderableVariant,
+    index: int,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    spec_dir: Path,
+    page: PageExtraction | None,
+    confirmation_verified: bool,
+    findings: list[SpecFinding],
+) -> None:
+    field = f"orderable[{index}]"
+    reading = variant.reading
+    _read_vision(reading, spec_dir, page, field, findings)
+    matches_spec = (
+        variant.mpn.casefold() == spec.mpn.casefold() and variant.package_code == spec.package.code
+    )
+    if not matches_spec:
+        return
+    mechanical_text = " ".join(
+        _mechanical_words(extraction, extraction_dir, reading.page, reading)
+    ).casefold()
+    if (
+        spec.mpn.casefold() not in mechanical_text
+        or variant.package_code.casefold() not in mechanical_text
+    ):
+        findings.append(
+            SpecFinding(
+                code=(
+                    "mechanical_unconfirmed_user_confirmed"
+                    if confirmation_verified
+                    else "mechanical_mismatch"
+                ),
+                severity="warning" if confirmation_verified else "error",
+                field=field,
+                message="mechanical lane does not support the orderable MPN and package code",
+                page=reading.page,
+            )
+        )
+
+
 def _dimension_upper(dimension: Dimension) -> float | None:
     return dimension.max if dimension.max is not None else dimension.nom
 
@@ -733,6 +806,18 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
                 severity="error",
                 field="package.exposed_pad.number",
                 message="exposed pad number is not present in the pin list",
+            )
+        )
+    if not any(
+        variant.mpn.casefold() == spec.mpn.casefold() and variant.package_code == package.code
+        for variant in spec.orderable
+    ):
+        findings.append(
+            SpecFinding(
+                code="package_variant_unbound",
+                severity="error",
+                field="orderable",
+                message="no orderable variant binds the PartSpec MPN to the package code",
             )
         )
     quad_family = package.family in ("no_lead_quad", "gullwing_quad")
@@ -888,6 +973,9 @@ def check_part_spec(
 
     pages = {page.page: page for page in extraction.pages}
     readings = _all_readings(spec)
+    orderable_by_field = {
+        f"orderable[{index}]": variant for index, variant in enumerate(spec.orderable)
+    }
     user_requirements = _user_requirements(spec, spec_dir)
     cited_pages = {reading.page for _, reading, _ in readings}
     for page_number in cited_pages:
@@ -960,6 +1048,18 @@ def check_part_spec(
         elif field == "package.pin1_reading":
             _read_vision(reading, spec_dir, page, field, findings)
             _pin1_corner_findings(spec.package, reading, field, findings)
+        elif field in orderable_by_field:
+            _orderable_variant_checks(
+                spec,
+                orderable_by_field[field],
+                int(field.removeprefix("orderable[").removesuffix("]")),
+                extraction,
+                extraction_dir,
+                spec_dir,
+                page,
+                confirmation_verified,
+                findings,
+            )
     for index, pin in enumerate(spec.pins):
         reading = pin.reading
         confirmation_verified = (

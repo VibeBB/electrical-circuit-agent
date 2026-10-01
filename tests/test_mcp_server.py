@@ -14,7 +14,18 @@ from mcp.types import ImageContent, TextContent
 from circuit import mcp_server
 from circuit.advisory import AdvisoryResult
 from circuit.kicad_cli import DiffReport, JobsetResult
+from circuit.libsource import ImportReport, SourceInfoInput
+from circuit.libverify import LibraryVerification, VerifiedFootprint, VerifiedSymbol
 from circuit.netlist import ConnectivityReport
+from circuit.partspec import (
+    DatasheetRef,
+    Dimension,
+    OrderableVariant,
+    PackageSpec,
+    PartSpec,
+    PinSpec,
+    Reading,
+)
 from circuit.report import DesignReport
 from circuit.sch_lint import SchLintReport
 
@@ -46,6 +57,11 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_rasterize",
         "circuit_datasheet_extract",
         "circuit_part_spec_check",
+        "circuit_land_pattern",
+        "circuit_library_candidates",
+        "circuit_library_import",
+        "circuit_library_record",
+        "circuit_library_verify",
         "circuit_konnect_call",
         "circuit_kicad_version",
         "circuit_sch_lint",
@@ -58,6 +74,216 @@ def test_output_path_defaults_to_report_directory(tmp_path: Path) -> None:
         tmp_path / "board.kicad_pcb", None, "drc"
     )
     assert path == tmp_path / "circuit-reports" / "board.drc.json"
+
+
+def _library_tool_spec() -> PartSpec:
+    reading = Reading(page=1, vision="1", vision_record="vision.json")
+
+    def dimension(value: float) -> Dimension:
+        return Dimension(nom=value, reading=reading)
+
+    package = PackageSpec(
+        family="gullwing_dual",
+        code="TEST",
+        pin_count=2,
+        pitch=dimension(0.65),
+        body_length=dimension(2.0),
+        body_width=dimension(1.5),
+        height=dimension(0.5),
+        lead_span=dimension(3.0),
+        lead_length=dimension(0.5),
+        lead_width=dimension(0.3),
+        drawing_view="top",
+        pin1_corner="top_left",
+        pin1_reading=Reading(page=1, vision="top-left", vision_record="vision.json"),
+    )
+    return PartSpec(
+        artifact_kind="circuit_part_spec",
+        mpn="TEST-1",
+        manufacturer="Example",
+        datasheet=DatasheetRef(
+            path="part.pdf",
+            sha256="a" * 64,
+            revision="A",
+            extraction_path="extraction.json",
+        ),
+        package=package,
+        pins=[
+            PinSpec(
+                number=str(number),
+                name=f"PIN{number}",
+                electrical_type="passive",
+                reading=Reading(
+                    page=1,
+                    vision=f"{number} PIN{number}",
+                    vision_record="vision.json",
+                ),
+            )
+            for number in range(1, 3)
+        ],
+        orderable=[
+            OrderableVariant(
+                mpn="TEST-1",
+                package_code="TEST",
+                reading=Reading(
+                    page=1,
+                    vision="TEST-1 TEST",
+                    vision_record="vision.json",
+                ),
+            )
+        ],
+    )
+
+
+def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    spec_path = tmp_path / "part.json"
+    spec_path.write_text(_library_tool_spec().model_dump_json(), encoding="utf-8")
+    library_dir = tmp_path / "library"
+    library_dir.mkdir()
+    artifact_path = library_dir / "generated.txt"
+    artifact_path.write_text("generated artifact", encoding="utf-8")
+    source_path = tmp_path / "source.kicad_mod"
+    source_path.write_text("fixture", encoding="utf-8")
+    check_path = tmp_path / "part-check.json"
+    check_path.write_text("{}", encoding="utf-8")
+    symbol_path = tmp_path / "symbol.kicad_sym"
+    symbol_path.write_text("{}", encoding="utf-8")
+    footprint_path = tmp_path / "footprint.kicad_mod"
+    footprint_path.write_text("{}", encoding="utf-8")
+    captured_sources: list[SourceInfoInput] = []
+
+    def fake_import(
+        source_file: Path,
+        destination: Path,
+        nickname: str,
+        *,
+        source: SourceInfoInput,
+        **_kwargs: Any,
+    ) -> ImportReport:
+        captured_sources.append(source)
+        return ImportReport(
+            library_dir=destination,
+            nickname=nickname,
+            source_original_path="sources/abc/source.kicad_mod",
+            imported=[],
+            findings=[],
+        )
+
+    monkeypatch.setattr(mcp_server.libsource, "import_library_item", fake_import)
+
+    def fake_verify(_spec: PartSpec, **kwargs: Any) -> LibraryVerification:
+        report = LibraryVerification(
+            artifact_kind="circuit_library_verification",
+            verdict="pass",
+            part_spec_sha256="b" * 64,
+            symbol=VerifiedSymbol(
+                lib_path=cast(Path, kwargs["symbol_lib"]),
+                name=cast(str, kwargs["symbol_name"]),
+                sha256=None,
+            ),
+            footprint=VerifiedFootprint(
+                path=cast(Path, kwargs["footprint_path"]),
+                name=cast(Path, kwargs["footprint_path"]).stem,
+                sha256=None,
+            ),
+            models=[],
+            findings=[],
+        )
+        output_path = cast(Path | None, kwargs.get("output_path"))
+        if output_path is not None:
+            output_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+        return report
+
+    monkeypatch.setattr(mcp_server.libverify, "verify_library_part", fake_verify)
+
+    async def exercise() -> None:
+        land_pattern = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_land_pattern",
+                {"part_spec_path": str(spec_path)},
+            ),
+        )
+        assert land_pattern.isError is False
+        assert (tmp_path / "circuit-reports" / "part.land-pattern.json").is_file()
+
+        candidates = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_library_candidates",
+                {"part_spec_path": str(spec_path)},
+            ),
+        )
+        assert candidates.isError is False
+        assert (tmp_path / "circuit-reports" / "part.library-candidates.json").is_file()
+
+        imported = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_library_import",
+                {
+                    "source_path": str(source_path),
+                    "library_dir": str(library_dir),
+                    "nickname": "Fixture",
+                    "origin": "manufacturer",
+                    "vendor": "Example",
+                    "retrieved_at": "2026-01-01T00:00:00Z",
+                    "license": {
+                        "spdx": "MIT",
+                        "attribution": "Example",
+                        "redistribution": "allowed",
+                    },
+                },
+            ),
+        )
+        assert imported.isError is False
+        assert captured_sources[0].origin == "manufacturer"
+        assert (tmp_path / "circuit-reports" / "Fixture.library-import.json").is_file()
+
+        recorded = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_library_record",
+                {
+                    "library_dir": str(library_dir),
+                    "artifact_path": str(artifact_path),
+                    "artifact": "footprint",
+                    "name": "Generated",
+                    "transformation": "Generated by Konnect",
+                    "origin": "generated",
+                    "vendor": "Konnect",
+                    "license": {
+                        "spdx": "MIT",
+                        "attribution": "Example",
+                        "redistribution": "allowed",
+                    },
+                    "part_spec_path": str(spec_path),
+                },
+            ),
+        )
+        assert recorded.isError is False
+        assert (library_dir / "provenance.json").is_file()
+        assert (tmp_path / "circuit-reports" / "library.library-record.json").is_file()
+
+        verified = cast(
+            Any,
+            await mcp_server.call_tool(
+                "circuit_library_verify",
+                {
+                    "part_spec_path": str(spec_path),
+                    "part_spec_check_path": str(check_path),
+                    "symbol_lib_path": str(symbol_path),
+                    "symbol_name": "TEST-1",
+                    "footprint_path": str(footprint_path),
+                    "library_dir": str(library_dir),
+                },
+            ),
+        )
+        assert verified.isError is False
+        assert (tmp_path / "circuit-reports" / "part.library-verification.json").is_file()
+
+    asyncio.run(exercise())
 
 
 def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
@@ -81,7 +307,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 28
+            assert len(tools.tools) == 33
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title
@@ -148,6 +374,24 @@ def test_path_arguments_reject_parent_traversal(tmp_path: Path, monkeypatch: Any
         assert "outside the workspace" in result.content[0].text
 
     asyncio.run(exercise())
+
+
+def test_library_import_accepts_official_library_sources(tmp_path: Path, monkeypatch: Any) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    official_root = tmp_path / "kicad"
+    source = official_root / "symbols" / "Fixture.kicad_sym"
+    source.parent.mkdir(parents=True)
+    source.write_text("fixture", encoding="utf-8")
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(workspace))
+    monkeypatch.setenv("CIRCUIT_KICAD_SHARE", str(official_root))
+
+    arguments = mcp_server._workspace_arguments(  # pyright: ignore[reportPrivateUsage]
+        "circuit_library_import",
+        {"source_path": str(source), "origin": "kicad_official"},
+    )
+
+    assert arguments["source_path"] == str(source.resolve())
 
 
 def test_path_arguments_reject_outside_absolute_path(tmp_path: Path, monkeypatch: Any) -> None:

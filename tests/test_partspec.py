@@ -12,6 +12,7 @@ from circuit.partspec import (
     Dimension,
     ExposedPad,
     LandPattern,
+    OrderableVariant,
     PackageSpec,
     PartSpec,
     PinSpec,
@@ -51,7 +52,7 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
         findings=[],
     )
     vision_path.write_text(vision_record.model_dump_json(indent=2), encoding="utf-8")
-    words = _word_records(["3.1", "2.9", "0.8", "1,2,3", "SW"])
+    words = _word_records(["3.1", "2.9", "0.8", "1,2,3", "SW", "EXAMPLE-1", "X"])
     lane_records: list[LaneResult] = []
     for lane_name in ("poppler", "pdfplumber"):
         lane_path = tmp_path / f"page-001.{lane_name}.json"
@@ -152,6 +153,7 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
             body_length=dimension("3.1 2.9", minimum=2.9, nominal=None, maximum=3.1),
             body_width=dimension("3.1 2.9", minimum=2.9, nominal=None, maximum=3.1),
             height=dimension("0.8", minimum=None, nominal=0.8, maximum=None),
+            drawing_view="top",
             pin1_corner="top_left",
             pin1_reading=Reading(
                 page=1,
@@ -167,6 +169,17 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
                 reading=Reading(
                     page=1,
                     vision="1 SW",
+                    vision_record=vision_path.name,
+                ),
+            )
+        ],
+        orderable=[
+            OrderableVariant(
+                mpn="EXAMPLE-1",
+                package_code="X",
+                reading=Reading(
+                    page=1,
+                    vision="EXAMPLE-1 X package variant",
                     vision_record=vision_path.name,
                 ),
             )
@@ -263,7 +276,7 @@ def test_load_part_spec_hash_and_happy_path(tmp_path: Path) -> None:
         extraction_path=extraction_path,
     )
     assert report.verdict == "pass"
-    assert report.checked_readings == 5
+    assert report.checked_readings == 6
     assert report.extraction_sha256 == hashlib.sha256(extraction_path.read_bytes()).hexdigest()
     assert any(finding.code == "reading_order_divergence" for finding in report.findings)
 
@@ -658,3 +671,142 @@ def test_pins_per_side_is_limited_to_quad_families(tmp_path: Path) -> None:
     value["pins_per_side"] = (1, 1, 1, 1)
     with pytest.raises(ValidationError, match="only valid for quad"):
         PackageSpec.model_validate(value)
+
+
+@pytest.mark.parametrize(
+    ("drawing_view", "vision", "expected"),
+    [
+        ("top", "Pin 1 at top left.", None),
+        ("bottom", "Pin 1 at top right.", None),
+        ("bottom", "Pin 1 at top left.", "pin1_mismatch"),
+        ("bottom", "Pin 1 at top left and bottom right.", "pin1_unparseable"),
+    ],
+)
+def test_pin1_corner_respects_drawing_view(
+    tmp_path: Path, drawing_view: str, vision: str, expected: str | None
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.package = spec.package.model_copy(update={"drawing_view": drawing_view})
+    spec.package.pin1_reading.vision = vision
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    codes = {item.code for item in report.findings}
+    if expected is None:
+        assert "pin1_unparseable" not in codes
+        assert "pin1_mismatch" not in codes
+    else:
+        assert expected in codes
+
+
+def test_orderable_variant_binding_and_vision_proof(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.orderable[0].package_code = "Y"
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "package_variant_unbound" in {item.code for item in report.findings}
+
+    spec.orderable[0].package_code = "X"
+    spec.orderable[0].reading.vision_record = "missing-vision.json"
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert any(
+        item.code == "vision_record_missing" and item.field == "orderable[0]"
+        for item in report.findings
+    )
+
+    spec.mpn = "example-1"
+    spec.orderable[0].reading.vision_record = "vision.advisory.json"
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "package_variant_unbound" not in {item.code for item in report.findings}
+
+
+def test_orderable_mechanical_mismatch_uses_verified_confirmation(
+    tmp_path: Path,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    words = _word_records(["3.1", "2.9", "0.8", "1,2,3", "SW"])
+    for lane_name in ("poppler", "pdfplumber"):
+        (tmp_path / f"page-001.{lane_name}.json").write_text(
+            json.dumps([word.model_dump(mode="json") for word in words]),
+            encoding="utf-8",
+        )
+    spec.orderable[0].reading.user_confirmed = "R1"
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert any(
+        item.code == "mechanical_unconfirmed_user_confirmed"
+        and item.field == "orderable[0]"
+        and item.severity == "warning"
+        for item in report.findings
+    )
+
+    spec.orderable[0].reading.user_confirmed = "R9"
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert any(
+        item.code == "mechanical_mismatch"
+        and item.field == "orderable[0]"
+        and item.severity == "error"
+        for item in report.findings
+    )
+    assert any(
+        item.code == "user_confirmation_unverified" and item.field == "orderable[0]"
+        for item in report.findings
+    )
+
+
+def test_pin_view_is_recorded_without_extra_validation(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.pins[0].view = "bottom"
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert not any(item.field == "pins[0].view" for item in report.findings)
+
+
+def test_drawing_view_and_orderable_variants_are_required(tmp_path: Path) -> None:
+    spec, _, _, _ = _fixture(tmp_path)
+    spec_value = spec.model_dump(mode="python")
+    del spec_value["package"]["drawing_view"]
+    with pytest.raises(ValidationError):
+        PartSpec.model_validate(spec_value)
+
+    spec_value = spec.model_dump(mode="python")
+    del spec_value["orderable"]
+    with pytest.raises(ValidationError):
+        PartSpec.model_validate(spec_value)

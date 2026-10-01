@@ -77,6 +77,21 @@ def _workspace_path_argument(
         if key in required_paths:
             raise ValueError(f"'{key}' must be a non-empty path")
         return value
+    if name == "circuit_library_import" and key == "source_path":
+        origin = arguments.get("origin")
+        if Path(value).is_absolute() and origin in ("kicad_official", "cern"):
+            from .libraries import default_roots
+
+            roots = default_roots()
+            root_index = 0 if origin == "kicad_official" else 1
+            for root in (
+                roots.symbol_dirs[root_index],
+                roots.footprint_dirs[root_index],
+            ):
+                try:
+                    return str(workspace_path(value, root=root))
+                except ValueError:
+                    continue
     if name == "circuit_export" and key == "source_path" and arguments.get("kind") == "fp_svg":
         return str(_footprint_library_path(value))
     return str(workspace_path(value))

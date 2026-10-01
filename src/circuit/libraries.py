@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Literal
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 from . import sexpr
 from .brief import DesignBrief, brief_sha256
+from .libitems import LibItemError, parse_footprint
 
 
 class LibraryRoots(BaseModel):
@@ -134,6 +136,49 @@ def _find_library(directories: list[Path], nickname: str, suffix: str) -> Path |
     return None
 
 
+def _file_sha256(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _project_verification_matches(
+    verification_dir: Path,
+    *,
+    symbol_path: Path,
+    symbol_name: str,
+    footprint_path: Path,
+) -> bool:
+    from .libverify import LibraryVerification
+
+    symbol_sha256 = _file_sha256(symbol_path)
+    footprint_sha256 = _file_sha256(footprint_path)
+    if symbol_sha256 is None or footprint_sha256 is None:
+        return False
+    try:
+        footprint_name = parse_footprint(footprint_path).name
+    except (OSError, LibItemError):
+        return False
+    for verification_path in sorted(verification_dir.glob("*.verification.json")):
+        try:
+            report = LibraryVerification.model_validate_json(
+                verification_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+        if (
+            report.verdict == "pass"
+            and Path(report.symbol.lib_path).name == symbol_path.name
+            and report.symbol.name == symbol_name
+            and report.symbol.sha256 == symbol_sha256
+            and report.footprint.name == footprint_name
+            and report.footprint.sha256 == footprint_sha256
+        ):
+            return True
+    return False
+
+
 def check_libraries(
     brief: DesignBrief,
     *,
@@ -141,6 +186,7 @@ def check_libraries(
     roots: LibraryRoots | None = None,
 ) -> LibraryReport:
     roots = default_roots() if roots is None else roots
+    project_library = brief_path.parent / "library"
     symbols: dict[str, SymbolInfo] = {}
     footprints: dict[str, Path] = {}
     missing_symbol_libraries: list[str] = []
@@ -150,14 +196,31 @@ def check_libraries(
     missing_pins: dict[str, list[str]] = {}
     reasons: list[str] = []
     parsed_symbols: dict[Path, list[sexpr.SExpr] | None] = {}
+    selected_symbol_paths: dict[str, Path] = {}
+    selected_footprint_paths: dict[str, Path] = {}
+    project_symbol_nicknames: set[str] = set()
+    project_footprint_nicknames: set[str] = set()
     requested_symbols = {part.lib_id for part in brief.parts}
     for lib_id in sorted(requested_symbols):
         nickname, symbol_name = lib_id.split(":", 1)
-        library_path = _find_library(roots.symbol_dirs, nickname, ".kicad_sym")
+        project_path = project_library / f"{nickname}.kicad_sym"
+        default_path = _find_library(roots.symbol_dirs, nickname, ".kicad_sym")
+        if (
+            project_path.is_file()
+            and default_path is not None
+            and "library_nickname_conflict" not in reasons
+        ):
+            reasons.append("library_nickname_conflict")
+        if project_path.is_file():
+            library_path = project_path
+            project_symbol_nicknames.add(nickname)
+        else:
+            library_path = default_path
         if library_path is None:
             missing_symbol_libraries.append(nickname)
             reasons.append(f"missing symbol library: {nickname}")
             continue
+        selected_symbol_paths[nickname] = library_path
         if library_path not in parsed_symbols:
             try:
                 parsed_symbols[library_path] = sexpr.parse_text(
@@ -177,7 +240,19 @@ def check_libraries(
     requested_footprints = {part.footprint for part in brief.parts}
     for footprint_id in sorted(requested_footprints):
         nickname, footprint_name = footprint_id.split(":", 1)
-        library_path = _find_library(roots.footprint_dirs, nickname, ".pretty")
+        project_path = project_library / f"{nickname}.pretty"
+        default_path = _find_library(roots.footprint_dirs, nickname, ".pretty")
+        if (
+            project_path.is_dir()
+            and default_path is not None
+            and "library_nickname_conflict" not in reasons
+        ):
+            reasons.append("library_nickname_conflict")
+        if project_path.is_dir():
+            library_path = project_path
+            project_footprint_nicknames.add(nickname)
+        else:
+            library_path = default_path
         if library_path is None:
             missing_footprint_libraries.append(nickname)
             reasons.append(f"missing footprint library: {nickname}")
@@ -188,6 +263,7 @@ def check_libraries(
             reasons.append(f"missing footprint: {footprint_id}")
         else:
             footprints[footprint_id] = footprint_path
+            selected_footprint_paths[footprint_id] = footprint_path
 
     references_to_pins: dict[str, set[str]] = {}
     for net in brief.nets:
@@ -204,6 +280,28 @@ def check_libraries(
                 missing_pins[reference] = missing
                 reasons.append(f"missing pins for {reference}: {', '.join(missing)}")
 
+    project_parts = {
+        part.lib_id: part
+        for part in brief.parts
+        if part.lib_id.split(":", 1)[0] in project_symbol_nicknames
+        or part.footprint.split(":", 1)[0] in project_footprint_nicknames
+    }
+    for lib_id, part in sorted(project_parts.items()):
+        nickname, symbol_name = lib_id.split(":", 1)
+        symbol_path = selected_symbol_paths.get(nickname)
+        footprint_path = selected_footprint_paths.get(part.footprint)
+        if (
+            symbol_path is None
+            or footprint_path is None
+            or not _project_verification_matches(
+                project_library / "verification",
+                symbol_path=symbol_path,
+                symbol_name=symbol_name,
+                footprint_path=footprint_path,
+            )
+        ):
+            reasons.append(f"unverified project library part: {lib_id}")
+
     failed = bool(
         missing_symbol_libraries
         or missing_symbols
@@ -211,12 +309,14 @@ def check_libraries(
         or missing_footprints
         or missing_pins
         or any("could not parse" in reason for reason in reasons)
+        or "library_nickname_conflict" in reasons
+        or any(reason.startswith("unverified project library part:") for reason in reasons)
     )
     return LibraryReport(
         brief_path=brief_path,
         brief_sha256=brief_sha256(brief_path),
-        symbol_dirs=roots.symbol_dirs,
-        footprint_dirs=roots.footprint_dirs,
+        symbol_dirs=[project_library, *roots.symbol_dirs],
+        footprint_dirs=[project_library, *roots.footprint_dirs],
         symbols=symbols,
         footprints=footprints,
         missing_symbol_libraries=sorted(set(missing_symbol_libraries)),

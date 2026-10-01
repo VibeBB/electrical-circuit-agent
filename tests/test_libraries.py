@@ -1,7 +1,13 @@
+import hashlib
 from pathlib import Path
 
 from circuit.brief import DesignBrief
 from circuit.libraries import LibraryRoots, check_libraries, symbol_pins
+from circuit.libverify import (
+    LibraryVerification,
+    VerifiedFootprint,
+    VerifiedSymbol,
+)
 
 SYMBOLS = """\
 (kicad_symbol_lib
@@ -44,6 +50,14 @@ def _roots(tmp_path: Path) -> LibraryRoots:
     (footprints / "Device.pretty" / "Y.kicad_mod").write_text("(footprint Y)", encoding="utf-8")
     symbols.mkdir()
     (symbols / "Device.kicad_sym").write_text(SYMBOLS, encoding="utf-8")
+    return LibraryRoots(symbol_dirs=[symbols], footprint_dirs=[footprints])
+
+
+def _empty_roots(tmp_path: Path) -> LibraryRoots:
+    symbols = tmp_path / "symbols"
+    footprints = tmp_path / "footprints"
+    symbols.mkdir(parents=True)
+    footprints.mkdir(parents=True)
     return LibraryRoots(symbol_dirs=[symbols], footprint_dirs=[footprints])
 
 
@@ -133,3 +147,117 @@ def test_search_order_prefers_first_root(tmp_path: Path) -> None:
         ),
     )
     assert result.symbols["Device:R"].pins == ["1", "9"]
+
+
+def _write_project_library(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
+    library = tmp_path / "library"
+    library.mkdir()
+    symbol_path = library / "Device.kicad_sym"
+    symbol_path.write_text(SYMBOLS, encoding="utf-8")
+    footprint_dir = library / "Device.pretty"
+    footprint_dir.mkdir()
+    footprint_paths: dict[str, Path] = {}
+    for name in ("X", "Y"):
+        footprint_path = footprint_dir / f"{name}.kicad_mod"
+        footprint_path.write_text(
+            f'(footprint "{name}" (layer "F.Cu") '
+            '(pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")))',
+            encoding="utf-8",
+        )
+        footprint_paths[name] = footprint_path
+    return symbol_path, footprint_paths
+
+
+def _write_project_verification(
+    library: Path,
+    symbol_path: Path,
+    symbol_name: str,
+    footprint_path: Path,
+) -> None:
+    verification_dir = library / "verification"
+    verification_dir.mkdir(exist_ok=True)
+    report = LibraryVerification(
+        artifact_kind="circuit_library_verification",
+        verdict="pass",
+        part_spec_sha256="a" * 64,
+        symbol=VerifiedSymbol(
+            lib_path=symbol_path,
+            name=symbol_name,
+            sha256=hashlib.sha256(symbol_path.read_bytes()).hexdigest(),
+        ),
+        footprint=VerifiedFootprint(
+            path=footprint_path,
+            name=footprint_path.stem,
+            sha256=hashlib.sha256(footprint_path.read_bytes()).hexdigest(),
+        ),
+        models=[],
+        findings=[],
+    )
+    (verification_dir / f"{symbol_name}.verification.json").write_text(
+        report.model_dump_json(),
+        encoding="utf-8",
+    )
+
+
+def test_project_library_precedes_default_roots_and_requires_verification(
+    tmp_path: Path,
+) -> None:
+    roots = _empty_roots(tmp_path / "defaults")
+    symbol_path, footprint_paths = _write_project_library(tmp_path)
+    brief_path = tmp_path / "brief.json"
+    brief_path.write_text("{}", encoding="utf-8")
+
+    unverified = check_libraries(_brief(), brief_path=brief_path, roots=roots)
+    assert unverified.verdict == "fail"
+    assert "unverified project library part: Device:R" in unverified.reasons
+    assert "unverified project library part: Device:LED" in unverified.reasons
+    assert unverified.symbol_dirs[0] == tmp_path / "library"
+
+    _write_project_verification(
+        tmp_path / "library",
+        symbol_path,
+        "R",
+        footprint_paths["X"],
+    )
+    _write_project_verification(
+        tmp_path / "library",
+        symbol_path,
+        "LED",
+        footprint_paths["Y"],
+    )
+    verified = check_libraries(_brief(), brief_path=brief_path, roots=roots)
+    assert verified.verdict == "pass"
+    assert verified.symbols["Device:R"].library_path == symbol_path
+    assert verified.footprints["Device:X"] == footprint_paths["X"]
+
+
+def test_project_nickname_conflicts_and_stale_verification_fail(
+    tmp_path: Path,
+) -> None:
+    roots = _roots(tmp_path / "defaults")
+    symbol_path, footprint_paths = _write_project_library(tmp_path)
+    brief_path = tmp_path / "brief.json"
+    brief_path.write_text("{}", encoding="utf-8")
+    _write_project_verification(
+        tmp_path / "library",
+        symbol_path,
+        "R",
+        footprint_paths["X"],
+    )
+    _write_project_verification(
+        tmp_path / "library",
+        symbol_path,
+        "LED",
+        footprint_paths["Y"],
+    )
+
+    (footprint_paths["X"]).write_text(
+        '(footprint "X" (layer "F.Cu") (pad "1" smd rect (at 0.1 0) (size 1 1) (layers "F.Cu")))',
+        encoding="utf-8",
+    )
+    result = check_libraries(_brief(), brief_path=brief_path, roots=roots)
+    assert result.verdict == "fail"
+    assert "unverified project library part: Device:R" in result.reasons
+
+    conflict = check_libraries(_brief(), brief_path=brief_path, roots=roots)
+    assert "library_nickname_conflict" in conflict.reasons

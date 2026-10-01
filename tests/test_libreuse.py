@@ -1,0 +1,399 @@
+from pathlib import Path
+
+import pytest
+
+from circuit.landpattern import LandPatternResult, compute_land_pattern
+from circuit.libraries import LibraryRoots
+from circuit.libreuse import find_candidates
+from circuit.partspec import (
+    DatasheetRef,
+    Dimension,
+    OrderableVariant,
+    PackageSpec,
+    PartSpec,
+    PinSpec,
+    Reading,
+)
+
+
+def _reading(text: str = "drawing") -> Reading:
+    return Reading(page=1, vision=text, vision_record="vision.json")
+
+
+def _dimension(value: float) -> Dimension:
+    return Dimension(nom=value, reading=_reading(str(value)))
+
+
+def _spec() -> PartSpec:
+    package = PackageSpec(
+        family="gullwing_dual",
+        code="SOIC-4",
+        pin_count=4,
+        pitch=_dimension(1.27),
+        body_length=_dimension(4.9),
+        body_width=_dimension(3.9),
+        height=_dimension(1.0),
+        lead_span=_dimension(6.0),
+        lead_length=_dimension(0.8),
+        lead_width=_dimension(0.4),
+        drawing_view="top",
+        pin1_corner="top_left",
+        pin1_reading=_reading("pin one top left"),
+    )
+    pin_names = ["EN", "VIN", "SW", "GND"]
+    return PartSpec(
+        artifact_kind="circuit_part_spec",
+        mpn="TPS62130RGTR",
+        manufacturer="Example",
+        datasheet=DatasheetRef(
+            path="part.pdf",
+            sha256="a" * 64,
+            revision="A",
+            extraction_path="extraction.json",
+        ),
+        package=package,
+        pins=[
+            PinSpec(
+                number=str(index + 1),
+                name=name,
+                electrical_type="passive",
+                reading=_reading(f"{index + 1} {name}"),
+            )
+            for index, name in enumerate(pin_names)
+        ],
+        orderable=[
+            OrderableVariant(
+                mpn="TPS62130RGTR",
+                package_code="SOIC-4",
+                reading=_reading("TPS62130RGTR SOIC-4"),
+            )
+        ],
+    )
+
+
+def _chip_spec() -> PartSpec:
+    reading = _reading()
+    package = PackageSpec(
+        family="chip",
+        code="1608",
+        pin_count=2,
+        body_length=_dimension(1.6),
+        body_width=_dimension(0.8),
+        height=_dimension(0.5),
+        lead_length=_dimension(0.25),
+        drawing_view="top",
+        pin1_corner="top_left",
+        pin1_reading=_reading("pin one top left"),
+    )
+    return PartSpec(
+        artifact_kind="circuit_part_spec",
+        mpn="EXAMPLE1608",
+        manufacturer="Example",
+        datasheet=DatasheetRef(
+            path="part.pdf",
+            sha256="b" * 64,
+            revision="A",
+            extraction_path="extraction.json",
+        ),
+        package=package,
+        pins=[
+            PinSpec(
+                number=number,
+                name=f"PIN{number}",
+                electrical_type="passive",
+                reading=reading,
+            )
+            for number in ("1", "2")
+        ],
+        orderable=[
+            OrderableVariant(
+                mpn="EXAMPLE1608",
+                package_code="1608",
+                reading=reading,
+            )
+        ],
+    )
+
+
+def _write_footprint(
+    path: Path,
+    name: str,
+    pads: list[tuple[str, float, float, float, float, float]],
+    *,
+    model: str | None = None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f'(footprint "{name}" (layer "F.Cu") (attr smd)']
+    for number, x, y, width, height, rotation in pads:
+        lines.append(
+            f'  (pad "{number}" smd roundrect (at {x} {y} {rotation}) '
+            f'(size {width} {height}) (layers "F.Cu" "F.Mask" "F.Paste"))'
+        )
+    if model is not None:
+        lines.append(f'  (model "{model}")')
+    lines.append(")")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _symbol_text(
+    name: str,
+    pins: list[tuple[str, str]],
+) -> str:
+    pin_text = "\n".join(
+        f'      (pin passive line (at 0 0 0) (length 2.54) (name "{pin_name}") (number "{number}"))'
+        for number, pin_name in pins
+    )
+    return f'(symbol "{name}" (symbol "{name}_0_1"\n{pin_text}\n    ))'
+
+
+def _write_symbol_library(path: Path, symbols: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"(kicad_symbol_lib (version 20241209) {' '.join(symbols)})",
+        encoding="utf-8",
+    )
+
+
+def _roots(tmp_path: Path) -> LibraryRoots:
+    symbols = tmp_path / "symbols"
+    symbols.mkdir()
+    return LibraryRoots(
+        symbol_dirs=[symbols],
+        footprint_dirs=[tmp_path / "footprints"],
+    )
+
+
+def _reference(spec: PartSpec) -> LandPatternResult:
+    return compute_land_pattern(spec)
+
+
+def _pad_tuples(
+    reference: LandPatternResult,
+) -> list[tuple[str, float, float, float, float, float]]:
+    return [(pad.number, pad.x, pad.y, pad.width, pad.height, 0.0) for pad in reference.pads]
+
+
+def test_candidates_classify_geometry_and_report_pin_one_and_models(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    reference = _reference(spec)
+    roots = _roots(tmp_path)
+    base = tmp_path / "footprints" / "Package_SO.pretty"
+    expected = _pad_tuples(reference)
+    _write_footprint(
+        base / "SOIC-4_3.9x4.9mm_P1.27mm.kicad_mod",
+        "Exact",
+        expected,
+        model="${TEST_3DMODEL_DIR}/part.step",
+    )
+    compatible = [
+        (number, x + 0.03, y, width + 0.02, height, rotation)
+        for number, x, y, width, height, rotation in expected
+    ]
+    _write_footprint(
+        base / "SOIC-4_3.9x4.9mm_P1.27mm_compatible.kicad_mod",
+        "Compatible",
+        compatible,
+    )
+    near = [
+        (number, x + 0.1, y, width + 0.02, height, rotation)
+        for number, x, y, width, height, rotation in expected
+    ]
+    _write_footprint(
+        base / "SOIC-4_3.9x4.9mm_P1.27mm_near.kicad_mod",
+        "Near",
+        near,
+    )
+    wrong_pin1 = [
+        (number, 0.1 if number == "1" else x, y, width, height, rotation)
+        for number, x, y, width, height, rotation in expected
+    ]
+    _write_footprint(
+        base / "SOIC-4_3.9x4.9mm_P1.27mm_pin1.kicad_mod",
+        "WrongPinOne",
+        wrong_pin1,
+    )
+    _write_footprint(
+        base / "SOIC-6_3.9x4.9mm_P1.27mm.kicad_mod",
+        "WrongCount",
+        expected,
+    )
+    model_root = tmp_path / "models"
+    model_root.mkdir()
+    (model_root / "part.step").write_text("model", encoding="utf-8")
+    monkeypatch.setenv("TEST_3DMODEL_DIR", str(model_root))
+
+    result = find_candidates(
+        spec,
+        roots=roots,
+        project_library_dir=None,
+        reference=reference,
+    )
+
+    assert [candidate.classification for candidate in result.footprints] == [
+        "exact",
+        "compatible",
+        "near",
+        "near",
+    ]
+    exact = result.footprints[0]
+    assert exact.pin1_quadrant == "top_left"
+    assert exact.pin1_quadrant_ok
+    assert exact.models[0].resolved
+    assert exact.models[0].resolved_path == str((model_root / "part.step").resolve())
+    wrong_pin_one = next(
+        candidate for candidate in result.footprints if candidate.name == "WrongPinOne"
+    )
+    assert not wrong_pin_one.pin1_quadrant_ok
+    assert result.reference_source == "ipc7351b"
+    assert len(result.part_spec_sha256) == 64
+
+
+def test_candidate_geometry_accounts_for_rotation_and_caps_results(tmp_path: Path) -> None:
+    spec = _spec()
+    reference = _reference(spec)
+    roots = _roots(tmp_path)
+    footprint_dir = tmp_path / "footprints" / "Package_SO.pretty"
+    footprint_dir.mkdir(parents=True)
+    pads = [(pad.number, pad.x, pad.y, pad.height, pad.width, 90.0) for pad in reference.pads]
+    for index in range(22):
+        _write_footprint(
+            footprint_dir / f"SOIC-4_3.9x4.9mm_P1.27mm_variant{index}.kicad_mod",
+            f"Rotated{index}",
+            pads,
+        )
+
+    result = find_candidates(
+        spec,
+        roots=roots,
+        project_library_dir=None,
+        reference=reference,
+    )
+
+    assert len(result.footprints) == 20
+    assert {candidate.classification for candidate in result.footprints} == {"exact"}
+
+
+def test_project_library_is_searched_and_models_can_be_unresolved(tmp_path: Path) -> None:
+    spec = _spec()
+    reference = _reference(spec)
+    roots = _roots(tmp_path)
+    project = tmp_path / "project" / "library"
+    _write_footprint(
+        project / "Other.pretty" / "SOIC-4_3.9x4.9mm_P1.27mm.kicad_mod",
+        "ProjectFootprint",
+        _pad_tuples(reference),
+        model="${MISSING_MODEL_ROOT}/part.step",
+    )
+
+    result = find_candidates(
+        spec,
+        roots=roots,
+        project_library_dir=project,
+        reference=reference,
+    )
+
+    assert len(result.footprints) == 1
+    assert result.footprints[0].library_path == project / "Other.pretty"
+    assert not result.footprints[0].models[0].resolved
+    assert result.footprints[0].models[0].resolved_path is None
+
+
+def test_chip_candidates_skip_pitch_and_pin_count_name_filters(tmp_path: Path) -> None:
+    spec = _chip_spec()
+    reference = compute_land_pattern(spec)
+    roots = _roots(tmp_path)
+    path = tmp_path / "footprints" / "Resistor_SMD.pretty" / "R_0603_1608Metric.kicad_mod"
+    _write_footprint(path, "R_0603_1608Metric", _pad_tuples(reference))
+
+    result = find_candidates(
+        spec,
+        roots=roots,
+        project_library_dir=None,
+        reference=reference,
+    )
+
+    assert len(result.footprints) == 1
+    assert result.footprints[0].classification == "exact"
+    assert result.footprints[0].pin1_quadrant == "left"
+    assert result.footprints[0].pin1_quadrant_ok
+
+
+def test_symbols_match_mpn_prefix_and_pin_maps(tmp_path: Path) -> None:
+    spec = _spec()
+    roots = _roots(tmp_path)
+    symbol_dir = roots.symbol_dirs[0]
+    exact = _symbol_text(
+        "TPS62130",
+        [("1", "EN"), ("2", "VIN"), ("3", "SW"), ("4", "GND")],
+    )
+    compatible = _symbol_text(
+        "TPS62130_ALT",
+        [("1", "~{EN}"), ("2", "VIN"), ("3", "SW"), ("4", "PG")],
+    )
+    wrong_numbers = _symbol_text(
+        "TPS62130_WRONG",
+        [("1", "EN"), ("2", "VIN"), ("3", "SW")],
+    )
+    _write_symbol_library(
+        symbol_dir / "Power.kicad_sym",
+        [exact, compatible, wrong_numbers],
+    )
+
+    result = find_candidates(
+        spec,
+        roots=roots,
+        project_library_dir=None,
+        reference=_reference(spec),
+    )
+
+    assert [(candidate.name, candidate.classification) for candidate in result.symbols] == [
+        ("TPS62130", "exact"),
+        ("TPS62130_ALT", "pin_compatible"),
+    ]
+    assert result.symbols[1].pin_name_differences == ["4: ['gnd'] != ['pg']"]
+
+
+def test_symbol_search_includes_project_and_cern_roots(tmp_path: Path) -> None:
+    spec = _spec()
+    roots = _roots(tmp_path)
+    cern = tmp_path / "cern" / "SchLib"
+    cern.mkdir(parents=True)
+    _write_symbol_library(
+        cern / "Cern.kicad_sym",
+        [
+            _symbol_text(
+                "TPS62130_CERN",
+                [("1", "EN"), ("2", "VIN"), ("3", "SW"), ("4", "GND")],
+            )
+        ],
+    )
+    project = tmp_path / "project" / "library"
+    project.mkdir(parents=True)
+    _write_symbol_library(
+        project / "Project.kicad_sym",
+        [
+            _symbol_text(
+                "TPS62130_PROJECT",
+                [("1", "EN"), ("2", "VIN"), ("3", "SW"), ("4", "GND")],
+            )
+        ],
+    )
+    roots = LibraryRoots(
+        symbol_dirs=[roots.symbol_dirs[0], cern],
+        footprint_dirs=roots.footprint_dirs,
+    )
+
+    result = find_candidates(
+        spec,
+        roots=roots,
+        project_library_dir=project,
+        reference=_reference(spec),
+    )
+
+    assert {candidate.name for candidate in result.symbols} == {
+        "TPS62130_CERN",
+        "TPS62130_PROJECT",
+    }
