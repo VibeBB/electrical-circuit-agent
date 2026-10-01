@@ -1,10 +1,13 @@
 import hashlib
+import json
+import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 from PIL import Image
+from pydantic import ValidationError
 
 from circuit import authoring, visionread
 from circuit import libverify as libverify_module
@@ -17,7 +20,15 @@ from circuit.libsource import (
     ProvenanceEntry,
     SourceInfo,
 )
+from circuit.libtestboard import TestBoard, TestBoardFinding
 from circuit.libverify import LibraryVerification, verify_library_part
+from circuit.lineage import (
+    FootprintBase,
+    FootprintLineage,
+    PadChange,
+    lineage_path_for,
+    pad_changes,
+)
 from circuit.partspec import (
     CellRef,
     DatasheetRef,
@@ -34,6 +45,8 @@ from circuit.partspec import (
     Reading,
     part_spec_sha256,
 )
+from circuit.ruleprofile import EffectiveRules, EvidenceRef, load_rules
+from circuit.visionread import VisionBatch, VisionReadItem
 from pinout_fixtures import QUAD16_NAMES, geometry_for_names, pinout_drawing
 from vision_fixtures import FIXTURE_IMPRESSION
 
@@ -88,6 +101,23 @@ def _fresh_part_spec_check(monkeypatch: pytest.MonkeyPatch) -> None:
         return extraction
 
     monkeypatch.setattr(libverify_module, "load_extraction", load)
+
+
+@pytest.fixture(autouse=True)
+def _stub_testboard_builder(monkeypatch: pytest.MonkeyPatch) -> None:
+    def build_testboard(*_args: object, **_kwargs: object) -> TestBoard:
+        return TestBoard(
+            artifact_kind="circuit_test_board",
+            verdict="pass",
+            clearance_mm=0.15,
+            project_sha256="0" * 64,
+        )
+
+    monkeypatch.setattr(
+        libverify_module,
+        "build_test_board",
+        build_testboard,
+    )
 
 
 def _dimension(
@@ -464,8 +494,112 @@ def _write_case(
             model=model,
             impression=FIXTURE_IMPRESSION,
         )
+    _write_comparison_records(spec, spec_path, symbol_path, footprint_path)
     report_path = tmp_path / "part-spec-check.json"
     return spec, reference, spec_path, report_path, symbol_path, footprint_path
+
+
+def _write_comparison_records(
+    spec: PartSpec,
+    spec_path: Path,
+    symbol_path: Path,
+    footprint_path: Path,
+) -> None:
+    spec_hash = part_spec_sha256(spec_path)
+    comparisons: tuple[tuple[Literal["footprint", "symbol"], visionread.VisionKind, Path], ...] = (
+        ("footprint", "compare_footprint", footprint_path),
+        ("symbol", "compare_symbol", symbol_path),
+    )
+    for artifact_kind, kind, artifact_path in comparisons:
+        batch_id = f"comparison-{artifact_kind}"
+        batch_dir = spec_path.parent / "vision-reads" / batch_id
+        image_path = batch_dir / "images" / "comparison.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (40, 20), "white").save(image_path, format="PNG")
+        image_sha = hashlib.sha256(image_path.read_bytes()).hexdigest()
+        salt = f"{artifact_kind}-salt"
+        read_id = f"{artifact_kind}-read"
+        control_id = f"{artifact_kind}-control"
+        comparison = cast(
+            visionread.VisionComparison,
+            {
+                "pin1_matches": True,
+                "arrangement_matches": True,
+                "numbering_direction_matches": True,
+                "differences": [],
+            },
+        )
+        comparison_answer = json.dumps(comparison)
+        prompt = visionread.prompt_for_kind(kind)
+        bindings = {
+            "part_spec_sha256": spec_hash,
+            "artifact_sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+            "artifact_kind": artifact_kind,
+        }
+        items = [
+            VisionReadItem(
+                read_id=read_id,
+                field=f"library.{artifact_kind}",
+                kind=kind,
+                page=1,
+                bbox=(1.0, 1.0, 10.0, 10.0),
+                crop_bbox=(0.0, 0.0, 12.0, 12.0),
+                dpi=300,
+                rasterizer="pdftoppm",
+                image_path="images/comparison.png",
+                image_sha256=image_sha,
+                prompt=prompt,
+                prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                bindings=bindings,
+            ),
+            VisionReadItem(
+                read_id=control_id,
+                field="control",
+                kind=kind,
+                page=1,
+                bbox=(1.0, 1.0, 10.0, 10.0),
+                crop_bbox=(0.0, 0.0, 12.0, 12.0),
+                dpi=300,
+                rasterizer="pdftoppm",
+                image_path="images/comparison.png",
+                image_sha256=image_sha,
+                prompt=prompt,
+                prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                control=True,
+            ),
+        ]
+        batch = VisionBatch(
+            artifact_kind="circuit_vision_read_batch",
+            batch_id=batch_id,
+            created_at="2026-01-01T00:00:00Z",
+            lane="main",
+            profile="test",
+            model="test",
+            pdf_path=spec.datasheet.path,
+            pdf_sha256=spec.datasheet.sha256,
+            items=items,
+            control_salt=salt,
+            control_answer_sha256=hashlib.sha256(f"{salt}CONTROL".encode()).hexdigest(),
+            control_read_sha256=hashlib.sha256(f"{salt}{control_id}".encode()).hexdigest(),
+        )
+        answers = visionread.VisionAnswerRecord(
+            artifact_kind="circuit_vision_read_answers",
+            batch_id=batch_id,
+            answered_at="2026-01-01T00:00:00Z",
+            answers={read_id: comparison_answer, control_id: "CONTROL"},
+            impressions={read_id: FIXTURE_IMPRESSION, control_id: FIXTURE_IMPRESSION},
+            normalized={read_id: comparison, control_id: "CONTROL"},
+            status={read_id: "ok", control_id: "ok"},
+            control_passed=True,
+        )
+        (batch_dir / "batch.json").write_text(
+            batch.model_dump_json(indent=2, exclude={"items": {"__all__": {"control"}}}),
+            encoding="utf-8",
+        )
+        (batch_dir / "answers.json").write_text(
+            answers.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
 
 
 def _attach_authoring_read(spec: PartSpec, lane_dir: Path, lane: str) -> None:
@@ -589,6 +723,453 @@ def _codes(report: LibraryVerification) -> set[str]:
     return {finding.code for finding in report.findings}
 
 
+def test_verify_library_part_includes_testboard_findings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(tmp_path, monkeypatch)
+    spec, reference, spec_path, _report_path, symbol_path, footprint_path = case
+    finding = TestBoardFinding(
+        code="assembly_attribute",
+        severity="error",
+        subject="U1",
+        message="footprint is excluded from position export",
+    )
+    board = TestBoard(
+        artifact_kind="circuit_test_board",
+        verdict="fail",
+        clearance_mm=0.15,
+        project_sha256="1" * 64,
+        findings=[finding],
+    )
+    calls: list[tuple[object, ...]] = []
+
+    def build(*args: object) -> TestBoard:
+        calls.append(args)
+        return board
+
+    monkeypatch.setattr(libverify_module, "build_test_board", build)
+    report = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        model_required=False,
+        test_board=True,
+    )
+
+    assert calls
+    assert report.inputs.test_board
+    assert report.test_board == board
+    assert "assembly_attribute" in _codes(report)
+    assert report.verdict == "fail"
+
+
+def _write_lineage_for_case(
+    case: tuple[PartSpec, LandPatternResult, Path, Path, Path, Path],
+    *,
+    changes: list[PadChange] | None = None,
+    footprint_sha256: str | None = None,
+) -> tuple[Path, Path, Path]:
+    spec, reference, _spec_path, _report_path, _symbol_path, footprint_path = case
+    project_root = footprint_path.parent.parent
+    base_path = project_root / "base.kicad_mod"
+    base_path.write_text(
+        _footprint_text(
+            spec.package.drawing_id,
+            reference,
+            spec,
+        ),
+        encoding="utf-8",
+    )
+    evidence_path = project_root / "prototype.txt"
+    evidence_path.write_text("prototype results", encoding="utf-8")
+    base_footprint = parse_footprint(base_path)
+    current_footprint = parse_footprint(footprint_path)
+    recorded = pad_changes(base_footprint, current_footprint) if changes is None else changes
+    lineage = FootprintLineage(
+        artifact_kind="circuit_footprint_lineage",
+        footprint_sha256=(
+            hashlib.sha256(footprint_path.read_bytes()).hexdigest()
+            if footprint_sha256 is None
+            else footprint_sha256
+        ),
+        layer="organization",
+        base=FootprintBase(
+            kind="generated",
+            path="base.kicad_mod",
+            sha256=hashlib.sha256(base_path.read_bytes()).hexdigest(),
+            rule_chain_sha256="e" * 64,
+        ),
+        changes=recorded or [PadChange(pad="1", field="x", before=0.0, after=0.1)],
+        reason="prototype assembly evidence",
+        evidence=[
+            EvidenceRef(
+                kind="prototype",
+                path="prototype.txt",
+                sha256=hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+            )
+        ],
+    )
+    sidecar = lineage_path_for(footprint_path)
+    sidecar.write_text(lineage.model_dump_json(indent=2), encoding="utf-8")
+    return base_path, evidence_path, sidecar
+
+
+def _verify_case(
+    case: tuple[PartSpec, LandPatternResult, Path, Path, Path, Path],
+    *,
+    rules: EffectiveRules | None = None,
+) -> LibraryVerification:
+    spec, reference, spec_path, _check_path, symbol_path, footprint_path = case
+    return verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        rules=rules,
+    )
+
+
+def test_pad_diff_tracks_fields_and_pad_additions_removals() -> None:
+    base = FootprintDef(
+        name="base",
+        attributes=[],
+        pads=[
+            PadDef(
+                number="1",
+                type="smd",
+                shape="roundrect",
+                x=0.0,
+                y=0.0,
+                rotation=0.0,
+                width=1.0,
+                height=0.5,
+                drill=None,
+                layers=["F.Cu"],
+                roundrect_ratio=0.25,
+                paste_margin=0.0,
+                mask_margin=0.0,
+            ),
+            PadDef(
+                number="2",
+                type="smd",
+                shape="rect",
+                x=1.0,
+                y=0.0,
+                rotation=0.0,
+                width=1.0,
+                height=0.5,
+                drill=None,
+                layers=["F.Cu"],
+            ),
+        ],
+        graphics=[],
+        models=[],
+        properties={},
+    )
+    current = FootprintDef(
+        name="current",
+        attributes=[],
+        pads=[
+            PadDef(
+                number="1",
+                type="smd",
+                shape="rect",
+                x=0.1,
+                y=0.2,
+                rotation=0.0,
+                width=1.1,
+                height=0.6,
+                drill=None,
+                layers=["F.Cu"],
+                paste_margin=0.05,
+                mask_margin=-0.05,
+            ),
+            PadDef(
+                number="3",
+                type="smd",
+                shape="rect",
+                x=2.0,
+                y=0.0,
+                rotation=0.0,
+                width=0.5,
+                height=0.5,
+                drill=None,
+                layers=["F.Cu"],
+            ),
+        ],
+        graphics=[],
+        models=[],
+        properties={},
+    )
+
+    changes = pad_changes(base, current)
+    assert {change.field for change in changes} == {
+        "x",
+        "y",
+        "width",
+        "height",
+        "shape",
+        "roundrect_ratio",
+        "paste_margin",
+        "mask_margin",
+        "removed",
+        "added",
+    }
+
+
+def test_pad_diff_uses_one_ten_thousandth_mm_tolerance() -> None:
+    pad = PadDef(
+        number="1",
+        type="smd",
+        shape="rect",
+        x=0.0,
+        y=0.0,
+        rotation=0.0,
+        width=1.0,
+        height=0.5,
+        drill=None,
+        layers=["F.Cu"],
+    )
+    base = FootprintDef(
+        name="base", attributes=[], pads=[pad], graphics=[], models=[], properties={}
+    )
+    within = FootprintDef(
+        name="within",
+        attributes=[],
+        pads=[pad.model_copy(update={"x": 0.00009})],
+        graphics=[],
+        models=[],
+        properties={},
+    )
+    outside = FootprintDef(
+        name="outside",
+        attributes=[],
+        pads=[pad.model_copy(update={"x": 0.00011})],
+        graphics=[],
+        models=[],
+        properties={},
+    )
+
+    assert pad_changes(base, within) == []
+    assert [change.field for change in pad_changes(base, outside)] == ["x"]
+
+
+def test_footprint_parser_reads_lineage_pad_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(tmp_path, monkeypatch)
+    footprint_path = case[-1]
+    text = footprint_path.read_text(encoding="utf-8")
+    text, replacements = re.subn(
+        r'(\(pad "1".*?\(size [^)]+\))',
+        r"\1 (roundrect_rratio 0.3) (solder_paste_margin 0.02) "
+        r"(solder_mask_margin -0.01)",
+        text,
+        count=1,
+    )
+    assert replacements == 1
+    footprint_path.write_text(text, encoding="utf-8")
+
+    pad = next(pad for pad in parse_footprint(footprint_path).pads if pad.number == "1")
+
+    assert pad.roundrect_ratio == 0.3
+    assert pad.paste_margin == 0.02
+    assert pad.mask_margin == -0.01
+
+
+def test_lineage_models_require_generated_profile_hash_and_product_name() -> None:
+    with pytest.raises(ValidationError):
+        FootprintBase(
+            kind="generated",
+            path="base.kicad_mod",
+            sha256="a" * 64,
+        )
+    with pytest.raises(ValidationError):
+        FootprintLineage(
+            artifact_kind="circuit_footprint_lineage",
+            footprint_sha256="a" * 64,
+            layer="product",
+            base=FootprintBase(
+                kind="manufacturer",
+                path="base.kicad_mod",
+                sha256="b" * 64,
+            ),
+            changes=[PadChange(pad="1", field="x", before=0.0, after=0.1)],
+            reason="product tuning",
+            evidence=[
+                EvidenceRef(
+                    kind="prototype",
+                    path="prototype.txt",
+                    sha256="c" * 64,
+                )
+            ],
+        )
+
+
+def test_valid_lineage_turns_covered_pad_geometry_into_intentional_tuning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(
+        tmp_path,
+        monkeypatch,
+        pad_transform=_pad_change(x_offsets={"1": 0.05}),
+    )
+    _write_lineage_for_case(case)
+
+    report = _verify_case(case)
+
+    assert "pad_geometry" not in _codes(report)
+    assert "intentional_tuning" in _codes(report)
+    finding = next(item for item in report.findings if item.code == "intentional_tuning")
+    assert finding.severity == "info"
+    assert "reference_delta_mm" in finding.message
+    assert "base_delta_mm" in finding.message
+
+
+def test_recorded_tuning_does_not_relax_lead_containment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def shorten_pad(pad: LandPad) -> tuple[str, float, float, float, float, float]:
+        return (
+            pad.number,
+            pad.x,
+            pad.y,
+            0.2 if pad.number == "1" else pad.width,
+            pad.height,
+            0.0,
+        )
+
+    case = _write_case(tmp_path, monkeypatch, pad_transform=shorten_pad)
+    _write_lineage_for_case(case)
+
+    report = _verify_case(case)
+
+    assert "intentional_tuning" in _codes(report)
+    assert "lead_outside_pad" in _codes(report)
+
+
+def test_recorded_tuning_does_not_relax_ep_clearance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _vqfn_spec()
+
+    def enlarge_ep(pad: LandPad) -> tuple[str, float, float, float, float, float]:
+        scale = 1.12 if pad.number == "17" else 1.0
+        return (
+            pad.number,
+            pad.x,
+            pad.y,
+            pad.width * scale,
+            pad.height * scale,
+            0.0,
+        )
+
+    case = _write_case(tmp_path, monkeypatch, spec, pad_transform=enlarge_ep)
+    _write_lineage_for_case(case)
+    rules = load_rules("builtin:ipc7351b", Path(".")).model_copy(
+        update={"min_ep_to_pad_clearance_mm": 0.2}
+    )
+
+    report = _verify_case(case, rules=rules)
+
+    assert "intentional_tuning" in _codes(report)
+    assert "ep_pad_clearance" in _codes(report)
+
+
+def test_recorded_pad_position_swap_keeps_pinout_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _vqfn_spec()
+    assert spec.land_pattern is not None
+    positions = {pad.number: (pad.x, pad.y) for pad in spec.land_pattern.pads}
+
+    def swap_pads(pad: LandPad) -> tuple[str, float, float, float, float, float]:
+        swapped = {"1": "2", "2": "1"}.get(pad.number, pad.number)
+        x, y = positions[swapped]
+        return pad.number, x, y, pad.width, pad.height, 0.0
+
+    case = _write_case(tmp_path, monkeypatch, spec, pad_transform=swap_pads)
+    _write_lineage_for_case(case)
+
+    report = _verify_case(case)
+
+    assert "intentional_tuning" in _codes(report)
+    assert "footprint_order_mismatch" in _codes(report) or (
+        "footprint_chirality_mismatch" in _codes(report)
+    )
+
+
+def test_lineage_changes_must_match_current_pads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(
+        tmp_path,
+        monkeypatch,
+        pad_transform=_pad_change(x_offsets={"1": 0.05}),
+    )
+    _write_lineage_for_case(
+        case,
+        changes=[PadChange(pad="2", field="x", before=0.0, after=0.05)],
+    )
+
+    report = _verify_case(case)
+
+    assert {"lineage_unrecorded_change", "lineage_stale_change"} <= _codes(report)
+    assert "pad_geometry" in _codes(report)
+    assert "intentional_tuning" not in _codes(report)
+
+
+@pytest.mark.parametrize(
+    ("failure", "code"),
+    [
+        ("footprint", "lineage_footprint_hash"),
+        ("base", "lineage_base"),
+        ("evidence", "lineage_evidence"),
+    ],
+)
+def test_lineage_hash_mismatches_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    code: str,
+) -> None:
+    case = _write_case(
+        tmp_path,
+        monkeypatch,
+        pad_transform=_pad_change(x_offsets={"1": 0.05}),
+    )
+    base_path, evidence_path, sidecar = _write_lineage_for_case(case)
+    if failure == "footprint":
+        value = FootprintLineage.model_validate_json(sidecar.read_text(encoding="utf-8"))
+        sidecar.write_text(
+            value.model_copy(update={"footprint_sha256": "0" * 64}).model_dump_json(),
+            encoding="utf-8",
+        )
+    elif failure == "base":
+        base_path.write_text("modified base", encoding="utf-8")
+    else:
+        evidence_path.write_text("modified evidence", encoding="utf-8")
+
+    report = _verify_case(case)
+
+    assert code in _codes(report)
+    assert "intentional_tuning" not in _codes(report)
+
+
 def test_valid_library_part_passes_and_writes_default_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -601,6 +1182,92 @@ def test_valid_library_part_passes_and_writes_default_report(
     assert report.footprint.sha256 == hashlib.sha256(footprint_path.read_bytes()).hexdigest()
     assert report.models[0].resolved
     assert (footprint_path.parent / "verification" / "SOIC-4.verification.json").is_file()
+
+
+def test_missing_hash_bound_comparison_is_an_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(tmp_path, monkeypatch)
+    spec_path = case[2]
+    comparison_dir = spec_path.parent / "vision-reads" / "comparison-footprint"
+    for path in comparison_dir.rglob("*"):
+        if path.is_file():
+            path.unlink()
+    for path in sorted(comparison_dir.rglob("*"), reverse=True):
+        if path.is_dir():
+            path.rmdir()
+    comparison_dir.rmdir()
+
+    report = _verify_case(case)
+
+    assert "vision_compare_missing" in _codes(report)
+    assert report.verdict == "fail"
+
+
+def test_stale_artifact_comparison_hash_is_an_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(tmp_path, monkeypatch)
+    footprint_path = case[-1]
+    footprint_path.write_text(
+        footprint_path.read_text(encoding="utf-8") + "\n",
+        encoding="utf-8",
+    )
+
+    report = _verify_case(case)
+
+    assert "vision_compare_stale" in _codes(report)
+
+
+def test_failed_comparison_control_is_an_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(tmp_path, monkeypatch)
+    answers_path = case[2].parent / "vision-reads" / "comparison-footprint" / "answers.json"
+    answers = visionread.VisionAnswerRecord.model_validate_json(
+        answers_path.read_text(encoding="utf-8")
+    )
+    answers_path.write_text(
+        answers.model_copy(update={"control_passed": False}).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    report = _verify_case(case)
+
+    assert "vision_control_failed" in _codes(report)
+    assert report.verdict == "fail"
+
+
+def test_visual_mismatch_is_recorded_without_clearing_deterministic_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(
+        tmp_path,
+        monkeypatch,
+        footprint_kwargs={"model": "${UNDEFINED_MODEL}/fixture.step"},
+    )
+    answers_path = case[2].parent / "vision-reads" / "comparison-footprint" / "answers.json"
+    answers = visionread.VisionAnswerRecord.model_validate_json(
+        answers_path.read_text(encoding="utf-8")
+    )
+    read_id = next(read_id for read_id in answers.answers if read_id.endswith("-read"))
+    answers.normalized[read_id] = {
+        "pin1_matches": False,
+        "arrangement_matches": True,
+        "numbering_direction_matches": True,
+        "differences": ["pin 1 is on the opposite corner"],
+    }
+    answers_path.write_text(answers.model_dump_json(indent=2), encoding="utf-8")
+
+    report = _verify_case(case)
+
+    assert "vision_compare_mismatch" in _codes(report)
+    assert "model_unresolved" in _codes(report)
+    assert report.verdict == "fail"
 
 
 def test_library_verification_enforces_authoring_consensus_values(

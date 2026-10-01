@@ -63,6 +63,7 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_rasterize",
         "circuit_datasheet_extract",
         "circuit_vision_read",
+        "circuit_vision_compare",
         "circuit_vision_answer",
         "circuit_part_author_commit",
         "circuit_part_author_compare",
@@ -86,6 +87,15 @@ def test_mcp_server_lists_expected_tools() -> None:
         if name == "circuit_library_verify"
     )
     assert "part_spec_check_path" not in verification_schema["properties"]
+    assert verification_schema["properties"]["test_board"]["default"] is True
+    assert verification_schema["properties"]["rule_profile"]["type"] == "string"
+    land_pattern_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_land_pattern"
+    )
+    assert land_pattern_schema["properties"]["rule_profile"]["type"] == "string"
+    assert "library_dir" in land_pattern_schema["properties"]
     assert {
         name
         for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -104,6 +114,101 @@ def test_mcp_server_lists_expected_tools() -> None:
         "answer",
         "impression",
     ]
+    compare_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_vision_compare"
+    )
+    assert compare_schema["properties"]["kind"]["enum"] == [
+        "compare_footprint",
+        "compare_symbol",
+    ]
+    assert {
+        "part_spec_path",
+        "symbol_lib_path",
+        "symbol_name",
+        "footprint_path",
+    } <= set(compare_schema["required"])
+
+
+def test_vision_compare_dispatch_returns_both_image_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out_dir = tmp_path / "vision-reads" / "comparison"
+    image_dir = out_dir / "images"
+    image_dir.mkdir(parents=True)
+    image_paths = [image_dir / "read.png", image_dir / "control.png"]
+    for path in image_paths:
+        Image.new("RGB", (4, 4), "white").save(path)
+    batch = mcp_server.visionread.VisionBatch(
+        artifact_kind="circuit_vision_read_batch",
+        batch_id="comparison",
+        created_at="2026-01-01T00:00:00Z",
+        lane="main",
+        profile="test",
+        model="test",
+        pdf_path="part.pdf",
+        pdf_sha256="a" * 64,
+        items=[
+            mcp_server.visionread.VisionReadItem(
+                read_id="read",
+                field="library.footprint",
+                kind="compare_footprint",
+                page=1,
+                bbox=(1, 1, 2, 2),
+                crop_bbox=(0, 0, 3, 3),
+                dpi=300,
+                rasterizer="pdftoppm",
+                image_path="images/read.png",
+                image_sha256=hashlib.sha256(image_paths[0].read_bytes()).hexdigest(),
+                prompt="compare",
+                prompt_sha256=hashlib.sha256(b"compare").hexdigest(),
+            ),
+            mcp_server.visionread.VisionReadItem(
+                read_id="control",
+                field="control",
+                kind="compare_footprint",
+                page=1,
+                bbox=(1, 1, 2, 2),
+                crop_bbox=(0, 0, 3, 3),
+                dpi=300,
+                rasterizer="pdftoppm",
+                image_path="images/control.png",
+                image_sha256=hashlib.sha256(image_paths[1].read_bytes()).hexdigest(),
+                prompt="compare",
+                prompt_sha256=hashlib.sha256(b"compare").hexdigest(),
+                control=True,
+            ),
+        ],
+        control_salt="salt",
+        control_answer_sha256="b" * 64,
+        control_read_sha256="c" * 64,
+    )
+    captured: dict[str, object] = {}
+
+    def compare(*args: object, **kwargs: object) -> mcp_server.visionread.VisionBatch:
+        captured["args"] = args
+        captured.update(kwargs)
+        return batch
+
+    monkeypatch.setattr(mcp_server.libraryvision, "compare_library_item", compare)
+    result, returned_paths = mcp_server._authoring_tool(  # pyright: ignore[reportPrivateUsage]
+        "circuit_vision_compare",
+        {
+            "part_spec_path": str(tmp_path / "part.json"),
+            "kind": "compare_footprint",
+            "symbol_lib_path": str(tmp_path / "symbols.kicad_sym"),
+            "symbol_name": "TEST",
+            "footprint_path": str(tmp_path / "test.kicad_mod"),
+            "out_dir": str(out_dir),
+        },
+    ) or (None, [])
+
+    assert captured["kind"] == "compare_footprint"
+    assert result is not None
+    assert result["batch_id"] == "comparison"
+    assert returned_paths == image_paths
 
 
 def test_vision_read_mcp_result_contains_only_paths_prompts_and_images(
@@ -287,6 +392,8 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
     footprint_path = tmp_path / "footprint.kicad_mod"
     footprint_path.write_text("{}", encoding="utf-8")
     captured_sources: list[SourceInfoInput] = []
+    verification_options: list[bool] = []
+    verification_rule_chains: list[list[str] | None] = []
 
     def fake_import(
         source_file: Path,
@@ -308,6 +415,11 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
     monkeypatch.setattr(mcp_server.libsource, "import_library_item", fake_import)
 
     def fake_verify(_spec: PartSpec, **kwargs: Any) -> LibraryVerification:
+        verification_options.append(cast(bool, kwargs["test_board"]))
+        rules = kwargs["rules"]
+        verification_rule_chains.append(
+            rules.chain if isinstance(rules, mcp_server.ruleprofile.EffectiveRules) else None
+        )
         report = LibraryVerification(
             artifact_kind="circuit_library_verification",
             verdict="pass",
@@ -346,11 +458,18 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
             Any,
             await mcp_server.call_tool(
                 "circuit_land_pattern",
-                {"part_spec_path": str(spec_path)},
+                {
+                    "part_spec_path": str(spec_path),
+                    "library_dir": str(library_dir),
+                    "rule_profile": "builtin:kicad-generator",
+                },
             ),
         )
         assert land_pattern.isError is False
-        assert (tmp_path / "circuit-reports" / "part.land-pattern.json").is_file()
+        land_pattern_report = json.loads(
+            (tmp_path / "circuit-reports" / "part.land-pattern.json").read_text(encoding="utf-8")
+        )
+        assert land_pattern_report["rule_chain"] == ["builtin:kicad-generator"]
 
         candidates = cast(
             Any,
@@ -420,11 +539,14 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     "symbol_name": "TEST-1",
                     "footprint_path": str(footprint_path),
                     "library_dir": str(library_dir),
+                    "rule_profile": "builtin:kicad-generator",
                 },
             ),
         )
         assert verified.isError is False
         assert (tmp_path / "circuit-reports" / "part.library-verification.json").is_file()
+        assert verification_options == [True]
+        assert verification_rule_chains == [["builtin:kicad-generator"]]
 
         def build_packet(
             _spec_path: Path,
@@ -649,7 +771,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 40
+            assert len(tools.tools) == 41
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

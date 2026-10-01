@@ -16,10 +16,17 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from . import authoring, kicad_cli
+from . import authoring, kicad_cli, visionread
 from . import pinout as pinout_oracle
 from .datasheet import load_extraction
-from .landpattern import Density, LandPatternResult, Rect, lead_rects
+from .klc import KlcReport, run_klc
+from .landpattern import (
+    Density,
+    LandPatternResult,
+    Rect,
+    compute_land_pattern,
+    lead_rects,
+)
 from .libitems import (
     FootprintDef,
     GraphicDef,
@@ -34,6 +41,13 @@ from .libsource import (
     assert_safe_destination,
     load_library_provenance,
 )
+from .libtestboard import TestBoard, build_test_board
+from .lineage import (
+    FootprintLineage,
+    compare_recorded_changes,
+    lineage_path_for,
+    pad_changes,
+)
 from .partspec import (
     Dimension,
     LandPad,
@@ -43,6 +57,7 @@ from .partspec import (
     part_spec_sha256,
 )
 from .pinout import PinoutGeometry
+from .ruleprofile import EffectiveRules, load_rules
 
 
 class VerifyFinding(BaseModel):
@@ -88,6 +103,8 @@ class VerificationInputs(BaseModel):
     density: Density
     tolerance_mm: float
     model_required: bool
+    klc: bool = False
+    test_board: bool = True
 
 
 class LibraryVerification(BaseModel):
@@ -101,6 +118,7 @@ class LibraryVerification(BaseModel):
     footprint: VerifiedFootprint
     models: list[VerifiedModel]
     findings: list[VerifyFinding]
+    test_board: TestBoard | None = None
 
 
 _SYMBOL_TYPE_ALIASES = {
@@ -275,6 +293,112 @@ def _check_authoring_consensus(
             "authoring",
             f"independent authors used {comparison.model_diversity} models",
         )
+
+
+def _check_vision_comparisons(
+    spec: PartSpec,
+    *,
+    spec_path: Path,
+    symbol_lib: Path,
+    footprint_path: Path,
+    spec_hash: str,
+    findings: list[VerifyFinding],
+) -> None:
+    artifacts: tuple[
+        tuple[
+            Literal["compare_footprint", "compare_symbol"],
+            Literal["footprint", "symbol"],
+            Path,
+        ],
+        ...,
+    ] = (
+        ("compare_footprint", "footprint", footprint_path),
+        ("compare_symbol", "symbol", symbol_lib),
+    )
+    for kind, artifact_kind, path in artifacts:
+        artifact_hash = (_sha256(path) if path.is_file() else "") or ""
+        evidence, stale = visionread.find_comparison_evidence(
+            spec_path.resolve().parent,
+            kind=kind,
+            spec_sha256=spec_hash,
+            artifact_sha256=artifact_hash,
+            artifact_kind=artifact_kind,
+        )
+        if not evidence:
+            code = "vision_compare_stale" if stale else "vision_compare_missing"
+            message = (
+                "no current comparison record matches the PartSpec and library artifact hashes"
+                if stale
+                else "a current hash-bound comparison record is required"
+            )
+            _finding(findings, code, "error", artifact_kind, message)
+            continue
+        for item in evidence:
+            if not item.impression_valid:
+                _finding(
+                    findings,
+                    "vision_impression_missing",
+                    "error",
+                    artifact_kind,
+                    f"comparison read {item.item.read_id} has a missing or invalid impression",
+                )
+            if item.batch.pdf_sha256 != spec.datasheet.sha256:
+                _finding(
+                    findings,
+                    "vision_compare_stale",
+                    "error",
+                    artifact_kind,
+                    f"comparison read {item.item.read_id} is bound to a different datasheet PDF",
+                )
+            if not item.answers.control_passed:
+                _finding(
+                    findings,
+                    "vision_control_failed",
+                    "error",
+                    artifact_kind,
+                    f"comparison control failed for read {item.item.read_id}",
+                )
+            if item.answers.status.get(item.item.read_id) != "ok" or item.normalized is None:
+                _finding(
+                    findings,
+                    "vision_compare_stale",
+                    "error",
+                    artifact_kind,
+                    f"comparison read {item.item.read_id} is missing a parseable answer",
+                )
+                continue
+            comparison = item.normalized
+            pin1_matches = comparison.get("pin1_matches")
+            arrangement_matches = comparison.get("arrangement_matches")
+            numbering_direction_matches = comparison.get("numbering_direction_matches")
+            differences = comparison.get("differences")
+            if (
+                not isinstance(pin1_matches, bool)
+                or not isinstance(arrangement_matches, bool)
+                or not isinstance(numbering_direction_matches, bool)
+                or not isinstance(differences, list)
+            ):
+                _finding(
+                    findings,
+                    "vision_compare_stale",
+                    "error",
+                    artifact_kind,
+                    f"comparison read {item.item.read_id} has an invalid normalized answer",
+                )
+                continue
+            if (
+                not pin1_matches
+                or not arrangement_matches
+                or not numbering_direction_matches
+                or differences
+            ):
+                _finding(
+                    findings,
+                    "vision_compare_mismatch",
+                    "warning",
+                    artifact_kind,
+                    "visual comparison reported differences: " + "; ".join(differences),
+                )
 
 
 def _normalized_name(value: str) -> str:
@@ -521,6 +645,219 @@ def _pad_boxes(pads: list[PadDef]) -> dict[str, tuple[float, float, float, float
     }
 
 
+def _project_relative_file(path_text: str, project_root: Path) -> Path | None:
+    relative = Path(path_text)
+    if relative.is_absolute():
+        return None
+    try:
+        resolved = (project_root / relative).resolve(strict=True)
+        resolved.relative_to(project_root.resolve())
+    except (OSError, ValueError):
+        return None
+    return resolved if resolved.is_file() else None
+
+
+def _validate_lineage(
+    footprint_path: Path,
+    footprint: FootprintDef | None,
+    library_dir: Path | None,
+    findings: list[VerifyFinding],
+) -> tuple[FootprintLineage | None, FootprintDef | None, bool]:
+    sidecar = lineage_path_for(footprint_path)
+    if not sidecar.exists() and not sidecar.is_symlink():
+        return None, None, False
+    try:
+        lineage = FootprintLineage.model_validate_json(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        _finding(
+            findings,
+            "lineage_invalid",
+            "error",
+            str(sidecar),
+            f"footprint lineage cannot be read: {error}",
+        )
+        return None, None, False
+
+    valid = True
+    if lineage.footprint_sha256 != _sha256(footprint_path):
+        _finding(
+            findings,
+            "lineage_footprint_hash",
+            "error",
+            str(sidecar),
+            "lineage footprint hash does not match the current footprint",
+        )
+        valid = False
+
+    project_root = (
+        library_dir.parent.resolve()
+        if library_dir is not None
+        else footprint_path.parent.parent.resolve()
+    )
+    base_path = _project_relative_file(lineage.base.path, project_root)
+    base_footprint: FootprintDef | None = None
+    if base_path is None or _sha256(base_path) != lineage.base.sha256:
+        _finding(
+            findings,
+            "lineage_base",
+            "error",
+            lineage.base.path,
+            "lineage base file is missing or its hash does not match",
+        )
+        valid = False
+    else:
+        try:
+            base_footprint = parse_footprint(base_path)
+        except (LibItemError, OSError) as error:
+            _finding(
+                findings,
+                "lineage_base",
+                "error",
+                lineage.base.path,
+                f"lineage base footprint cannot be parsed: {error}",
+            )
+            valid = False
+
+    for evidence in lineage.evidence:
+        evidence_path = _project_relative_file(evidence.path, project_root)
+        if evidence_path is None or _sha256(evidence_path) != evidence.sha256:
+            _finding(
+                findings,
+                "lineage_evidence",
+                "error",
+                evidence.path,
+                "lineage evidence file is missing or its hash does not match",
+            )
+            valid = False
+
+    if base_footprint is not None and footprint is not None:
+        actual_changes = pad_changes(base_footprint, footprint)
+        unrecorded, stale = compare_recorded_changes(actual_changes, lineage.changes)
+        if unrecorded:
+            _finding(
+                findings,
+                "lineage_unrecorded_change",
+                "error",
+                str(sidecar),
+                "unrecorded pad changes: "
+                + ", ".join(f"{change.pad}.{change.field}" for change in unrecorded),
+            )
+            valid = False
+        if stale:
+            _finding(
+                findings,
+                "lineage_stale_change",
+                "error",
+                str(sidecar),
+                "stale pad changes: "
+                + ", ".join(f"{change.pad}.{change.field}" for change in stale),
+            )
+            valid = False
+    elif footprint is None:
+        _finding(
+            findings,
+            "lineage_unrecorded_change",
+            "error",
+            str(sidecar),
+            "current footprint could not be parsed for lineage comparison",
+        )
+        valid = False
+
+    return lineage, base_footprint, valid
+
+
+def _reference_deviation_fields(
+    reference: LandPatternResult,
+    footprint: FootprintDef,
+    tolerance_mm: float,
+) -> list[tuple[str, str]]:
+    expected = _reference_boxes(reference.pads)
+    actual = _pad_boxes(footprint.pads)
+    deviations: list[tuple[str, str]] = []
+    for number in sorted(expected.keys() & actual.keys()):
+        ex0, ey0, ex1, ey1 = expected[number]
+        ax0, ay0, ax1, ay1 = actual[number]
+        deltas = {
+            "x": abs((ex0 + ex1 - ax0 - ax1) / 2),
+            "y": abs((ey0 + ey1 - ay0 - ay1) / 2),
+            "width": abs((ex1 - ex0) - (ax1 - ax0)),
+            "height": abs((ey1 - ey0) - (ay1 - ay0)),
+        }
+        deviations.extend(
+            (number, field) for field, delta in deltas.items() if delta > tolerance_mm
+        )
+    return deviations
+
+
+def _tuning_delta_report(
+    reference: LandPatternResult,
+    footprint: FootprintDef,
+    base: FootprintDef,
+) -> str:
+    reference_boxes = _reference_boxes(reference.pads)
+    current_boxes = _pad_boxes(footprint.pads)
+    base_boxes = _pad_boxes(base.pads)
+    report: list[dict[str, object]] = []
+    for number in sorted(current_boxes):
+        current = current_boxes[number]
+
+        def delta(
+            boxes: dict[str, tuple[float, float, float, float]],
+            *,
+            current_box: tuple[float, float, float, float] = current,
+            pin_number: str = number,
+        ) -> dict[str, float] | None:
+            other = boxes.get(pin_number)
+            if other is None:
+                return None
+            return {
+                "x": (current_box[0] + current_box[2] - other[0] - other[2]) / 2,
+                "y": (current_box[1] + current_box[3] - other[1] - other[3]) / 2,
+                "width": (current_box[2] - current_box[0]) - (other[2] - other[0]),
+                "height": (current_box[3] - current_box[1]) - (other[3] - other[1]),
+            }
+
+        report.append(
+            {
+                "pad": number,
+                "reference_delta_mm": delta(reference_boxes),
+                "base_delta_mm": delta(base_boxes),
+            }
+        )
+    return json.dumps(report, sort_keys=True, separators=(",", ":"))
+
+
+def _replace_with_intentional_tuning(
+    reference: LandPatternResult,
+    footprint: FootprintDef,
+    base: FootprintDef,
+    lineage: FootprintLineage,
+    tolerance_mm: float,
+    findings: list[VerifyFinding],
+) -> None:
+    deviation_fields = _reference_deviation_fields(reference, footprint, tolerance_mm)
+    if not deviation_fields:
+        return
+    recorded = {(change.pad, change.field) for change in lineage.changes}
+    if not all(deviation in recorded for deviation in deviation_fields):
+        return
+    geometry_finding = next(
+        (finding for finding in findings if finding.code == "pad_geometry"),
+        None,
+    )
+    if geometry_finding is None:
+        return
+    findings.remove(geometry_finding)
+    _finding(
+        findings,
+        "intentional_tuning",
+        "info",
+        "footprint",
+        "recorded pad deviations; deltas against reference and base in mm: "
+        + _tuning_delta_report(reference, footprint, base),
+    )
+
+
 def _reference_boxes(
     pads: list[LandPad],
 ) -> dict[str, tuple[float, float, float, float]]:
@@ -545,23 +882,12 @@ def _reference_boxes(
     }
 
 
-def _check_pad_set_and_geometry(
+def _check_pad_geometry(
     footprint: FootprintDef,
     reference: LandPatternResult,
     tolerance_mm: float,
     findings: list[VerifyFinding],
 ) -> dict[str, tuple[float, float, float, float]]:
-    expected_numbers = Counter(pad.number for pad in reference.pads)
-    actual_numbers = Counter(pad.number for pad in footprint.pads if pad.number)
-    if expected_numbers != actual_numbers:
-        _finding(
-            findings,
-            "pad_set",
-            "error",
-            "footprint",
-            f"pad numbers {sorted(actual_numbers.elements())} do not match "
-            f"reference {sorted(expected_numbers.elements())}",
-        )
     expected_boxes = _reference_boxes(reference.pads)
     actual_boxes = _pad_boxes(footprint.pads)
     center_delta = 0.0
@@ -900,30 +1226,45 @@ def _is_copper(pad: PadDef) -> bool:
 
 
 def _check_pad_clearance(
+    spec: PartSpec,
     footprint: FootprintDef,
+    rules: EffectiveRules,
     findings: list[VerifyFinding],
 ) -> None:
     pads = [pad for pad in footprint.pads if pad.number and _is_copper(pad)]
+    exposed_number = spec.package.exposed_pad.number if spec.package.exposed_pad else None
     for index, first in enumerate(pads):
         for second in pads[index + 1 :]:
             if first.number == second.number:
                 continue
             distance = _polygon_distance(_pad_polygon(first), _pad_polygon(second))
-            if distance < 0.10:
+            is_ep_clearance = first.number == exposed_number or second.number == exposed_number
+            minimum = (
+                rules.min_ep_to_pad_clearance_mm if is_ep_clearance else rules.min_pad_clearance_mm
+            )
+            if is_ep_clearance and distance < minimum:
+                _finding(
+                    findings,
+                    "ep_pad_clearance",
+                    "error",
+                    f"pads.{first.number},{second.number}",
+                    f"EP-to-pad clearance is {distance:.4f} mm, below {minimum:.4f} mm",
+                )
+            elif not is_ep_clearance and distance < min(0.10, minimum):
                 _finding(
                     findings,
                     "pad_clearance",
                     "error",
                     f"pads.{first.number},{second.number}",
-                    f"copper clearance is {distance:.4f} mm, below 0.10 mm",
+                    f"copper clearance is {distance:.4f} mm, below {min(0.10, minimum):.4f} mm",
                 )
-            elif distance < 0.15:
+            elif not is_ep_clearance and distance < minimum:
                 _finding(
                     findings,
                     "pad_clearance",
                     "warning",
                     f"pads.{first.number},{second.number}",
-                    f"copper clearance is {distance:.4f} mm, below 0.15 mm",
+                    f"copper clearance is {distance:.4f} mm, below {minimum:.4f} mm",
                 )
 
 
@@ -1103,6 +1444,87 @@ def _check_pin1_location(
             "footprint.pad.1",
             "pad 1 is not at the expected top-left / negative-x location",
         )
+
+
+def functional_findings(
+    spec: PartSpec,
+    footprint: FootprintDef,
+    rules: EffectiveRules,
+) -> list[VerifyFinding]:
+    """Return non-configurable pad, orientation, lead, and clearance findings."""
+
+    findings: list[VerifyFinding] = []
+    if spec.package.family not in (
+        "no_lead_quad",
+        "no_lead_dual",
+        "gullwing_quad",
+        "gullwing_dual",
+        "chip",
+    ):
+        _check_pad_clearance(spec, footprint, rules, findings)
+        return findings
+    reference = compute_land_pattern(spec, rules=rules)
+    expected_numbers = Counter(pad.number for pad in reference.pads)
+    actual_numbers = Counter(pad.number for pad in footprint.pads if pad.number)
+    if expected_numbers != actual_numbers:
+        _finding(
+            findings,
+            "pad_set",
+            "error",
+            "footprint",
+            f"pad numbers {sorted(actual_numbers.elements())} do not match "
+            f"reference {sorted(expected_numbers.elements())}",
+        )
+
+    _check_pin1_location(spec, footprint, findings)
+    pin_numbers = {str(number) for number in range(1, spec.package.pin_count + 1)}
+    expected_positions: dict[str, tuple[float, float]] = {}
+    expected_groups: dict[str, list[tuple[float, float]]] = {}
+    for pad in reference.pads:
+        if pad.number in pin_numbers:
+            expected_groups.setdefault(pad.number, []).append((pad.x, pad.y))
+    for number, positions in expected_groups.items():
+        expected_positions[number] = (
+            sum(point[0] for point in positions) / len(positions),
+            sum(point[1] for point in positions) / len(positions),
+        )
+    actual_groups: dict[str, list[tuple[float, float]]] = {}
+    for pad in footprint.pads:
+        if pad.number in pin_numbers and pad.type != "np_thru_hole":
+            actual_groups.setdefault(pad.number, []).append((pad.x, pad.y))
+    actual_positions = {
+        number: (
+            sum(point[0] for point in positions) / len(positions),
+            sum(point[1] for point in positions) / len(positions),
+        )
+        for number, positions in actual_groups.items()
+    }
+    for issue in pinout_oracle.compare_orientation(expected_positions, actual_positions):
+        _finding(
+            findings,
+            f"footprint_{issue.code}",
+            issue.severity,
+            "footprint",
+            issue.message,
+        )
+    _check_pad_clearance(spec, footprint, rules, findings)
+    _check_lead_geometry(spec, footprint, findings)
+    return findings
+
+
+def _check_klc(
+    kind: Literal["footprint", "symbol"],
+    path: Path,
+    findings: list[VerifyFinding],
+) -> None:
+    report: KlcReport = run_klc(kind, path)
+    for violation in report.violations:
+        code = (
+            violation.rule
+            if violation.rule in {"klc_unavailable", "klc_failed"}
+            else f"klc_{violation.rule}"
+        )
+        _finding(findings, code, violation.severity, str(path), violation.message)
 
 
 def _check_models(
@@ -1303,14 +1725,18 @@ def verify_library_part(
     footprint_path: Path,
     library_dir: Path | None,
     reference: LandPatternResult,
+    rules: EffectiveRules | None = None,
     tolerance_mm: float = 0.02,
     model_required: bool = True,
+    klc: bool = False,
+    test_board: bool = True,
     output_path: Path | None = None,
 ) -> LibraryVerification:
     """Verify a library part against its current PartSpec and generated land pattern."""
 
     if not math.isfinite(tolerance_mm) or tolerance_mm < 0:
         raise ValueError("tolerance_mm must be finite and non-negative")
+    rules = rules or load_rules("builtin:ipc7351b", Path("."))
     findings: list[VerifyFinding] = []
     spec_hash = part_spec_sha256(spec_path) if spec_path.is_file() else ""
     check: PartSpecReport | None = None
@@ -1357,9 +1783,52 @@ def verify_library_part(
         footprint = parse_footprint(footprint_path)
     except (LibItemError, OSError):
         footprint = None
+    lineage, lineage_base, lineage_valid = _validate_lineage(
+        footprint_path,
+        footprint,
+        library_dir,
+        findings,
+    )
     footprint_name = footprint.name if footprint is not None else footprint_path.stem
+    report_base = library_dir if library_dir is not None else footprint_path.parent
+    target = output_path or report_base / "verification" / f"{footprint_name}.verification.json"
+    test_board_report: TestBoard | None = None
     _check_symbol(spec, symbol, symbol_lib, footprint_name, library_dir, findings)
-    _check_pinout_geometry(spec, check, symbol, footprint, findings)
+    _check_vision_comparisons(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_lib,
+        footprint_path=footprint_path,
+        spec_hash=spec_hash,
+        findings=findings,
+    )
+    _check_pinout_geometry(spec, check, symbol, None, findings)
+    if klc:
+        _check_klc("symbol", symbol_lib, findings)
+        _check_klc("footprint", footprint_path, findings)
+    if test_board:
+        test_board_dir = target.parent / f"{target.stem}.test-board"
+        try:
+            assert_safe_destination(test_board_dir)
+            test_board_report = build_test_board(
+                spec,
+                symbol_lib,
+                symbol_name,
+                footprint_path,
+                rules,
+                test_board_dir,
+            )
+        except (LibrarySourceError, OSError) as exc:
+            _finding(
+                findings,
+                "testboard_output_unavailable",
+                "error",
+                str(test_board_dir),
+                str(exc),
+            )
+        if test_board_report is not None:
+            for item in test_board_report.findings:
+                _finding(findings, item.code, item.severity, item.subject, item.message)
 
     if footprint is None:
         _finding(findings, "pad_set", "error", "footprint", "footprint could not be parsed")
@@ -1371,18 +1840,25 @@ def verify_library_part(
             "footprint graphics cannot be checked",
         )
     else:
-        _check_pad_set_and_geometry(
+        findings.extend(functional_findings(spec, footprint, rules))
+        _check_pad_geometry(
             footprint,
             reference,
             tolerance_mm,
             findings,
         )
+        if lineage_valid and lineage is not None and lineage_base is not None:
+            _replace_with_intentional_tuning(
+                reference,
+                footprint,
+                lineage_base,
+                lineage,
+                tolerance_mm,
+                findings,
+            )
         _check_pad_types(spec, footprint, findings)
-        _check_pin1_location(spec, footprint, findings)
         _check_courtyard_and_fab(spec, footprint, findings)
         _check_silk_clearance(footprint, findings)
-        _check_pad_clearance(footprint, findings)
-        _check_lead_geometry(spec, footprint, findings)
         _check_exposed_pad_size(spec, footprint, findings)
         if (
             spec.package.family
@@ -1494,6 +1970,8 @@ def verify_library_part(
             density=reference.density,
             tolerance_mm=tolerance_mm,
             model_required=model_required,
+            klc=klc,
+            test_board=test_board,
         ),
         symbol=VerifiedSymbol(
             lib_path=symbol_lib,
@@ -1507,11 +1985,8 @@ def verify_library_part(
         ),
         models=verified_models,
         findings=findings,
+        test_board=test_board_report,
     )
-    target = output_path
-    if target is None:
-        base = library_dir if library_dir is not None else footprint_path.parent
-        target = base / "verification" / f"{footprint_name}.verification.json"
     try:
         assert_safe_destination(target.parent)
         _write_report(report, target)

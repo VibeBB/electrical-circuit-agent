@@ -176,3 +176,16 @@ model name you used so both logs can be cross-checked. For regression
 detection between design revisions, prefer the deterministic
 `set_visual_baseline` / `compare_visual_baseline` Konnect tools and
 `circuit_diff --format png` over free-form vision inspection.
+
+## Library packet approval pre-check
+
+Before approving a library review packet, read its `review.json` and inspect
+every image listed under `vision_review_images`. Each listed path and SHA-256
+must match the current file. Record a valid `vision_review` advisory for every
+image at the exact `review_record_path` listed in the packet, using the
+`review-record` CLI. Use `footprint` for overlays and footprint comparisons,
+and `symbol` for symbol comparisons. If a listed image cannot be inspected or
+its record cannot be written and validated, do not approve; report the missing
+pre-check. A missing record makes approval fail closed. After recording all
+images, run `circuit_library_review_status` and confirm its result is
+`approved` before reporting approval.

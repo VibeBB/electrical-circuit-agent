@@ -37,6 +37,7 @@ from . import (
     kicad_cli,
     landpattern,
     libraries,
+    libraryvision,
     libreuse,
     libreview,
     libsource,
@@ -45,6 +46,7 @@ from . import (
     partspec,
     raster,
     report,
+    ruleprofile,
     sch_lint,
     stackup,
     visionread,
@@ -468,6 +470,38 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_vision_compare",
+        "Build a hash-bound datasheet/KiCad comparison panel. Every image requires an answer "
+        "and a multi-sentence impression describing appearance, legibility, ambiguity, and "
+        "anything surprising.",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "kind": {
+                    "type": "string",
+                    "enum": ["compare_footprint", "compare_symbol"],
+                },
+                "symbol_lib_path": {"type": "string"},
+                "symbol_name": {"type": "string"},
+                "footprint_path": {"type": "string"},
+                "density": {
+                    "type": "string",
+                    "enum": ["most", "nominal", "least"],
+                    "default": "nominal",
+                },
+                "out_dir": {"type": "string"},
+            },
+            "required": [
+                "part_spec_path",
+                "kind",
+                "symbol_lib_path",
+                "symbol_name",
+                "footprint_path",
+            ],
+        },
+    ),
+    (
         "circuit_vision_answer",
         "Record answers to a tool-managed vision-read batch",
         {
@@ -532,11 +566,13 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
     ),
     (
         "circuit_land_pattern",
-        "Compute a datasheet or IPC-7351B land pattern for a PartSpec",
+        "Compute a land pattern using an optional project rule profile",
         {
             "type": "object",
             "properties": {
                 "part_spec_path": {"type": "string"},
+                "library_dir": {"type": "string"},
+                "rule_profile": {"type": "string"},
                 "density": {
                     "type": "string",
                     "enum": ["most", "nominal", "least"],
@@ -671,6 +707,8 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 },
                 "tolerance_mm": {"type": "number", "default": 0.02},
                 "model_required": {"type": "boolean", "default": True},
+                "test_board": {"type": "boolean", "default": True},
+                "rule_profile": {"type": "string"},
                 "output_path": {"type": "string"},
             },
             "required": [
@@ -836,6 +874,7 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_rasterize": _anno("Rasterize", write=True),
     "circuit_datasheet_extract": _anno("Datasheet extraction", write=True),
     "circuit_vision_read": _anno("Create datasheet vision reads", write=True),
+    "circuit_vision_compare": _anno("Compare library art with datasheet", write=True),
     "circuit_vision_answer": _anno("Record datasheet vision answers", write=True),
     "circuit_part_author_commit": _anno("Seal a blind authoring lane", write=True),
     "circuit_part_author_compare": _anno("Compare sealed authoring lanes", write=True),
@@ -905,6 +944,57 @@ def _authoring_tool(name: str, args: dict[str, Any]) -> tuple[Any, list[Path]] |
         }
         image_paths = [batch_path / item.image_path for item in batch.items]
         return result, image_paths
+    if name == "circuit_vision_compare":
+        kind = _literal(
+            args,
+            "kind",
+            ("compare_footprint", "compare_symbol"),
+            context="circuit_vision_compare",
+        )
+        density = _literal(
+            args,
+            "density",
+            ("most", "nominal", "least"),
+            "nominal",
+            context="circuit_vision_compare",
+        )
+        out_dir = Path(str(args["out_dir"])) if isinstance(args.get("out_dir"), str) else None
+        batch = libraryvision.compare_library_item(
+            Path(str(args["part_spec_path"])),
+            kind=cast(Any, kind),
+            symbol_lib=Path(str(args["symbol_lib_path"])),
+            symbol_name=str(args["symbol_name"]),
+            footprint_path=Path(str(args["footprint_path"])),
+            density=cast(landpattern.Density, density),
+            out_dir=out_dir,
+            lane=os.environ.get("CIRCUIT_AUTHORING_LANE", "main"),
+            profile=os.environ.get("CIRCUIT_LLM_PROFILE", ""),
+            model=os.environ.get("CIRCUIT_LLM_MODEL", "unknown"),
+        )
+        batch_dir = (
+            out_dir.resolve()
+            if out_dir is not None
+            else Path(str(args["part_spec_path"])).resolve().parent
+            / "vision-reads"
+            / batch.batch_id
+        )
+        return (
+            {
+                "batch_id": batch.batch_id,
+                "batch_path": str(batch_dir / "batch.json"),
+                "items": [
+                    {
+                        "read_id": item.read_id,
+                        "kind": item.kind,
+                        "prompt": item.prompt,
+                        "bindings": item.bindings,
+                        "image_path": str(batch_dir / item.image_path),
+                    }
+                    for item in batch.items
+                ],
+            },
+            [batch_dir / item.image_path for item in batch.items],
+        )
     if name == "circuit_vision_answer":
         raw_answers = args.get("answers")
         if not isinstance(raw_answers, dict):
@@ -1325,17 +1415,29 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
         elif name == "circuit_land_pattern":
             spec_path = Path(str(args["part_spec_path"]))
             spec = partspec.load_part_spec(spec_path)
+            library_dir_value = args.get("library_dir")
+            library_dir = (
+                Path(str(library_dir_value))
+                if isinstance(library_dir_value, str)
+                else spec_path.parent / "library"
+            )
+            rule_profile = _optional_string(args.get("rule_profile"))
+            rules = (
+                ruleprofile.load_rules(rule_profile, library_dir / "rules")
+                if rule_profile is not None
+                else None
+            )
             density = cast(
                 landpattern.Density,
                 _literal(
                     args,
                     "density",
                     ("most", "nominal", "least"),
-                    "nominal",
+                    rules.density if rules is not None else "nominal",
                     context="circuit_land_pattern",
                 ),
             )
-            result = landpattern.compute_land_pattern(spec, density)
+            result = landpattern.compute_land_pattern(spec, density, rules=rules)
             output = _output_path(
                 spec_path,
                 _optional_string(args.get("output_path")),
@@ -1459,19 +1561,30 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
         elif name == "circuit_library_verify":
             spec_path = Path(str(args["part_spec_path"]))
             spec = partspec.load_part_spec(spec_path)
+            library_dir_value = args.get("library_dir")
+            library_dir = (
+                Path(str(library_dir_value)) if isinstance(library_dir_value, str) else None
+            )
+            rule_profile = _optional_string(args.get("rule_profile"))
+            rules_dir = (
+                library_dir / "rules"
+                if library_dir is not None
+                else spec_path.parent / "library" / "rules"
+            )
+            rules = (
+                ruleprofile.load_rules(rule_profile, rules_dir)
+                if rule_profile is not None
+                else None
+            )
             density = cast(
                 landpattern.Density,
                 _literal(
                     args,
                     "density",
                     ("most", "nominal", "least"),
-                    "nominal",
+                    rules.density if rules is not None else "nominal",
                     context="circuit_library_verify",
                 ),
-            )
-            library_dir_value = args.get("library_dir")
-            library_dir = (
-                Path(str(library_dir_value)) if isinstance(library_dir_value, str) else None
             )
             output = _output_path(
                 spec_path,
@@ -1485,9 +1598,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 symbol_name=str(args["symbol_name"]),
                 footprint_path=Path(str(args["footprint_path"])),
                 library_dir=library_dir,
-                reference=landpattern.compute_land_pattern(spec, density),
+                reference=landpattern.compute_land_pattern(spec, density, rules=rules),
+                rules=rules,
                 tolerance_mm=float(args.get("tolerance_mm", 0.02)),
                 model_required=bool(args.get("model_required", True)),
+                test_board=bool(args.get("test_board", True)),
                 output_path=output,
             )
         elif name == "circuit_library_review_packet":
@@ -1641,7 +1756,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             raise ValueError(f"unknown tool: {name}")
         value = result.model_dump() if isinstance(result, BaseModel) else result
         content: list[ContentBlock] = [TextContent(type="text", text=_json(value))]
-        image_limit = _MAX_VISION_IMAGES if name == "circuit_vision_read" else _MAX_INLINE_IMAGES
+        image_limit = (
+            _MAX_VISION_IMAGES
+            if name in {"circuit_vision_read", "circuit_vision_compare"}
+            else _MAX_INLINE_IMAGES
+        )
         for image_path in image_paths[:image_limit]:
             image = _image_content(image_path)
             if image is not None:

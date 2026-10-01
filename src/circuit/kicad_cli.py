@@ -287,6 +287,7 @@ ExportKind = Literal[
     "gerbers",
     "drill",
     "pos",
+    "ipcd356",
     "bom",
     "netlist",
     "pdf-sch",
@@ -344,6 +345,15 @@ def export(
     out_dir.mkdir(parents=True, exist_ok=True)
     if kind in {"gerbers", "drill"}:
         args = ["pcb", "export", kind, "--output", str(out_dir) + "/", str(source)]
+    elif kind == "ipcd356":
+        args = [
+            "pcb",
+            "export",
+            "ipcd356",
+            "--output",
+            str(out_dir / f"{source.stem}.ipcd356"),
+            str(source),
+        ]
     elif kind == "pos":
         args = [
             "pcb",

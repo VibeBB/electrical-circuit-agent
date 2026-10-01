@@ -3,10 +3,10 @@
 
 Surfaces checked: KiCad nightly package pins from the kicad-dev-nightly PPA
 (resolute Packages.gz index), Dockerfile ARG pins checked against GitHub
-releases (Konnect, FreeRouting, Semeru JRE), unpinned apt packages, the CERN
-KiCad libraries submodule, direct PyPI dependencies (compared against the
-resolved versions in uv.lock), uv.lock transitive drift via
-`uv lock --upgrade --dry-run`, the uv required-version pin, Python minor
+releases (Konnect, FreeRouting, Semeru JRE), GitLab commit pins (KiCad Library
+Utils), unpinned apt packages, the CERN KiCad libraries submodule, direct PyPI
+dependencies (compared against resolved versions in uv.lock), plus uv.lock
+transitive drift via `uv lock --upgrade --dry-run`, the uv required-version pin, Python minor
 pins against the latest stable CPython minor, GitHub Actions `uses:` pins,
 and the Docker base image tags.
 
@@ -84,6 +84,14 @@ SUBMODULES = (
         "CERN KiCad libraries",
         "libraries/cern-kicad-libs",
         "https://gitlab.com/ohwr/cern-kicad-libs.git",
+    ),
+)
+
+GIT_COMMIT_UPSTREAMS = (
+    (
+        "KiCad Library Utils",
+        "KICAD_LIBRARY_UTILS_COMMIT",
+        "https://gitlab.com/kicad/libraries/kicad-library-utils.git",
     ),
 )
 
@@ -794,6 +802,23 @@ def check_submodules(repo_root: Path) -> list[Status]:
     return statuses
 
 
+def check_git_commit_pins(repo_root: Path) -> list[Status]:
+    args = docker_arg_pins(repo_root)
+    statuses: list[Status] = []
+    for name, arg_name, url in GIT_COMMIT_UPSTREAMS:
+        latest = subprocess.run(
+            ["git", "ls-remote", url, "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=SUBPROCESS_TIMEOUT,
+        ).stdout.split()[0]
+        current = args.get(arg_name, "")
+        statuses.append(Status(name, current, latest, "GitLab HEAD", current != latest))
+    return statuses
+
+
 def check_dependency_updates(
     repo_root: Path,
     *,
@@ -806,6 +831,7 @@ def check_dependency_updates(
     statuses = [
         *check_kicad_ppa(repo_root, fetch=fetch),
         *check_docker_args(repo_root, fetch_json=fetch_json),
+        *check_git_commit_pins(repo_root),
         *check_apt_packages(),
         *check_submodules(repo_root),
         *check_pypi(repo_root, deferrals, fetch_json=fetch_json),

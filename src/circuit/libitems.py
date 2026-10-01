@@ -33,6 +33,9 @@ class PadDef(BaseModel):
     height: float
     drill: float | None
     layers: list[str]
+    roundrect_ratio: float | None = None
+    paste_margin: float | None = None
+    mask_margin: float | None = None
 
 
 class GraphicDef(BaseModel):
@@ -175,6 +178,21 @@ def _parse_pad(node: list[sexpr.SExpr]) -> PadDef:
     if layers_node is None:
         raise LibItemError(f"pad {number} is missing its layer list")
     layers = [value for value in layers_node[1:] if isinstance(value, str)]
+    roundrect_ratio_node = _first(node, "roundrect_rratio")
+    paste_margin_node = _first(node, "solder_paste_margin")
+    mask_margin_node = _first(node, "solder_mask_margin")
+
+    def optional_number(
+        value: list[sexpr.SExpr] | None,
+        *,
+        label: str,
+    ) -> float | None:
+        if value is None:
+            return None
+        if len(value) < 2:
+            raise LibItemError(f"pad {number} is missing its {label}")
+        return _number(value[1], label=f"pad {number} {label}")
+
     return PadDef(
         number=number,
         type=pad_type,
@@ -186,6 +204,9 @@ def _parse_pad(node: list[sexpr.SExpr]) -> PadDef:
         height=height,
         drill=drill,
         layers=layers,
+        roundrect_ratio=optional_number(roundrect_ratio_node, label="roundrect ratio"),
+        paste_margin=optional_number(paste_margin_node, label="paste margin"),
+        mask_margin=optional_number(mask_margin_node, label="mask margin"),
     )
 
 

@@ -19,6 +19,8 @@ ARG SEMERU_JRE_VERSION=27.0.0.0
 ARG SEMERU_JRE_SHA256=9e6d9c1131da124bd08eb4183f7787a9f90111fc3d62c1231976c2d37372d59e
 ARG FREEROUTING_VERSION=2.4.1
 ARG FREEROUTING_SHA256=251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9
+ARG KICAD_LIBRARY_UTILS_COMMIT=90b0af91eaffcd91552027c3bfd166896f78c7de
+ARG KICAD_LIBRARY_UTILS_SHA256=e6402826cecbcddd5c4812ba35f034854b3aa43d2738a1ecf0d5ff629a2ad1f9
 ARG CERN_COMMIT=unknown
 ARG IMAGE_REVISION=unknown
 
@@ -34,6 +36,7 @@ LABEL org.opencontainers.image.source="https://github.com/VibeBB/electrical-circ
       circuit.konnect.commit="${KONNECT_COMMIT}" \
       circuit.semeru.version="${SEMERU_JRE_VERSION}" \
       circuit.freerouting.version="${FREEROUTING_VERSION}" \
+      circuit.klc.commit="${KICAD_LIBRARY_UTILS_COMMIT}" \
       circuit.cern.commit="${CERN_COMMIT}" \
       circuit.kicad.nightly="${KICAD_NIGHTLY_VERSION}"
 
@@ -144,6 +147,22 @@ RUN mkdir -p /opt/jre /opt/freerouting \
         "source=https://github.com/ibmruntimes/semeru27-binaries" \
         "version=jdk-${SEMERU_JRE_VERSION}" \
         > /usr/share/doc/semeru-jre/SOURCE
+
+RUN mkdir -p /opt/kicad-library-utils /usr/share/doc/kicad-library-utils \
+    && curl --fail --location --silent --show-error \
+        --retry 5 --retry-delay 10 --retry-all-errors \
+        --output /tmp/kicad-library-utils.tar.gz \
+        "https://gitlab.com/kicad/libraries/kicad-library-utils/-/archive/${KICAD_LIBRARY_UTILS_COMMIT}/kicad-library-utils-${KICAD_LIBRARY_UTILS_COMMIT}.tar.gz" \
+    && echo "${KICAD_LIBRARY_UTILS_SHA256}  /tmp/kicad-library-utils.tar.gz" | sha256sum --check \
+    && tar -xzf /tmp/kicad-library-utils.tar.gz \
+        --strip-components=1 -C /opt/kicad-library-utils \
+    && cp /opt/kicad-library-utils/COPYING \
+        /usr/share/doc/kicad-library-utils/LICENSE \
+    && printf '%s\n' \
+        "source=https://gitlab.com/kicad/libraries/kicad-library-utils" \
+        "commit=${KICAD_LIBRARY_UTILS_COMMIT}" \
+        > /usr/share/doc/kicad-library-utils/SOURCE \
+    && rm -f /tmp/kicad-library-utils.tar.gz
 
 COPY libraries/cern-kicad-libs /opt/circuit/libraries/cern-kicad-libs
 RUN printf '%s\n' "${CERN_COMMIT}" > /opt/circuit/libraries/cern-kicad-libs.commit

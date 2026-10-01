@@ -5,8 +5,18 @@ from __future__ import annotations
 SExpr = str | list["SExpr"]
 
 
+class QuotedString(str):
+    """A string atom whose serialized form must be quoted."""
+
+
 class SExprError(ValueError):
     """Raised when an s-expression is malformed."""
+
+
+def quoted(value: str) -> QuotedString:
+    """Mark a string value that must remain quoted when serialized."""
+
+    return QuotedString(value)
 
 
 def _tokens(text: str) -> list[str]:
@@ -38,7 +48,7 @@ def _tokens(text: str) -> list[str]:
                 index += 1
             else:
                 raise SExprError("unterminated quoted string")
-            tokens.append("".join(value))
+            tokens.append(QuotedString("".join(value)))
         else:
             end = index
             while end < len(text) and not text[end].isspace() and text[end] not in "()":
@@ -81,7 +91,11 @@ def parse_text(text: str) -> list[SExpr]:
 
 
 def _quote(value: str) -> str:
-    if not value or any(character.isspace() or character in '()";\\' for character in value):
+    if (
+        isinstance(value, QuotedString)
+        or not value
+        or any(character.isspace() or character in '()";\\' for character in value)
+    ):
         escapes = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
         escaped = "".join(escapes.get(character, character) for character in value)
         return f'"{escaped}"'

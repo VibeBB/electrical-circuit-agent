@@ -25,6 +25,8 @@ def test_sexpr_serialize_round_trip_with_quoted_atoms() -> None:
         ["punctuation", "(nested)"],
     ]
     assert sexpr.parse_text(sexpr.serialize(expression)) == expression
+    quoted_expression = sexpr.parse_text('(root (quoted "F.Cu") (bare F.Cu))')
+    assert sexpr.serialize(quoted_expression) == '(root (quoted "F.Cu") (bare F.Cu))'
 
 
 def test_parse_modern_footprint_fields_and_graphics() -> None:
@@ -47,6 +49,9 @@ def test_parse_modern_footprint_fields_and_graphics() -> None:
         "height": 0.5,
         "drill": None,
         "layers": ["F.Cu", "F.Paste", "F.Mask"],
+        "roundrect_ratio": None,
+        "paste_margin": None,
+        "mask_margin": None,
     }
     assert footprint.pads[1].drill == 0.4
     assert footprint.pads[1].layers == ["*.Cu", "*.Mask"]

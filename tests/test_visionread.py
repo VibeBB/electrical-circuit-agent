@@ -19,7 +19,9 @@ from circuit.visionread import (
     VisionReadRequest,
     _render_pdfium,  # pyright: ignore[reportPrivateUsage]
     _render_pdftoppm,  # pyright: ignore[reportPrivateUsage]
+    create_comparison_batch,
     create_read_batch,
+    find_comparison_evidence,
     record_answers,
 )
 from vision_fixtures import FIXTURE_CONTROL, FIXTURE_IMPRESSION
@@ -359,6 +361,105 @@ def test_table_answer_with_wrong_shape_is_unparseable(
     record = record_answers(batch_path, answers)
 
     assert record.status[item.read_id] == "unparseable"
+
+
+def test_comparison_batch_binds_hashes_and_requires_mirrored_control(
+    tmp_path: Path,
+) -> None:
+    extraction_path = _extraction(tmp_path)
+    composite_path = tmp_path / "comparison.png"
+    Image.new("RGB", (120, 60), "white").save(composite_path, format="PNG")
+    artifact_hash = "b" * 64
+    spec_hash = "a" * 64
+    batch = create_comparison_batch(
+        extraction_path,
+        composite_path,
+        kind="compare_footprint",
+        page=1,
+        bbox=(10.0, 10.0, 90.0, 90.0),
+        crop_bbox=(8.0, 8.0, 92.0, 92.0),
+        dpi=300,
+        rasterizer="pdftoppm",
+        split_x=60,
+        spec_sha256=spec_hash,
+        artifact_sha256=artifact_hash,
+        artifact_kind="footprint",
+    )
+    batch_path = tmp_path / "vision-reads" / batch.batch_id / "batch.json"
+    answers: dict[str, dict[str, object]] = {
+        item.read_id: {
+            "answer": (
+                '{"pin1_matches":true,"arrangement_matches":false,'
+                '"numbering_direction_matches":true,"differences":[]}'
+                if item.control
+                else '{"pin1_matches":true,"arrangement_matches":true,'
+                '"numbering_direction_matches":true,"differences":[]}'
+            ),
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for item in batch.items
+    }
+    record = record_answers(batch_path, answers)
+
+    current, stale = find_comparison_evidence(
+        tmp_path,
+        kind="compare_footprint",
+        spec_sha256=spec_hash,
+        artifact_sha256=artifact_hash,
+        artifact_kind="footprint",
+    )
+    wrong_hash, has_stale = find_comparison_evidence(
+        tmp_path,
+        kind="compare_footprint",
+        spec_sha256=spec_hash,
+        artifact_sha256="c" * 64,
+        artifact_kind="footprint",
+    )
+
+    assert record.control_passed
+    assert not stale
+    assert len(current) == 1
+    assert current[0].normalized is not None
+    assert current[0].impression_valid
+    assert wrong_hash == []
+    assert has_stale
+
+
+def test_comparison_control_fails_when_mirror_is_not_detected(
+    tmp_path: Path,
+) -> None:
+    extraction_path = _extraction(tmp_path)
+    composite_path = tmp_path / "comparison.png"
+    Image.new("RGB", (120, 60), "white").save(composite_path, format="PNG")
+    batch = create_comparison_batch(
+        extraction_path,
+        composite_path,
+        kind="compare_symbol",
+        page=1,
+        bbox=(10.0, 10.0, 90.0, 90.0),
+        crop_bbox=(8.0, 8.0, 92.0, 92.0),
+        dpi=300,
+        rasterizer="pdftoppm",
+        split_x=60,
+        spec_sha256="a" * 64,
+        artifact_sha256="b" * 64,
+        artifact_kind="symbol",
+    )
+    batch_path = tmp_path / "vision-reads" / batch.batch_id / "batch.json"
+    answers: dict[str, dict[str, object]] = {
+        item.read_id: {
+            "answer": (
+                '{"pin1_matches":true,"arrangement_matches":true,'
+                '"numbering_direction_matches":true,"differences":[]}'
+            ),
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for item in batch.items
+    }
+
+    record = record_answers(batch_path, answers)
+
+    assert not record.control_passed
 
 
 def test_successful_answer_write_is_answer_once(

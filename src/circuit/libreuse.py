@@ -8,6 +8,7 @@ import math
 import os
 import re
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -17,10 +18,18 @@ from . import sexpr
 from .landpattern import LandPatternResult
 from .libitems import LibItemError, PadDef, parse_footprint, parse_symbol
 from .libraries import LibraryRoots
+from .libverify import (
+    VerifyFinding,
+    _validate_lineage,  # pyright: ignore[reportPrivateUsage]
+    functional_findings,
+)
+from .lineage import FootprintLineage, lineage_path_for
 from .partspec import Dimension, LandPad, PartSpec
+from .ruleprofile import EffectiveRules, load_rules
 
-FootprintMatch = Literal["exact", "compatible", "near"]
+FootprintMatch = Literal["exact", "compatible", "functional", "near"]
 SymbolMatch = Literal["exact", "pin_compatible"]
+FootprintOrigin = Literal["kicad_official", "project", "organization", "manufacturer"]
 
 
 class CandidateModel(BaseModel):
@@ -31,18 +40,30 @@ class CandidateModel(BaseModel):
     resolved_path: str | None
 
 
+class FunctionalCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    passed: bool
+    failures: list[str]
+
+
 class FootprintCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
     library_path: Path
     path: Path
+    origin: FootprintOrigin
     classification: FootprintMatch
     max_center_delta: float
     max_size_delta: float
     pin1_quadrant: str
     pin1_quadrant_ok: bool
     models: list[CandidateModel]
+    lineage_path: str | None
+    lineage_layer: Literal["organization", "product"] | None
+    lineage_product: str | None
+    functional: FunctionalCheck
 
 
 class SymbolCandidate(BaseModel):
@@ -77,7 +98,18 @@ _FAMILY_LIBRARIES: dict[str, tuple[str, ...]] = {
         "led_smd",
     ),
 }
-_CLASS_RANK: dict[FootprintMatch, int] = {"exact": 0, "compatible": 1, "near": 2}
+_CLASS_RANK: dict[FootprintMatch, int] = {
+    "exact": 0,
+    "compatible": 1,
+    "functional": 2,
+    "near": 3,
+}
+_ORIGIN_RANK: dict[FootprintOrigin, int] = {
+    "organization": 0,
+    "project": 1,
+    "manufacturer": 2,
+    "kicad_official": 3,
+}
 
 
 def _spec_digest(spec: PartSpec) -> str:
@@ -104,8 +136,9 @@ def _footprint_paths(
     spec: PartSpec,
     roots: LibraryRoots,
     project_library_dir: Path | None,
+    organization_dirs: Sequence[Path],
 ) -> list[Path]:
-    directories = [*roots.footprint_dirs]
+    directories = [*roots.footprint_dirs, *organization_dirs]
     if project_library_dir is not None:
         directories.append(project_library_dir)
     unique_dirs = list(dict.fromkeys(path.resolve() for path in directories))
@@ -119,9 +152,10 @@ def _footprint_paths(
         for path in directory.rglob("*.kicad_mod"):
             library_name = path.parent.name.casefold()
             in_project = _is_under(path, project_library_dir)
-            in_cern = "cern" in path.as_posix().casefold()
+            in_organization = any(_is_under(path, root) for root in organization_dirs)
+            in_manufacturer_root = any(_is_under(path, root) for root in roots.footprint_dirs[1:])
             family_match = any(library_name.startswith(prefix) for prefix in prefixes)
-            if not (in_project or in_cern or family_match):
+            if not (in_project or in_organization or in_manufacturer_root or family_match):
                 continue
             name = path.stem
             if family != "chip":
@@ -247,15 +281,14 @@ def _footprint_match(
     candidate_pads: list[PadDef],
 ) -> tuple[FootprintMatch, float, float] | None:
     candidate = _numbered_boxes(candidate_pads)
-    if reference.keys() != candidate.keys():
-        return None
     center_delta, size_delta = _geometry_deltas(reference, candidate)
+    same_keys = reference.keys() == candidate.keys()
     same_multiplicity = Counter(pad.number for pad in reference_pads) == Counter(
         pad.number for pad in candidate_pads if pad.number
     )
-    if same_multiplicity and center_delta <= 0.01 and size_delta <= 0.01:
+    if same_keys and same_multiplicity and center_delta <= 0.01 and size_delta <= 0.01:
         classification: FootprintMatch = "exact"
-    elif same_multiplicity and center_delta <= 0.05 and size_delta <= 0.05:
+    elif same_keys and same_multiplicity and center_delta <= 0.05 and size_delta <= 0.05:
         classification = "compatible"
     else:
         classification = "near"
@@ -309,11 +342,26 @@ def _footprint_candidates(
     roots: LibraryRoots,
     project_library_dir: Path | None,
     reference: LandPatternResult,
+    organization_dirs: Sequence[Path],
+    rules: EffectiveRules,
 ) -> list[FootprintCandidate]:
     reference_boxes = _reference_boxes(reference)
     reference_pads = reference.pads
     candidates: list[FootprintCandidate] = []
-    for path in _footprint_paths(spec, roots, project_library_dir):
+    source_dirs: list[tuple[Path, FootprintOrigin]] = [
+        *((directory, "organization") for directory in organization_dirs),
+        *((directory, "project") for directory in (project_library_dir,) if directory is not None),
+        *(
+            (directory, "kicad_official" if index == 0 else "manufacturer")
+            for index, directory in enumerate(roots.footprint_dirs)
+        ),
+    ]
+    for path in _footprint_paths(
+        spec,
+        roots,
+        project_library_dir,
+        organization_dirs,
+    ):
         try:
             footprint = parse_footprint(path)
         except (LibItemError, OSError):
@@ -322,28 +370,71 @@ def _footprint_candidates(
         if match is None:
             continue
         classification, center_delta, size_delta = match
+        functional_findings_result = functional_findings(spec, footprint, rules)
+        failures = [
+            f"{finding.code}: {finding.subject}: {finding.message}"
+            for finding in functional_findings_result
+            if finding.severity == "error"
+        ]
+        functional = FunctionalCheck(passed=not failures, failures=failures)
+        if not functional.passed:
+            classification = "near"
+        elif classification == "near":
+            classification = "functional"
         quadrant, quadrant_ok = _pin1_quadrant(
             footprint.pads,
             spec.package.family,
             spec.package.pin1_corner,
         )
+        origin: FootprintOrigin = "kicad_official"
+        for source_dir, source_origin in source_dirs:
+            if _is_under(path, source_dir):
+                origin = source_origin
+                break
+        lineage_sidecar = lineage_path_for(path)
+        lineage_path = str(lineage_sidecar) if lineage_sidecar.is_file() else None
+        lineage: FootprintLineage | None = None
+        if lineage_path is not None:
+            lineage_library_dir = next(
+                (
+                    directory
+                    for directory, _source_origin in source_dirs
+                    if _is_under(path, directory)
+                ),
+                path.parent.parent,
+            )
+            lineage_findings: list[VerifyFinding] = []
+            candidate_lineage, _base, valid_lineage = _validate_lineage(
+                path,
+                footprint,
+                lineage_library_dir,
+                lineage_findings,
+            )
+            if valid_lineage:
+                lineage = candidate_lineage
         candidates.append(
             FootprintCandidate(
                 name=footprint.name,
                 library_path=path.parent,
                 path=path,
+                origin=origin,
                 classification=classification,
                 max_center_delta=round(center_delta, 6),
                 max_size_delta=round(size_delta, 6),
                 pin1_quadrant=quadrant,
                 pin1_quadrant_ok=quadrant_ok,
                 models=[_resolve_model(model.path, path) for model in footprint.models],
+                lineage_path=lineage_path,
+                lineage_layer=lineage.layer if lineage is not None else None,
+                lineage_product=lineage.product if lineage is not None else None,
+                functional=functional,
             )
         )
     return sorted(
         candidates,
         key=lambda candidate: (
             _CLASS_RANK[candidate.classification],
+            _ORIGIN_RANK[candidate.origin],
             max(candidate.max_center_delta, candidate.max_size_delta),
             candidate.library_path.as_posix().casefold(),
             candidate.name.casefold(),
@@ -453,13 +544,23 @@ def find_candidates(
     roots: LibraryRoots,
     project_library_dir: Path | None,
     reference: LandPatternResult,
+    organization_dirs: Sequence[Path] = (),
+    rules: EffectiveRules | None = None,
 ) -> CandidateReport:
     """Find geometrically and electrically compatible KiCad library items."""
 
+    effective_rules = rules or load_rules("builtin:ipc7351b", Path("."))
     return CandidateReport(
         artifact_kind="circuit_library_candidates",
         part_spec_sha256=_spec_digest(spec),
         reference_source=reference.source,
-        footprints=_footprint_candidates(spec, roots, project_library_dir, reference),
+        footprints=_footprint_candidates(
+            spec,
+            roots,
+            project_library_dir,
+            reference,
+            organization_dirs,
+            effective_rules,
+        ),
         symbols=_symbol_candidates(spec, roots, project_library_dir),
     )

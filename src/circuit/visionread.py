@@ -25,9 +25,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .advisory import impression_is_prose
 from .datasheet import DatasheetExtraction, load_extraction
 
-VisionKind = Literal["transcribe", "view", "pin1_corner", "pin_labels", "table"]
+VisionKind = Literal[
+    "transcribe",
+    "view",
+    "pin1_corner",
+    "pin_labels",
+    "table",
+    "compare_footprint",
+    "compare_symbol",
+]
 Rasterizer = Literal["pdftoppm", "pdfium"]
 BBox = tuple[float, float, float, float]
+VisionComparison = dict[str, bool | list[str]]
+NormalizedAnswer = str | VisionComparison | dict[str, str] | list[list[str]]
 
 _PROMPTS: dict[VisionKind, str] = {
     "transcribe": (
@@ -51,6 +61,16 @@ _PROMPTS: dict[VisionKind, str] = {
         "Transcribe the table in this image as JSON: a list of rows, each row "
         "a list of cell strings in left-to-right order, including header rows. "
         "Use an empty string for an empty cell."
+    ),
+    "compare_footprint": (
+        "The left image is a datasheet drawing and the right image is a CAD library rendering "
+        'of the same part. Answer as JSON {"pin1_matches": bool, "arrangement_matches": bool, '
+        '"numbering_direction_matches": bool, "differences": [string]}.'
+    ),
+    "compare_symbol": (
+        "The left image is a datasheet drawing and the right image is a CAD library rendering "
+        'of the same part. Answer as JSON {"pin1_matches": bool, "arrangement_matches": bool, '
+        '"numbering_direction_matches": bool, "differences": [string]}.'
     ),
 }
 
@@ -100,6 +120,7 @@ class VisionReadItem(BaseModel):
     prompt: str
     prompt_sha256: str
     control: bool = False
+    bindings: dict[str, str] = Field(default_factory=dict)
 
 
 class VisionBatch(BaseModel):
@@ -127,7 +148,7 @@ class VisionAnswerRecord(BaseModel):
     answered_at: str
     answers: dict[str, str]
     impressions: dict[str, str] = Field(default_factory=dict)
-    normalized: dict[str, str | dict[str, str] | list[list[str]]]
+    normalized: dict[str, NormalizedAnswer]
     status: dict[str, Literal["ok", "unparseable"]]
     control_passed: bool
 
@@ -145,7 +166,18 @@ class LoadedVisionRead:
     item: VisionReadItem
     answers: VisionAnswerRecord
     answer: str
-    normalized: str | dict[str, str] | list[list[str]]
+    normalized: NormalizedAnswer
+
+
+@dataclass(frozen=True)
+class VisionComparisonEvidence:
+    batch_path: Path
+    batch: VisionBatch
+    item: VisionReadItem
+    answers: VisionAnswerRecord
+    normalized: VisionComparison | None
+    impression: str | None
+    impression_valid: bool
 
 
 def _sha256(value: bytes) -> str:
@@ -275,6 +307,174 @@ def _render_pdfium(
             bitmap.to_pil().save(output, format="PNG")
     except (OSError, ValueError, IndexError, RuntimeError) as exc:
         raise VisionReadError(f"pdfium crop failed: {exc}") from exc
+
+
+def render_datasheet_crop(
+    extraction_path: Path,
+    page_number: int,
+    bbox: BBox,
+    output: Path,
+    *,
+    lane: str = "main",
+) -> tuple[BBox, int, Rasterizer]:
+    request = VisionReadRequest(field="comparison", page=page_number, bbox=bbox, kind="view")
+    extraction = load_extraction(extraction_path)
+    pdf_path = _extraction_pdf(extraction, extraction_path)
+    if not pdf_path.is_file() or _sha256(pdf_path.read_bytes()) != extraction.pdf_sha256:
+        raise VisionReadError("datasheet PDF is missing or differs from extraction")
+    page = next((item for item in extraction.pages if item.page == request.page), None)
+    if page is None:
+        raise VisionReadError(f"page {request.page} is not present in the extraction")
+    if (
+        request.bbox[0] < 0
+        or request.bbox[1] < 0
+        or request.bbox[2] > page.width_pt
+        or request.bbox[3] > page.height_pt
+    ):
+        raise VisionReadError("datasheet crop bbox lies outside its page")
+    crop_bbox = _padded_bbox(request.bbox, page.width_pt, page.height_pt)
+    dpi = _dpi(crop_bbox)
+    if max(crop_bbox[2] - crop_bbox[0], crop_bbox[3] - crop_bbox[1]) * dpi / 72 > 2400:
+        raise VisionReadError("bbox too large; split the region")
+    rasterizer: Rasterizer = "pdfium" if lane == "b" else "pdftoppm"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if rasterizer == "pdfium":
+        _render_pdfium(
+            pdf_path,
+            output,
+            request.page,
+            crop_bbox,
+            page.width_pt,
+            page.height_pt,
+            dpi,
+        )
+    else:
+        _render_pdftoppm(pdf_path, output, request.page, crop_bbox, dpi)
+    return crop_bbox, dpi, rasterizer
+
+
+def _mirror_right_panel(source: Path, destination: Path, split_x: int) -> None:
+    try:
+        with Image.open(source) as opened:
+            image = opened.convert("RGB")
+    except OSError as exc:
+        raise VisionReadError(f"comparison panel is unavailable: {exc}") from exc
+    if not 0 < split_x < image.width:
+        raise VisionReadError("comparison panel split must lie inside the image")
+    left = image.crop((0, 0, split_x, image.height))
+    right = image.crop((split_x, 0, image.width, image.height)).transpose(
+        Image.Transpose.FLIP_LEFT_RIGHT
+    )
+    control = Image.new("RGB", image.size, "white")
+    control.paste(left, (0, 0))
+    control.paste(right, (split_x, 0))
+    control.save(destination, format="PNG")
+
+
+def create_comparison_batch(
+    extraction_path: Path,
+    composite_path: Path,
+    *,
+    kind: Literal["compare_footprint", "compare_symbol"],
+    page: int,
+    bbox: BBox,
+    crop_bbox: BBox,
+    dpi: int,
+    rasterizer: Rasterizer,
+    split_x: int,
+    spec_sha256: str,
+    artifact_sha256: str,
+    artifact_kind: Literal["footprint", "symbol"],
+    out_dir: Path | None = None,
+    lane: str = "main",
+    profile: str = "",
+    model: str = "unknown",
+) -> VisionBatch:
+    extraction = load_extraction(extraction_path)
+    pdf_path = _extraction_pdf(extraction, extraction_path)
+    if not pdf_path.is_file() or _sha256(pdf_path.read_bytes()) != extraction.pdf_sha256:
+        raise VisionReadError("datasheet PDF is missing or differs from extraction")
+    for digest in (spec_sha256, artifact_sha256):
+        if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise VisionReadError("comparison bindings must be SHA-256 values")
+    if not composite_path.is_file():
+        raise VisionReadError(f"comparison panel is missing: {composite_path}")
+    with Image.open(composite_path) as opened:
+        composite = opened.convert("RGB")
+    if not 0 < split_x < composite.width:
+        raise VisionReadError("comparison panel split must lie inside the image")
+    batch_id = secrets.token_hex(6)
+    batch_dir = (
+        out_dir
+        if out_dir is not None
+        else extraction_path.resolve().parent / "vision-reads" / batch_id
+    )
+    batch_dir.mkdir(parents=True, exist_ok=False)
+    read_id = secrets.token_hex(6)
+    control_read_id = secrets.token_hex(6)
+    image_relative = f"images/{read_id}.png"
+    control_relative = f"images/{control_read_id}.png"
+    image_path = batch_dir / image_relative
+    control_path = batch_dir / control_relative
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    composite.save(image_path, format="PNG")
+    _mirror_right_panel(image_path, control_path, split_x)
+    prompt = _PROMPTS[kind]
+    bindings = {
+        "part_spec_sha256": spec_sha256,
+        "artifact_sha256": artifact_sha256,
+        "artifact_kind": artifact_kind,
+    }
+    item = VisionReadItem(
+        read_id=read_id,
+        field=f"library.{artifact_kind}",
+        kind=kind,
+        page=page,
+        bbox=bbox,
+        crop_bbox=crop_bbox,
+        dpi=dpi,
+        rasterizer=rasterizer,
+        image_path=image_relative,
+        image_sha256=_sha256(image_path.read_bytes()),
+        prompt=prompt,
+        prompt_sha256=_sha256(prompt.encode("utf-8")),
+        bindings=bindings,
+    )
+    control_item = VisionReadItem(
+        read_id=control_read_id,
+        field="control",
+        kind=kind,
+        page=page,
+        bbox=bbox,
+        crop_bbox=crop_bbox,
+        dpi=dpi,
+        rasterizer=rasterizer,
+        image_path=control_relative,
+        image_sha256=_sha256(control_path.read_bytes()),
+        prompt=prompt,
+        prompt_sha256=_sha256(prompt.encode("utf-8")),
+        bindings=bindings,
+        control=True,
+    )
+    items = [item, control_item]
+    secrets.SystemRandom().shuffle(items)
+    control_salt = secrets.token_hex(16)
+    batch = VisionBatch(
+        artifact_kind="circuit_vision_read_batch",
+        batch_id=batch_id,
+        created_at=datetime.now(UTC).isoformat(),
+        lane=lane,
+        profile=profile,
+        model=model,
+        pdf_path=str(pdf_path.resolve()),
+        pdf_sha256=extraction.pdf_sha256,
+        items=items,
+        control_salt=control_salt,
+        control_answer_sha256=_sha256(f"{control_salt}comparison-control".encode()),
+        control_read_sha256=_sha256(f"{control_salt}{control_read_id}".encode()),
+    )
+    _atomic_json(batch_dir / "batch.json", _batch_payload(batch))
+    return batch
 
 
 def _control_image(path: Path, size: tuple[int, int]) -> str:
@@ -449,7 +649,7 @@ def _load_batch(batch_path: Path) -> VisionBatch:
 
 def _normalize_answer(
     item: VisionReadItem, answer: str
-) -> tuple[str | dict[str, str] | list[list[str]], Literal["ok", "unparseable"]]:
+) -> tuple[NormalizedAnswer, Literal["ok", "unparseable"]]:
     if item.kind == "transcribe":
         normalized = unicodedata.normalize("NFKC", answer)
         return re.sub(r"\s+", " ", normalized).strip(), "ok"
@@ -478,6 +678,36 @@ def _normalize_answer(
         return normalized_rows, "ok"
     if not isinstance(parsed, dict):
         return answer, "unparseable"
+    if item.kind in {"compare_footprint", "compare_symbol"}:
+        comparison = cast(dict[object, object], parsed)
+        expected_keys = {
+            "pin1_matches",
+            "arrangement_matches",
+            "numbering_direction_matches",
+            "differences",
+        }
+        if set(comparison) != expected_keys:
+            return answer, "unparseable"
+        if not all(
+            isinstance(comparison.get(key), bool)
+            for key in ("pin1_matches", "arrangement_matches", "numbering_direction_matches")
+        ):
+            return answer, "unparseable"
+        differences = comparison.get("differences")
+        if not isinstance(differences, list) or not all(
+            isinstance(value, str) for value in cast(list[object], differences)
+        ):
+            return answer, "unparseable"
+        normalized_comparison: VisionComparison = {
+            "pin1_matches": cast(bool, comparison["pin1_matches"]),
+            "arrangement_matches": cast(bool, comparison["arrangement_matches"]),
+            "numbering_direction_matches": cast(bool, comparison["numbering_direction_matches"]),
+            "differences": [
+                re.sub(r"\s+", " ", unicodedata.normalize("NFKC", cast(str, value))).strip()
+                for value in cast(list[object], differences)
+            ],
+        }
+        return normalized_comparison, "ok"
     normalized_labels: dict[str, str] = {}
     for key, value in cast(dict[object, object], parsed).items():
         if not isinstance(key, str) or not isinstance(value, str):
@@ -519,7 +749,7 @@ def record_answers(
     answers_path = batch_path.parent / "answers.json"
     if answers_path.exists():
         raise VisionReadError(f"answers already exist: {answers_path}")
-    normalized: dict[str, str | dict[str, str] | list[list[str]]] = {}
+    normalized: dict[str, NormalizedAnswer] = {}
     status: dict[str, Literal["ok", "unparseable"]] = {}
     control_passed = False
     for item in batch.items:
@@ -527,12 +757,23 @@ def record_answers(
         normalized[item.read_id] = value
         status[item.read_id] = state
         if item.control:
-            control_answer = re.sub(r"\s+", "", answer_texts[item.read_id]).casefold()
-            control_passed = (
-                state == "ok"
-                and _sha256(f"{batch.control_salt}{control_answer}".encode())
-                == batch.control_answer_sha256
-            )
+            if item.kind in {"compare_footprint", "compare_symbol"}:
+                compare = value if isinstance(value, dict) else None
+                control_passed = (
+                    state == "ok"
+                    and compare is not None
+                    and (
+                        compare.get("arrangement_matches") is False
+                        or compare.get("numbering_direction_matches") is False
+                    )
+                )
+            else:
+                control_answer = re.sub(r"\s+", "", answer_texts[item.read_id]).casefold()
+                control_passed = (
+                    state == "ok"
+                    and _sha256(f"{batch.control_salt}{control_answer}".encode())
+                    == batch.control_answer_sha256
+                )
     record = VisionAnswerRecord(
         artifact_kind="circuit_vision_read_answers",
         batch_id=batch.batch_id,
@@ -588,3 +829,92 @@ def load_vision_read(
         item,
         answer_record,
     )
+
+
+def find_comparison_evidence(
+    spec_dir: Path,
+    *,
+    kind: Literal["compare_footprint", "compare_symbol"],
+    spec_sha256: str,
+    artifact_sha256: str,
+    artifact_kind: Literal["footprint", "symbol"],
+) -> tuple[list[VisionComparisonEvidence], bool]:
+    spec_root = spec_dir.resolve()
+    reads_dir = spec_root / "vision-reads"
+    if not reads_dir.is_dir():
+        return [], False
+    current: list[VisionComparisonEvidence] = []
+    stale = False
+    for batch_path in sorted(reads_dir.rglob("batch.json")):
+        try:
+            resolved_batch = batch_path.resolve(strict=True)
+            if not resolved_batch.is_relative_to(spec_root):
+                stale = True
+                continue
+            batch = _load_batch(resolved_batch)
+        except (OSError, ValueError):
+            stale = True
+            continue
+        for item in batch.items:
+            if item.control or item.kind != kind:
+                continue
+            bindings = item.bindings
+            if bindings.get("artifact_kind") != artifact_kind:
+                continue
+            if (
+                bindings.get("part_spec_sha256") != spec_sha256
+                or bindings.get("artifact_sha256") != artifact_sha256
+            ):
+                stale = True
+                continue
+            relative_batch = resolved_batch.relative_to(spec_root).as_posix()
+            try:
+                loaded_batch, loaded_item, answers = load_vision_read(
+                    spec_root, f"{relative_batch}#{item.read_id}"
+                )
+            except (OSError, ValueError):
+                stale = True
+                continue
+            normalized = answers.normalized.get(item.read_id)
+            comparison: VisionComparison | None = None
+            if isinstance(normalized, dict) and all(
+                isinstance(normalized.get(key), bool)
+                for key in (
+                    "pin1_matches",
+                    "arrangement_matches",
+                    "numbering_direction_matches",
+                )
+            ):
+                differences = normalized.get("differences")
+                if isinstance(differences, list):
+                    comparison = {
+                        "pin1_matches": cast(bool, normalized["pin1_matches"]),
+                        "arrangement_matches": cast(bool, normalized["arrangement_matches"]),
+                        "numbering_direction_matches": cast(
+                            bool, normalized["numbering_direction_matches"]
+                        ),
+                        "differences": differences,
+                    }
+            impression = answers.impressions.get(item.read_id)
+            impression_valid = False
+            if impression is None:
+                comparison = None
+            else:
+                try:
+                    impression_is_prose(impression)
+                except ValueError:
+                    comparison = None
+                else:
+                    impression_valid = True
+            current.append(
+                VisionComparisonEvidence(
+                    batch_path=resolved_batch,
+                    batch=loaded_batch,
+                    item=loaded_item,
+                    answers=answers,
+                    normalized=comparison,
+                    impression=impression,
+                    impression_valid=impression_valid,
+                )
+            )
+    return current, stale
