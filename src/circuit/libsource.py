@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import kicad_cli, sexpr
 from .libitems import LibItemError, parse_footprint, parse_symbol
-from .libraries import default_roots
 
 SourceOrigin = Literal[
     "manufacturer", "kicad_official", "cern", "third_party", "generated", "derived"
@@ -143,6 +142,8 @@ def _inside(path: Path, root: Path) -> bool:
 
 
 def _assert_safe_destination(library_dir: Path) -> Path:
+    from .libraries import default_roots
+
     destination = library_dir.resolve()
     roots = default_roots()
     protected = [*roots.symbol_dirs, *roots.footprint_dirs]
@@ -166,6 +167,8 @@ def assert_safe_destination(library_dir: Path) -> Path:
 def _validate_origin_path(source_path: Path, origin: SourceOrigin) -> None:
     if origin not in ("kicad_official", "cern"):
         return
+    from .libraries import default_roots
+
     roots = default_roots()
     if origin == "kicad_official":
         allowed = roots.symbol_dirs[0].parent

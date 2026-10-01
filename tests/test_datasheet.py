@@ -1,17 +1,28 @@
 import hashlib
 import json
 import stat
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
+from circuit import datasheet as datasheet_module
 from circuit.datasheet import (
     DatasheetError,
+    PdfWord,
     extract_datasheet,
     load_extraction,
     page_tables,
     page_words,
 )
+
+
+def _all_words_visible(
+    _image_path: Path,
+    words: Sequence[PdfWord],
+    **_kwargs: object,
+) -> tuple[list[PdfWord], list[PdfWord]]:
+    return list(words), []
 
 
 def _pdf(path: Path, pages: list[tuple[list[str], int]]) -> Path:
@@ -192,6 +203,28 @@ def test_extract_datasheet_records_order_divergence_and_ocr_unavailable(
     image_pdf = _pdf(tmp_path / "image.pdf", [([], 0)])
     extraction = extract_datasheet(image_pdf, tmp_path / "ocr-missing")
     assert extraction.pages[0].lanes[-1].status == "unavailable"
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("Package Outline", True),
+        ("mEcHaNiCaL dAtA", True),
+        ("Scale 3.6", True),
+        ("scalable instructions", False),
+    ],
+)
+def test_drawing_page_detection_uses_visible_phrases_and_scale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    line: str,
+    expected: bool,
+) -> None:
+    _tools(tmp_path, monkeypatch)
+    monkeypatch.setattr(datasheet_module, "words_by_ink", _all_words_visible)
+    pdf_path = _pdf(tmp_path / "drawing.pdf", [([line], 0)])
+    extraction = extract_datasheet(pdf_path, tmp_path / "drawing")
+    assert extraction.pages[0].drawing_page is expected
 
 
 def test_extract_datasheet_fails_closed_on_invalid_inputs(

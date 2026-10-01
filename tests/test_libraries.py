@@ -1,12 +1,31 @@
 import hashlib
 from pathlib import Path
+from typing import Literal
 
+import pytest
+
+from circuit import libraries as libraries_module
 from circuit.brief import DesignBrief
+from circuit.landpattern import LandPatternResult
+from circuit.libitems import parse_footprint
 from circuit.libraries import LibraryRoots, check_libraries, symbol_pins
 from circuit.libverify import (
     LibraryVerification,
+    VerificationInputs,
     VerifiedFootprint,
     VerifiedSymbol,
+)
+from circuit.partspec import (
+    CellRef,
+    DatasheetRef,
+    Dimension,
+    OrderableVariant,
+    PackageSpec,
+    PartSpec,
+    PinSpec,
+    PinTable,
+    Reading,
+    part_spec_sha256,
 )
 
 SYMBOLS = """\
@@ -59,6 +78,113 @@ def _empty_roots(tmp_path: Path) -> LibraryRoots:
     symbols.mkdir(parents=True)
     footprints.mkdir(parents=True)
     return LibraryRoots(symbol_dirs=[symbols], footprint_dirs=[footprints])
+
+
+def _project_spec() -> PartSpec:
+    reading = Reading(
+        page=1,
+        bbox=(0, 0, 1, 1),
+        vision="fixture",
+        vision_record="vision.json",
+    )
+
+    def dimension(value: float) -> Dimension:
+        return Dimension(nom=value, reading=reading)
+
+    package = PackageSpec(
+        family="gullwing_dual",
+        drawing_id="X",
+        pin_count=2,
+        pitch=dimension(0.65),
+        body_length=dimension(2.0),
+        body_width=dimension(1.5),
+        height=dimension(0.5),
+        lead_span=dimension(3.0),
+        lead_length=dimension(0.5),
+        lead_width=dimension(0.3),
+        drawing_view="top",
+        pin1_corner="top_left",
+        pin1_reading=reading,
+    )
+    return PartSpec(
+        artifact_kind="circuit_part_spec",
+        mpn="TEST",
+        manufacturer="Example",
+        datasheet=DatasheetRef(
+            path="part.pdf",
+            sha256="a" * 64,
+            revision="A",
+            extraction_path="extraction.json",
+        ),
+        package=package,
+        pins=[
+            PinSpec(
+                number=str(number),
+                name=f"PIN{number}",
+                electrical_type="passive",
+                reading=reading,
+            )
+            for number in range(1, 3)
+        ],
+        orderable=[
+            OrderableVariant(
+                mpn="TEST",
+                package_designator="X",
+                pin_count=2,
+                row=CellRef(table=0, row=1, col=0),
+                reading=reading,
+            )
+        ],
+        pin_table=PinTable(page=1, table=0, number_col=0, name_col=1),
+    )
+
+
+def _fake_project_verifier(
+    spec: PartSpec,
+    *,
+    spec_path: Path,
+    symbol_lib: Path,
+    symbol_name: str,
+    footprint_path: Path,
+    library_dir: Path | None,
+    reference: LandPatternResult,
+    tolerance_mm: float = 0.02,
+    model_required: bool = True,
+    output_path: Path | None = None,
+) -> LibraryVerification:
+    del spec, library_dir, reference
+    footprint = parse_footprint(footprint_path)
+    text = footprint_path.read_text(encoding="utf-8")
+    verdict = "fail" if "(at 0.1 0)" in text else "pass"
+    report = LibraryVerification(
+        artifact_kind="circuit_library_verification",
+        verdict=verdict,
+        part_spec_sha256=part_spec_sha256(spec_path),
+        inputs=VerificationInputs(
+            part_spec_path=Path("part-spec.json"),
+            symbol_lib=Path(symbol_lib.name),
+            symbol_name=symbol_name,
+            footprint_path=Path(footprint_path.relative_to(symbol_lib.parent)),
+            density="nominal",
+            tolerance_mm=tolerance_mm,
+            model_required=model_required,
+        ),
+        symbol=VerifiedSymbol(
+            lib_path=symbol_lib,
+            name=symbol_name,
+            sha256=hashlib.sha256(symbol_lib.read_bytes()).hexdigest(),
+        ),
+        footprint=VerifiedFootprint(
+            path=footprint_path,
+            name=footprint.name,
+            sha256=hashlib.sha256(footprint_path.read_bytes()).hexdigest(),
+        ),
+        models=[],
+        findings=[],
+    )
+    if output_path is not None:
+        output_path.write_text(report.model_dump_json(), encoding="utf-8")
+    return report
 
 
 def test_library_resolution_pass_and_extends(tmp_path: Path) -> None:
@@ -154,6 +280,10 @@ def _write_project_library(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
     library.mkdir()
     symbol_path = library / "Device.kicad_sym"
     symbol_path.write_text(SYMBOLS, encoding="utf-8")
+    (library / "part-spec.json").write_text(
+        _project_spec().model_dump_json(),
+        encoding="utf-8",
+    )
     footprint_dir = library / "Device.pretty"
     footprint_dir.mkdir()
     footprint_paths: dict[str, Path] = {}
@@ -173,13 +303,24 @@ def _write_project_verification(
     symbol_path: Path,
     symbol_name: str,
     footprint_path: Path,
+    *,
+    verdict: Literal["pass", "fail"] = "pass",
 ) -> None:
     verification_dir = library / "verification"
     verification_dir.mkdir(exist_ok=True)
     report = LibraryVerification(
         artifact_kind="circuit_library_verification",
-        verdict="pass",
+        verdict=verdict,
         part_spec_sha256="a" * 64,
+        inputs=VerificationInputs(
+            part_spec_path=Path("part-spec.json"),
+            symbol_lib=Path(symbol_path.name),
+            symbol_name=symbol_name,
+            footprint_path=Path(footprint_path.relative_to(library)),
+            density="nominal",
+            tolerance_mm=0.02,
+            model_required=True,
+        ),
         symbol=VerifiedSymbol(
             lib_path=symbol_path,
             name=symbol_name,
@@ -201,7 +342,13 @@ def _write_project_verification(
 
 def test_project_library_precedes_default_roots_and_requires_verification(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        libraries_module,
+        "verify_library_part",
+        _fake_project_verifier,
+    )
     roots = _empty_roots(tmp_path / "defaults")
     symbol_path, footprint_paths = _write_project_library(tmp_path)
     brief_path = tmp_path / "brief.json"
@@ -218,6 +365,7 @@ def test_project_library_precedes_default_roots_and_requires_verification(
         symbol_path,
         "R",
         footprint_paths["X"],
+        verdict="fail",
     )
     _write_project_verification(
         tmp_path / "library",
@@ -233,7 +381,13 @@ def test_project_library_precedes_default_roots_and_requires_verification(
 
 def test_project_nickname_conflicts_and_stale_verification_fail(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        libraries_module,
+        "verify_library_part",
+        _fake_project_verifier,
+    )
     roots = _roots(tmp_path / "defaults")
     symbol_path, footprint_paths = _write_project_library(tmp_path)
     brief_path = tmp_path / "brief.json"
@@ -261,3 +415,30 @@ def test_project_nickname_conflicts_and_stale_verification_fail(
 
     conflict = check_libraries(_brief(), brief_path=brief_path, roots=roots)
     assert "library_nickname_conflict" in conflict.reasons
+
+
+def test_project_gate_rejects_verification_inputs_outside_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        libraries_module,
+        "verify_library_part",
+        _fake_project_verifier,
+    )
+    roots = _empty_roots(tmp_path / "defaults")
+    symbol_path, footprint_paths = _write_project_library(tmp_path)
+    library = tmp_path / "library"
+    brief_path = tmp_path / "brief.json"
+    brief_path.write_text("{}", encoding="utf-8")
+    _write_project_verification(library, symbol_path, "R", footprint_paths["X"])
+    _write_project_verification(library, symbol_path, "LED", footprint_paths["Y"])
+
+    report_path = library / "verification" / "R.verification.json"
+    report = LibraryVerification.model_validate_json(report_path.read_text(encoding="utf-8"))
+    report.inputs = report.inputs.model_copy(update={"part_spec_path": Path("/etc/passwd")})
+    report_path.write_text(report.model_dump_json(), encoding="utf-8")
+
+    result = check_libraries(_brief(), brief_path=brief_path, roots=roots)
+    assert result.verdict == "fail"
+    assert "unverified project library part: Device:R" in result.reasons

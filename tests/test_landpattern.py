@@ -10,6 +10,7 @@ from circuit.landpattern import (
     lead_rects,
 )
 from circuit.partspec import (
+    CellRef,
     DatasheetRef,
     Dimension,
     ExposedPad,
@@ -19,6 +20,7 @@ from circuit.partspec import (
     PackageSpec,
     PartSpec,
     PinSpec,
+    PinTable,
     Reading,
 )
 
@@ -33,7 +35,12 @@ TestFamily = Literal[
 
 
 def _reading(vision: str = "package drawing") -> Reading:
-    return Reading(page=1, vision=vision, vision_record="vision.json")
+    return Reading(
+        page=1,
+        bbox=(0, 0, 1, 1),
+        vision=vision,
+        vision_record="vision.json",
+    )
 
 
 def _dimension(
@@ -67,7 +74,7 @@ def _spec(
 ) -> PartSpec:
     package = PackageSpec(
         family=family,
-        code="TEST",
+        drawing_id="TEST",
         pin_count=pin_count,
         pitch=pitch,
         body_length=body_length,
@@ -109,10 +116,13 @@ def _spec(
         orderable=[
             OrderableVariant(
                 mpn="TEST-1",
-                package_code="TEST",
+                package_designator="TEST",
+                pin_count=pin_count,
+                row=CellRef(table=0, row=1, col=0),
                 reading=_reading("TEST-1 TEST"),
             )
         ],
+        pin_table=PinTable(page=1, table=0, number_col=0, name_col=1),
     )
 
 

@@ -6,7 +6,9 @@ import csv
 import difflib
 import hashlib
 import json
+import math
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -17,11 +19,21 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import pdfplumber
+from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
 from .raster import RasterizeError, rasterize
 
 DRAWING_VECTOR_THRESHOLD = 500
+_DRAWING_TEXT_MARKERS = (
+    "PACKAGE OUTLINE",
+    "PACKAGE DRAWING",
+    "MECHANICAL DATA",
+    "LAND PATTERN",
+    "BOARD LAYOUT",
+    "SOLDER MASK",
+    "STENCIL",
+)
 _PDFTOTEXT_ENV = "CIRCUIT_PDFTOTEXT"
 _TESSERACT_ENV = "CIRCUIT_TESSERACT"
 
@@ -77,6 +89,124 @@ class DatasheetExtraction(BaseModel):
     page_count: int
     pages: list[PageExtraction]
     tools: dict[str, str]
+
+
+def word_has_ink(
+    image_path: Path,
+    word: PdfWord,
+    *,
+    dpi: int,
+    width_pt: float,
+    height_pt: float,
+    minimum_fraction: float = 0.02,
+) -> bool:
+    try:
+        with Image.open(image_path) as image:
+            return _word_has_ink_in_image(
+                image.convert("L"),
+                word,
+                dpi=dpi,
+                width_pt=width_pt,
+                height_pt=height_pt,
+                minimum_fraction=minimum_fraction,
+            )
+    except (OSError, ValueError):
+        return False
+
+
+def words_by_ink(
+    image_path: Path,
+    words: Sequence[PdfWord],
+    *,
+    dpi: int,
+    width_pt: float,
+    height_pt: float,
+    minimum_fraction: float = 0.02,
+) -> tuple[list[PdfWord], list[PdfWord]]:
+    visible: list[PdfWord] = []
+    invisible: list[PdfWord] = []
+    try:
+        with Image.open(image_path) as image:
+            gray = image.convert("L")
+    except (OSError, ValueError):
+        gray = None
+
+    for word in words:
+        center_x = (word.x0 + word.x1) / 2
+        center_y = (word.top + word.bottom) / 2
+        if not (0 <= center_x <= width_pt and 0 <= center_y <= height_pt):
+            continue
+        if gray is not None and _word_has_ink_in_image(
+            gray,
+            word,
+            dpi=dpi,
+            width_pt=width_pt,
+            height_pt=height_pt,
+            minimum_fraction=minimum_fraction,
+        ):
+            visible.append(word)
+        else:
+            invisible.append(word)
+    return visible, invisible
+
+
+def _word_has_ink_in_image(
+    gray: Image.Image,
+    word: PdfWord,
+    *,
+    dpi: int,
+    width_pt: float,
+    height_pt: float,
+    minimum_fraction: float,
+) -> bool:
+    center_x = (word.x0 + word.x1) / 2
+    center_y = (word.top + word.bottom) / 2
+    if not (0 <= center_x <= width_pt and 0 <= center_y <= height_pt):
+        return False
+    scale = dpi / 72
+    try:
+        left = max(0, int(word.x0 * scale))
+        top = max(0, int(word.top * scale))
+        right = min(gray.width, math.ceil(word.x1 * scale))
+        bottom = min(gray.height, math.ceil(word.bottom * scale))
+        if right <= left or bottom <= top:
+            return False
+        crop = gray.crop((left, top, right, bottom))
+        pixel_count = crop.width * crop.height
+        if pixel_count == 0:
+            return False
+        histogram = crop.histogram()
+        return sum(histogram[:128]) / pixel_count >= minimum_fraction
+    except ValueError:
+        return False
+
+
+def _drawing_page(
+    vector_objects: int,
+    words_by_lane: Sequence[list[PdfWord]],
+    image_path: Path,
+    *,
+    dpi: int,
+    width_pt: float,
+    height_pt: float,
+) -> bool:
+    if vector_objects >= DRAWING_VECTOR_THRESHOLD:
+        return True
+    for words in words_by_lane:
+        visible_words, _ = words_by_ink(
+            image_path,
+            words,
+            dpi=dpi,
+            width_pt=width_pt,
+            height_pt=height_pt,
+        )
+        visible_words.sort(key=lambda word: (word.top, word.x0))
+        text = " ".join(word.text for word in visible_words)
+        if any(marker in text.upper() for marker in _DRAWING_TEXT_MARKERS) or re.search(
+            r"\bSCALE\b", text, re.IGNORECASE
+        ):
+            return True
+    return False
 
 
 def _command(env_name: str, default: str) -> list[str]:
@@ -310,6 +440,13 @@ def extract_datasheet(
                         {
                             "bbox": [float(value) for value in table.bbox],
                             "rows": rows,
+                            "cells": [
+                                [
+                                    None if cell is None else [float(value) for value in cell]
+                                    for cell in row.cells
+                                ]
+                                for row in table.rows
+                            ],
                         }
                     )
                 vector_objects = len(page.lines) + len(page.rects) + len(page.curves)
@@ -322,6 +459,14 @@ def extract_datasheet(
                 has_chars = bool(page.chars)
             except Exception as exc:
                 raise DatasheetError(f"could not read PDF page {page_number}: {exc}") from exc
+            is_drawing_page = _drawing_page(
+                vector_objects,
+                [poppler_words, plumber_words],
+                image_path,
+                dpi=dpi,
+                width_pt=width_pt,
+                height_pt=height_pt,
+            )
             table_path = out_dir / f"page-{page_number:03d}.tables.json"
             _write_json(table_path, {"tables": tables})
             lanes = [
@@ -382,7 +527,7 @@ def extract_datasheet(
                     tables_path=_relative(table_path, out_dir),
                     table_count=len(tables),
                     vector_objects=vector_objects,
-                    drawing_page=vector_objects >= DRAWING_VECTOR_THRESHOLD,
+                    drawing_page=is_drawing_page,
                     order_similarity=similarity,
                 )
             )

@@ -1,13 +1,18 @@
 import hashlib
 import json
+import math
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageDraw
 from pydantic import ValidationError
 
+from circuit import partspec as partspec_module
 from circuit.advisory import build_review_record
 from circuit.datasheet import DatasheetExtraction, LaneResult, PageExtraction, PdfWord
 from circuit.partspec import (
+    CellRef,
     DatasheetRef,
     Dimension,
     ExposedPad,
@@ -16,7 +21,9 @@ from circuit.partspec import (
     PackageSpec,
     PartSpec,
     PinSpec,
+    PinTable,
     Reading,
+    SpecFinding,
     check_part_spec,
     load_part_spec,
     parse_dimension_text,
@@ -29,6 +36,17 @@ _IMPRESSION = (
     "This review records only directly visible datasheet evidence, not inferred "
     "manufacturing recommendations or assumptions about a footprint."
 )
+_REDERIVED_BY_PDF: dict[Path, tuple[DatasheetExtraction, Path]] = {}
+
+
+@pytest.fixture(autouse=True)
+def _mock_rederivation(monkeypatch: pytest.MonkeyPatch) -> None:
+    def rederive_pages(
+        pdf_path: Path, _pages: list[int], _dpi: int
+    ) -> tuple[DatasheetExtraction, Path]:
+        return _REDERIVED_BY_PDF[pdf_path.resolve()]
+
+    monkeypatch.setattr(partspec_module, "rederive_pages", rederive_pages)
 
 
 def _word_records(texts: list[str]) -> list[PdfWord]:
@@ -42,7 +60,33 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
     pdf_path = tmp_path / "parts.pdf"
     pdf_path.write_bytes(b"%PDF-1.4 fixture")
     png_path = tmp_path / "page-001.png"
-    png_path.write_bytes(b"png fixture")
+    scale = 300 / 72
+    image = Image.new(
+        "L",
+        (math.ceil(200 * scale), math.ceil(200 * scale)),
+        color=255,
+    )
+    draw = ImageDraw.Draw(image)
+    texts = ["3.1", "2.9", "0.8", "1", "SW", "EXAMPLE-1", "X", "1"]
+    words = [
+        *_word_records(texts),
+        PdfWord(text="D", x0=0, top=49, x1=5, bottom=58),
+        PdfWord(text="MIN mm", x0=8, top=41, x1=14, bottom=47),
+        PdfWord(text="MAX mm", x0=23, top=41, x1=29, bottom=47),
+        PdfWord(text="2.9", x0=8, top=49, x1=14, bottom=58),
+        PdfWord(text="3.1", x0=23, top=49, x1=29, bottom=58),
+    ]
+    for word in words:
+        draw.rectangle(
+            (
+                math.floor(word.x0 * scale),
+                math.floor(word.top * scale),
+                math.ceil(word.x1 * scale),
+                math.ceil(word.bottom * scale),
+            ),
+            fill=0,
+        )
+    image.save(png_path)
     vision_path = tmp_path / "vision.advisory.json"
     vision_record = build_review_record(
         png_path,
@@ -52,7 +96,6 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
         findings=[],
     )
     vision_path.write_text(vision_record.model_dump_json(indent=2), encoding="utf-8")
-    words = _word_records(["3.1", "2.9", "0.8", "1,2,3", "SW", "EXAMPLE-1", "X"])
     lane_records: list[LaneResult] = []
     for lane_name in ("poppler", "pdfplumber"):
         lane_path = tmp_path / f"page-001.{lane_name}.json"
@@ -69,8 +112,34 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
             )
         )
     tables_path = tmp_path / "page-001.tables.json"
+    tables = [
+        {
+            "bbox": [55, 0, 95, 40],
+            "rows": [["Pin No.", "Function"], ["1", "SW"]],
+            "cells": [
+                [[55, 30, 75, 40], [75, 30, 95, 40]],
+                [[55, 0, 75, 30], [75, 0, 95, 30]],
+            ],
+        },
+        {
+            "bbox": [95, 0, 155, 40],
+            "rows": [["MPN", "Package", "Pins"], ["EXAMPLE-1", "X", "1"]],
+            "cells": [
+                [[95, 30, 115, 40], [115, 30, 135, 40], [135, 30, 155, 40]],
+                [[95, 0, 115, 30], [115, 0, 135, 30], [135, 0, 155, 30]],
+            ],
+        },
+        {
+            "bbox": [0, 40, 30, 60],
+            "rows": [["Symbol", "MIN mm", "NOM mm", "MAX mm"], ["D", "2.9", None, "3.1"]],
+            "cells": [
+                [[0, 40, 7.5, 48], [7.5, 40, 15, 48], [15, 40, 22.5, 48], [22.5, 40, 30, 48]],
+                [[0, 48, 7.5, 60], [7.5, 48, 15, 60], [15, 48, 22.5, 60], [22.5, 48, 30, 60]],
+            ],
+        },
+    ]
     tables_path.write_text(
-        json.dumps({"tables": [{"bbox": [0, 0, 100, 100], "rows": [["1,2,3", "SW"]]}]}),
+        json.dumps({"tables": tables}),
         encoding="utf-8",
     )
     extraction = DatasheetExtraction(
@@ -89,7 +158,7 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
                 text_layer=True,
                 lanes=lane_records,
                 tables_path=tables_path.name,
-                table_count=1,
+                table_count=3,
                 vector_objects=12,
                 drawing_page=False,
                 order_similarity=0.5,
@@ -99,37 +168,40 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
     )
     extraction_path = tmp_path / "extraction.json"
     extraction_path.write_text(extraction.model_dump_json(indent=2), encoding="utf-8")
-    intake_path = tmp_path / "intake.json"
-    intake_path.write_text(
-        json.dumps(
-            {
-                "brief_sha256": "0" * 64,
-                "requirements": [
-                    {
-                        "id": "R1",
-                        "text": "The exposed thermal pad is pin 17.",
-                        "source": "user",
-                        "speaker": "user",
-                    }
-                ],
-                "assumptions": [],
-                "open_questions": [],
-                "part_sources": {},
-                "net_sources": {},
-            }
-        ),
-        encoding="utf-8",
-    )
+    derived_dir = tmp_path / "derived"
+    derived_dir.mkdir()
+    derived_png = derived_dir / png_path.name
+    image.save(derived_png)
+    derived_lane_records: list[LaneResult] = []
+    for lane_name in ("poppler", "pdfplumber"):
+        source_lane = tmp_path / f"page-001.{lane_name}.json"
+        (derived_dir / source_lane.name).write_bytes(source_lane.read_bytes())
+        derived_lane_records.append(
+            LaneResult(
+                lane=lane_name,
+                status="ok",
+                words_path=source_lane.name,
+                word_count=len(words),
+            )
+        )
+    derived_tables_path = derived_dir / tables_path.name
+    derived_tables_path.write_bytes(tables_path.read_bytes())
+    derived_extraction = extraction.model_copy(deep=True)
+    derived_extraction.pages[0].png_sha256 = hashlib.sha256(derived_png.read_bytes()).hexdigest()
+    derived_extraction.pages[0].lanes = derived_lane_records
+    _REDERIVED_BY_PDF[pdf_path.resolve()] = (derived_extraction, derived_dir)
 
     def dimension(
         vision: str, *, minimum: float | None, nominal: float | None, maximum: float | None
     ) -> Dimension:
+        bbox = (39, 9, 51, 21) if vision == "0.8" else (0, 9, 31, 21)
         return Dimension(
             min=minimum,
             nom=nominal,
             max=maximum,
             reading=Reading(
                 page=1,
+                bbox=bbox,
                 vision=vision,
                 vision_record=vision_path.name,
             ),
@@ -145,10 +217,9 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
             revision="A",
             extraction_path=extraction_path.name,
         ),
-        intake_path=intake_path.name,
         package=PackageSpec(
             family="custom",
-            code="X",
+            drawing_id="X",
             pin_count=1,
             body_length=dimension("3.1 2.9", minimum=2.9, nominal=None, maximum=3.1),
             body_width=dimension("3.1 2.9", minimum=2.9, nominal=None, maximum=3.1),
@@ -157,6 +228,7 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
             pin1_corner="top_left",
             pin1_reading=Reading(
                 page=1,
+                bbox=(0, 9, 11, 21),
                 vision="pin 1 is at the top left",
                 vision_record=vision_path.name,
             ),
@@ -176,7 +248,9 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
         orderable=[
             OrderableVariant(
                 mpn="EXAMPLE-1",
-                package_code="X",
+                package_designator="X",
+                pin_count=1,
+                row=CellRef(table=1, row=1, col=0),
                 reading=Reading(
                     page=1,
                     vision="EXAMPLE-1 X package variant",
@@ -184,7 +258,19 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
                 ),
             )
         ],
+        pin_table=PinTable(
+            page=1,
+            table=0,
+            number_col=0,
+            name_col=1,
+        ),
     )
+    spec.package.body_length.label = "D"
+    spec.package.body_length.reading.bbox = (0, 40, 30, 60)
+    spec.package.body_length.reading.cells = {
+        "min": CellRef(table=2, row=1, col=1),
+        "max": CellRef(table=2, row=1, col=3),
+    }
     spec_path = tmp_path / "part.spec.json"
     spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     return spec, extraction, spec_path, extraction_path
@@ -241,22 +327,100 @@ def test_parse_dimension_text_normalizes_numbers_and_rejects_unparseable() -> No
         parse_dimension_text("about 0.5 mm")
 
 
+def test_dimension_count_prefix_is_ignored_by_lane_comparison(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.package.pitch = Dimension(
+        nom=0.8,
+        reading=Reading(
+            page=1,
+            bbox=(39, 9, 51, 21),
+            vision="1X 0.8",
+            vision_record="vision.advisory.json",
+        ),
+    )
+    _save_spec(spec, spec_path)
+    _, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    for lane in ("poppler", "pdfplumber"):
+        words_path = derived_dir / f"page-001.{lane}.json"
+        words = json.loads(words_path.read_text(encoding="utf-8"))
+        next(word for word in words if word["text"] == "0.8")["text"] = "1X 0.8"
+        words_path.write_text(json.dumps(words), encoding="utf-8")
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    assert not any(
+        finding.code in {"mechanical_mismatch", "mechanical_single_lane"}
+        and finding.field == "package.pitch"
+        for finding in report.findings
+    )
+
+
+def test_centered_count_prefix_is_removed_before_stacked_dimension_values() -> None:
+    words = [
+        PdfWord(text="0.30", x0=10, top=0, x1=20, bottom=5),
+        PdfWord(text="16X", x0=0, top=2, x1=8, bottom=7),
+        PdfWord(text="0.18", x0=10, top=8, x1=20, bottom=13),
+    ]
+
+    assert partspec_module._numbers_in_bbox(  # pyright: ignore[reportPrivateUsage]
+        words, (0, 0, 20, 13), 16
+    ) == {
+        "0.3": 1,
+        "0.18": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("notation", "kind"),
+    [
+        ("1.0 BSC", "basic"),
+        ("1.0 TYP", "typical"),
+        ("(1.0)", "reference"),
+        ("1.0±0.1", "bilateral"),
+    ],
+)
+def test_parse_dimension_kind_notation(notation: str, kind: str) -> None:
+    assert parse_dimension_text(notation).kind == kind
+
+
 def test_strict_models_and_dimension_bounds() -> None:
     with pytest.raises(ValidationError):
         Reading(page=0, vision="x", vision_record="record.json")
     with pytest.raises(ValidationError):
-        Reading(page=1, vision="x", vision_record="record.json", user_confirmed="Qx")
-    assert (
-        Reading(page=1, vision="x", vision_record="record.json", user_confirmed="R4").user_confirmed
-        == "R4"
-    )
+        Reading.model_validate(
+            {
+                "page": 1,
+                "vision": "x",
+                "vision_record": "record.json",
+                "user_confirmed": "R1",
+            }
+        )
+    with pytest.raises(ValidationError):
+        Reading.model_validate(
+            {
+                "page": 1,
+                "vision": "x",
+                "vision_record": "record.json",
+                "cells": {"invalid": {"table": 0, "row": 0, "col": 0}},
+            }
+        )
     with pytest.raises(ValidationError, match="at least one"):
         Dimension(reading=Reading(page=1, vision="1", vision_record="r.json"))
     with pytest.raises(ValidationError, match="min <= nom"):
         Dimension(
             min=2,
             nom=1,
-            reading=Reading(page=1, vision="1", vision_record="r.json"),
+            reading=Reading(
+                page=1,
+                bbox=(0, 0, 10, 10),
+                vision="1",
+                vision_record="r.json",
+            ),
         )
     with pytest.raises(ValidationError, match="at least one dimension"):
         LandPattern(source="datasheet", pads=[], dimensions={})
@@ -319,22 +483,199 @@ def test_vision_record_missing_mismatch_and_value_mismatch(tmp_path: Path) -> No
     assert "value_mismatch" in codes
 
 
-def test_dimension_mechanical_mismatch_confirmation_disagreement_and_glyph_loss(
+def test_dimension_notation_kind_and_bound_table_cells_are_checked(
     tmp_path: Path,
 ) -> None:
     spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
-    spec.package.body_length.reading.user_confirmed = "R1"
-    spec.package.body_width.reading.mechanical = "3.2 2.9"
+    spec.package.body_length.kind = "basic"
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "kind_mismatch" in {finding.code for finding in report.findings}
+
+    derived, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    tables_path = derived_dir / "page-001.tables.json"
+    tables = json.loads(tables_path.read_text(encoding="utf-8"))
+    tables["tables"][2]["rows"][1][1] = "2.8"
+    tables_path.write_text(json.dumps(tables), encoding="utf-8")
+    _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()] = (derived, derived_dir)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "cell_value_mismatch" in {finding.code for finding in report.findings}
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ("header", "cell_header_mismatch"),
+        ("label", "cell_label_mismatch"),
+        ("units", "cell_unit_mismatch"),
+    ],
+)
+def test_dimension_cell_headers_labels_and_units_are_bound(
+    tmp_path: Path,
+    change: str,
+    expected: str,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    derived, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    tables_path = derived_dir / "page-001.tables.json"
+    tables = json.loads(tables_path.read_text(encoding="utf-8"))
+    if change == "header":
+        tables["tables"][2]["rows"][0][1] = "TYP mm"
+    elif change == "label":
+        tables["tables"][2]["rows"][1][0] = "E1"
+    else:
+        tables["tables"][2]["rows"][0][1] = "MIN inch"
+    tables_path.write_text(json.dumps(tables), encoding="utf-8")
+
+    if change in ("header", "units"):
+        for lane in ("poppler", "pdfplumber"):
+            words_path = derived_dir / f"page-001.{lane}.json"
+            words = json.loads(words_path.read_text(encoding="utf-8"))
+            next(word for word in words if word["text"] == "MIN mm")["text"] = (
+                "TYP mm" if change == "header" else "MIN inch"
+            )
+            words_path.write_text(json.dumps(words), encoding="utf-8")
+    elif change == "label":
+        for lane in ("poppler", "pdfplumber"):
+            words_path = derived_dir / f"page-001.{lane}.json"
+            words = json.loads(words_path.read_text(encoding="utf-8"))
+            next(word for word in words if word["text"] == "D")["text"] = "E1"
+            words_path.write_text(json.dumps(words), encoding="utf-8")
+
+    _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()] = (derived, derived_dir)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert expected in {finding.code for finding in report.findings}
+
+
+def test_fresh_rederivation_overrides_stored_words_and_detects_staleness(
+    tmp_path: Path,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    wrong_words = [PdfWord(text="999", x0=0, top=10, x1=10, bottom=20)]
+    for lane_name in ("poppler", "pdfplumber"):
+        (tmp_path / f"page-001.{lane_name}.json").write_text(
+            json.dumps([word.model_dump(mode="json") for word in wrong_words]),
+            encoding="utf-8",
+        )
+    (tmp_path / "page-001.tables.json").write_text("not-json", encoding="utf-8")
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert not any(
+        finding.code == "mechanical_mismatch" and finding.field == "package.body_length"
+        for finding in report.findings
+    )
+
+    derived, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    derived.pages[0].png_sha256 = "0" * 64
+    _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()] = (derived, derived_dir)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "extraction_stale" in {finding.code for finding in report.findings}
+
+
+def test_rederivation_failure_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+
+    def fail_rederive(
+        _pdf_path: Path, _pages: Sequence[int], _dpi: int
+    ) -> tuple[DatasheetExtraction, Path]:
+        raise RuntimeError("renderer failed")
+
+    monkeypatch.setattr(
+        partspec_module,
+        "rederive_pages",
+        fail_rederive,
+    )
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "rederivation_failed" in {finding.code for finding in report.findings}
+
+
+def test_single_lane_and_invisible_mechanical_evidence_fail(
+    tmp_path: Path,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    derived, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    derived.pages[0].lanes[1].status = "error"
+    _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()] = (derived, derived_dir)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "mechanical_single_lane" in {finding.code for finding in report.findings}
+
+    derived.pages[0].lanes[1].status = "ok"
+    white_page = Image.new(
+        "L",
+        (math.ceil(200 * 300 / 72), math.ceil(200 * 300 / 72)),
+        color=255,
+    )
+    ImageDraw.Draw(white_page).rectangle(
+        (0, math.floor(10 * 300 / 72), math.ceil(10 * 300 / 72), math.ceil(20 * 300 / 72)),
+        fill=0,
+    )
+    white_page.save(tmp_path / "page-001.png")
+    white_page.save(derived_dir / "page-001.png")
+    image_hash = hashlib.sha256((tmp_path / "page-001.png").read_bytes()).hexdigest()
+    extraction.pages[0].png_sha256 = image_hash
+    derived.pages[0].png_sha256 = image_hash
+    record_path = tmp_path / spec.package.pin1_reading.vision_record
+    record = build_review_record(
+        tmp_path / "page-001.png",
+        model="placeholder-vision-model",
+        checklist="datasheet",
+        impression=_IMPRESSION,
+        findings=[],
+    )
+    record_path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
+    _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()] = (derived, derived_dir)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "invisible_text" in {finding.code for finding in report.findings}
+
+
+def test_dimension_contradictions_and_glyph_loss_remain_errors(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.package.body_width.reading.vision = "3.2 2.9"
     spec.package.height.reading.vision = "□0.8±0.1"
+    spec.package.height.kind = "bilateral"
     spec.package.height.min = 0.7
     spec.package.height.nom = 0.8
     spec.package.height.max = 0.9
-    words = _word_records(["2.9", "0.8", "1,2,3", "SW"])
-    for lane_name in ("poppler", "pdfplumber"):
-        (tmp_path / f"page-001.{lane_name}.json").write_text(
-            json.dumps([word.model_dump(mode="json") for word in words]),
-            encoding="utf-8",
-        )
     _save_spec(spec, spec_path)
     report = check_part_spec(
         spec,
@@ -343,28 +684,93 @@ def test_dimension_mechanical_mismatch_confirmation_disagreement_and_glyph_loss(
         extraction_path=extraction_path,
     )
     coded = {(finding.code, finding.field, finding.severity) for finding in report.findings}
-    assert ("mechanical_unconfirmed_user_confirmed", "package.body_length", "warning") in coded
-    assert ("lane_disagreement", "package.body_width", "error") in coded
+    assert ("mechanical_mismatch", "package.body_width", "error") in coded
     assert ("mechanical_mismatch", "package.height", "error") in coded
-    assert ("glyph_loss", "package.height", "info") in coded
+    assert ("glyph_loss_ambiguous", "package.height", "error") in coded
+    assert ("glyph_loss", "package.height", "warning") in coded
+    assert (
+        sum(
+            finding.code == "glyph_loss" and finding.field == "package.height"
+            for finding in report.findings
+        )
+        == 1
+    )
+
+
+def test_stacked_dimension_limits_require_maximum_above_minimum(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.package.body_length.reading.bbox = (0, 5, 11, 35)
+    derived, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    scale = 300 / 72
+
+    def set_order(maximum_top: int, minimum_top: int) -> None:
+        image = Image.new(
+            "L",
+            (math.ceil(200 * scale), math.ceil(200 * scale)),
+            color=255,
+        )
+        draw = ImageDraw.Draw(image)
+        positions = {"3.1": maximum_top, "2.9": minimum_top}
+        for lane in ("poppler", "pdfplumber"):
+            words_path = derived_dir / f"page-001.{lane}.json"
+            words = json.loads(words_path.read_text(encoding="utf-8"))
+            for word in words:
+                if word["text"] in positions and word["top"] < 30:
+                    top = positions[word["text"]]
+                    word.update({"x0": 0, "x1": 10, "top": top, "bottom": top + 10})
+                    draw.rectangle(
+                        (
+                            0,
+                            math.floor(top * scale),
+                            math.ceil(10 * scale),
+                            math.ceil((top + 10) * scale),
+                        ),
+                        fill=0,
+                    )
+            words_path.write_text(json.dumps(words), encoding="utf-8")
+        image.save(tmp_path / "page-001.png")
+        image.save(derived_dir / "page-001.png")
+        image_hash = hashlib.sha256((tmp_path / "page-001.png").read_bytes()).hexdigest()
+        extraction.pages[0].png_sha256 = image_hash
+        derived.pages[0].png_sha256 = image_hash
+        record = build_review_record(
+            tmp_path / "page-001.png",
+            model="placeholder-vision-model",
+            checklist="datasheet",
+            impression=_IMPRESSION,
+            findings=[],
+        )
+        (tmp_path / "vision.advisory.json").write_text(
+            record.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+
+    set_order(10, 22)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "stacked_limit_order" not in {finding.code for finding in report.findings}
+
+    set_order(22, 10)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "stacked_limit_order" in {finding.code for finding in report.findings}
 
 
 def test_page_checks_pin_evidence_and_table_matching(tmp_path: Path) -> None:
     spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
     spec.package.pin1_reading.page = 2
+    spec.pins[0].reading.page = 2
     spec.pins[0].reading.vision = "1"
-    spec.pins[0].reading.user_confirmed = "R1"
-    for lane_name in ("poppler", "pdfplumber"):
-        path = tmp_path / f"page-001.{lane_name}.json"
-        words = _word_records(["3.1", "2.9", "0.8", "1,2,3"])
-        path.write_text(
-            json.dumps([word.model_dump(mode="json") for word in words]), encoding="utf-8"
-        )
-    tables_path = tmp_path / "page-001.tables.json"
-    tables_path.write_text(
-        json.dumps({"tables": [{"bbox": [0, 0, 1, 1], "rows": [["1,2,3", "EN"]]}]}),
-        encoding="utf-8",
-    )
+    spec.pin_table.number_col = 1
+    spec.pin_table.name_col = 0
     _save_spec(spec, spec_path)
     report = check_part_spec(
         spec,
@@ -375,8 +781,141 @@ def test_page_checks_pin_evidence_and_table_matching(tmp_path: Path) -> None:
     codes = {finding.code for finding in report.findings}
     assert "page_not_extracted" in codes
     assert "vision_unparseable" in codes
-    assert "mechanical_unconfirmed_user_confirmed" in codes
-    assert "pin_table_unmatched" in codes
+    assert "pin_reading_page_mismatch" in codes
+    assert "pin_table_bijection" in codes
+
+    spec.pin_table.table = 9
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "pin_table_missing" in {finding.code for finding in report.findings}
+
+
+def test_pin_table_range_expansion_and_lane_disagreement(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.package.pin_count = 3
+    spec.pins = [
+        spec.pins[0].model_copy(
+            update={
+                "number": str(number),
+                "reading": spec.pins[0].reading.model_copy(update={"vision": f"{number} SW"}),
+            }
+        )
+        for number in range(1, 4)
+    ]
+    spec.orderable[0].pin_count = 3
+    derived, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    table_path = derived_dir / "page-001.tables.json"
+    table_file = json.loads(table_path.read_text(encoding="utf-8"))
+    table_file["tables"][0]["rows"][1][0] = "1-3"
+    table_file["tables"][1]["rows"][1][2] = "3"
+    table_path.write_text(json.dumps(table_file), encoding="utf-8")
+    for lane in ("poppler", "pdfplumber"):
+        words_path = derived_dir / f"page-001.{lane}.json"
+        words = json.loads(words_path.read_text(encoding="utf-8"))
+        for word in words:
+            if word["x0"] == 60:
+                word["text"] = "1-3"
+            elif word["x0"] == 140:
+                word["text"] = "3"
+        words_path.write_text(json.dumps(words), encoding="utf-8")
+    _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()] = (derived, derived_dir)
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    codes = {finding.code for finding in report.findings}
+    assert "pin_table_bijection" not in codes
+    assert "pin_numbering_incomplete" not in codes
+
+    words_path = derived_dir / "page-001.poppler.json"
+    words = json.loads(words_path.read_text(encoding="utf-8"))
+    next(word for word in words if word["x0"] == 80)["text"] = "OTHER"
+    words_path.write_text(json.dumps(words), encoding="utf-8")
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "table_lane_disagreement" in {finding.code for finding in report.findings}
+
+    words = json.loads(words_path.read_text(encoding="utf-8"))
+    next(word for word in words if word["x0"] == 80)["text"] = "SW"
+    next(word for word in words if word["x0"] == 60)["text"] = "2"
+    words_path.write_text(json.dumps(words), encoding="utf-8")
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "table_lane_disagreement" in {finding.code for finding in report.findings}
+
+
+def test_pin_table_number_column_disambiguation_is_package_bound(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    derived, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    tables_path = derived_dir / "page-001.tables.json"
+    tables = json.loads(tables_path.read_text(encoding="utf-8"))
+    tables["tables"][0]["rows"] = [["X PIN", "NAME", "Y PIN"], ["1", "SW", "9"]]
+    tables_path.write_text(json.dumps(tables), encoding="utf-8")
+    _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()] = (derived, derived_dir)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "pin_table_column_ambiguous" in {finding.code for finding in report.findings}
+
+    spec.pin_table.column_designator = "X"
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "pin_table_column_ambiguous" not in {finding.code for finding in report.findings}
+    assert "pin_table_column_mismatch" not in {finding.code for finding in report.findings}
+
+    spec.pin_table.number_col = 2
+    spec.pin_table.column_designator = "Y"
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "pin_table_column_mismatch" in {finding.code for finding in report.findings}
+
+
+def test_drawing_identifier_must_appear_in_both_lanes(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    derived, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    for lane in ("poppler", "pdfplumber"):
+        words_path = derived_dir / f"page-001.{lane}.json"
+        words = json.loads(words_path.read_text(encoding="utf-8"))
+        words = [word for word in words if word["text"] != "X"]
+        words_path.write_text(json.dumps(words), encoding="utf-8")
+    _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()] = (derived, derived_dir)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "drawing_id_missing" in {finding.code for finding in report.findings}
 
 
 def test_mechanical_lane_unavailable_and_unparseable_vision(tmp_path: Path) -> None:
@@ -385,6 +924,11 @@ def test_mechanical_lane_unavailable_and_unparseable_vision(tmp_path: Path) -> N
     extraction.pages[0].lanes = [
         lane.model_copy(update={"status": "error"}) for lane in extraction.pages[0].lanes
     ]
+    derived, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    derived.pages[0].lanes = [
+        lane.model_copy(update={"status": "error"}) for lane in derived.pages[0].lanes
+    ]
+    _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()] = (derived, derived_dir)
     _save_spec(spec, spec_path)
     report = check_part_spec(
         spec,
@@ -394,7 +938,7 @@ def test_mechanical_lane_unavailable_and_unparseable_vision(tmp_path: Path) -> N
     )
     codes = {finding.code for finding in report.findings}
     assert "vision_unparseable" in codes
-    assert "mechanical_lane_unavailable" in codes
+    assert "mechanical_mismatch" in codes
 
 
 def test_consistency_errors_cover_pin_family_pitch_pad_and_height(tmp_path: Path) -> None:
@@ -404,17 +948,32 @@ def test_consistency_errors_cover_pin_family_pitch_pad_and_height(tmp_path: Path
     spec.package.pins_per_side = (3, 3, 3, 3)
     spec.package.pitch = Dimension(
         nom=4,
-        reading=Reading(page=1, vision="4", vision_record="vision.advisory.json"),
+        reading=Reading(
+            page=1,
+            bbox=(0, 9, 11, 21),
+            vision="4",
+            vision_record="vision.advisory.json",
+        ),
     )
     spec.package.exposed_pad = ExposedPad(
         number="17",
         length=Dimension(
             nom=4,
-            reading=Reading(page=1, vision="4", vision_record="vision.advisory.json"),
+            reading=Reading(
+                page=1,
+                bbox=(0, 9, 11, 21),
+                vision="4",
+                vision_record="vision.advisory.json",
+            ),
         ),
         width=Dimension(
             nom=4,
-            reading=Reading(page=1, vision="4", vision_record="vision.advisory.json"),
+            reading=Reading(
+                page=1,
+                bbox=(0, 9, 11, 21),
+                vision="4",
+                vision_record="vision.advisory.json",
+            ),
         ),
     )
     spec.package.height.nom = 0
@@ -459,39 +1018,6 @@ def test_pin_count_mismatch_and_load_failure(tmp_path: Path) -> None:
     spec_path.write_text("{", encoding="utf-8")
     with pytest.raises(ValueError, match="could not load"):
         load_part_spec(spec_path)
-
-
-def test_user_confirmation_requires_a_user_requirement(tmp_path: Path) -> None:
-    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
-    spec.package.body_length.reading.user_confirmed = "R9"
-    spec.package.body_length.reading.vision = "3.2 2.9"
-    _save_spec(spec, spec_path)
-    report = check_part_spec(
-        spec,
-        extraction,
-        spec_path=spec_path,
-        extraction_path=extraction_path,
-    )
-    findings = {(item.code, item.severity) for item in report.findings}
-    assert ("mechanical_mismatch", "error") in findings
-    assert ("user_confirmation_unverified", "error") in findings
-    assert not any(item.code == "mechanical_unconfirmed_user_confirmed" for item in report.findings)
-
-    intake_path = tmp_path / "intake.json"
-    intake_value = json.loads(intake_path.read_text(encoding="utf-8"))
-    intake_value["requirements"][0]["source"] = "agent"
-    intake_path.write_text(json.dumps(intake_value), encoding="utf-8")
-    spec.package.body_length.reading.user_confirmed = "R1"
-    _save_spec(spec, spec_path)
-    report = check_part_spec(
-        spec,
-        extraction,
-        spec_path=spec_path,
-        extraction_path=extraction_path,
-    )
-    findings = {(item.code, item.severity) for item in report.findings}
-    assert ("mechanical_mismatch", "error") in findings
-    assert ("user_confirmation_unverified", "error") in findings
 
 
 @pytest.mark.parametrize(
@@ -611,20 +1137,56 @@ def test_observation_log_is_found_above_spec_directory(
     assert "vision_observation_log_missing" not in codes
 
 
-def test_drawing_dimensions_warn_when_bbox_is_missing(tmp_path: Path) -> None:
-    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
-    extraction.pages[0].drawing_page = True
-    _save_spec(spec, spec_path)
-    report = check_part_spec(
-        spec,
-        extraction,
-        spec_path=spec_path,
-        extraction_path=extraction_path,
-    )
-    assert any(
-        item.code == "bbox_missing" and item.field == "package.body_length"
-        for item in report.findings
-    )
+def test_dimensions_and_pin1_readings_require_bounding_boxes() -> None:
+    with pytest.raises(ValidationError, match="requires a bounding box"):
+        Dimension(
+            nom=1.0,
+            reading=Reading(
+                page=1,
+                vision="1.0",
+                vision_record="vision.json",
+            ),
+        )
+    with pytest.raises(ValidationError, match="requires a bounding box"):
+        PackageSpec(
+            family="custom",
+            drawing_id="X",
+            pin_count=1,
+            body_length=Dimension(
+                nom=1,
+                reading=Reading(
+                    page=1,
+                    bbox=(0, 0, 1, 1),
+                    vision="1",
+                    vision_record="vision.json",
+                ),
+            ),
+            body_width=Dimension(
+                nom=1,
+                reading=Reading(
+                    page=1,
+                    bbox=(0, 0, 1, 1),
+                    vision="1",
+                    vision_record="vision.json",
+                ),
+            ),
+            height=Dimension(
+                nom=1,
+                reading=Reading(
+                    page=1,
+                    bbox=(0, 0, 1, 1),
+                    vision="1",
+                    vision_record="vision.json",
+                ),
+            ),
+            drawing_view="top",
+            pin1_corner="top_left",
+            pin1_reading=Reading(
+                page=1,
+                vision="top left",
+                vision_record="vision.json",
+            ),
+        )
 
 
 def test_quad_side_counts_and_axis_specific_pitch_bounds(tmp_path: Path) -> None:
@@ -634,15 +1196,30 @@ def test_quad_side_counts_and_axis_specific_pitch_bounds(tmp_path: Path) -> None
     spec.package.pins_per_side = (4, 4, 4, 4)
     spec.package.pitch = Dimension(
         nom=1.5,
-        reading=Reading(page=1, vision="1.5", vision_record="vision.advisory.json"),
+        reading=Reading(
+            page=1,
+            bbox=(0, 9, 11, 21),
+            vision="1.5",
+            vision_record="vision.advisory.json",
+        ),
     )
     spec.package.body_length = Dimension(
         nom=8,
-        reading=Reading(page=1, vision="8", vision_record="vision.advisory.json"),
+        reading=Reading(
+            page=1,
+            bbox=(0, 9, 11, 21),
+            vision="8",
+            vision_record="vision.advisory.json",
+        ),
     )
     spec.package.body_width = Dimension(
         nom=4,
-        reading=Reading(page=1, vision="4", vision_record="vision.advisory.json"),
+        reading=Reading(
+            page=1,
+            bbox=(0, 9, 11, 21),
+            vision="4",
+            vision_record="vision.advisory.json",
+        ),
     )
     _save_spec(spec, spec_path)
     report = check_part_spec(
@@ -705,7 +1282,19 @@ def test_pin1_corner_respects_drawing_view(
 
 def test_orderable_variant_binding_and_vision_proof(tmp_path: Path) -> None:
     spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
-    spec.orderable[0].package_code = "Y"
+    spec.orderable[0].package_designator = "Y"
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    codes = {item.code for item in report.findings}
+    assert "orderable_designator_mismatch" in codes
+    assert "package_variant_unbound" not in codes
+
+    spec.orderable[0].mpn = "OTHER-MPN"
     _save_spec(spec, spec_path)
     report = check_part_spec(
         spec,
@@ -714,8 +1303,20 @@ def test_orderable_variant_binding_and_vision_proof(tmp_path: Path) -> None:
         extraction_path=extraction_path,
     )
     assert "package_variant_unbound" in {item.code for item in report.findings}
+    spec.orderable[0].mpn = "EXAMPLE-1"
 
-    spec.orderable[0].package_code = "X"
+    spec.orderable[0].package_designator = "X"
+    spec.orderable[0].pin_count = 2
+    _save_spec(spec, spec_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "orderable_pin_count_mismatch" in {item.code for item in report.findings}
+
+    spec.orderable[0].pin_count = 1
     spec.orderable[0].reading.vision_record = "missing-vision.json"
     _save_spec(spec, spec_path)
     report = check_part_spec(
@@ -741,32 +1342,82 @@ def test_orderable_variant_binding_and_vision_proof(tmp_path: Path) -> None:
     assert "package_variant_unbound" not in {item.code for item in report.findings}
 
 
-def test_orderable_mechanical_mismatch_uses_verified_confirmation(
-    tmp_path: Path,
+def test_orderable_combined_package_and_pin_cell_matches_both_lanes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
-    words = _word_records(["3.1", "2.9", "0.8", "1,2,3", "SW"])
-    for lane_name in ("poppler", "pdfplumber"):
-        (tmp_path / f"page-001.{lane_name}.json").write_text(
-            json.dumps([word.model_dump(mode="json") for word in words]),
-            encoding="utf-8",
-        )
-    spec.orderable[0].reading.user_confirmed = "R1"
-    _save_spec(spec, spec_path)
-    report = check_part_spec(
+    spec, extraction, _spec_path, extraction_path = _fixture(tmp_path)
+    tables_path = tmp_path / "page-001.tables.json"
+    table_data = json.loads(tables_path.read_text(encoding="utf-8"))
+    table_data["tables"][1]["rows"][1] = ["EXAMPLE-1", "Active", "Production", "X | 1"]
+    table_data["tables"][1]["cells"][1] = [
+        [95, 0, 115, 30],
+        [115, 0, 125, 30],
+        [125, 0, 135, 30],
+        [135, 0, 155, 30],
+    ]
+    tables_path.write_text(json.dumps(table_data), encoding="utf-8")
+
+    def cell_text(
+        _extraction: DatasheetExtraction,
+        _extraction_dir: Path,
+        _page: PageExtraction,
+        _table: dict[str, object],
+        _rows: list[list[str | None]],
+        _row_index: int,
+        col_index: int,
+        **_kwargs: object,
+    ) -> tuple[str | None, str | None]:
+        values = ["EXAMPLE-1", "Active", "Production", "X | 1"]
+        return values[col_index], values[col_index]
+
+    monkeypatch.setattr(partspec_module, "_cell_lane_texts", cell_text)
+    findings: list[SpecFinding] = []
+    partspec_module._orderable_row_checks(  # pyright: ignore[reportPrivateUsage]
         spec,
+        spec.orderable[0],
+        0,
         extraction,
-        spec_path=spec_path,
-        extraction_path=extraction_path,
+        extraction_path.parent,
+        extraction.pages[0],
+        findings,
     )
-    assert any(
-        item.code == "mechanical_unconfirmed_user_confirmed"
-        and item.field == "orderable[0]"
-        and item.severity == "warning"
-        for item in report.findings
+    assert not any(
+        finding.code
+        in {
+            "orderable_designator_mismatch",
+            "orderable_pin_count_mismatch",
+        }
+        for finding in findings
     )
 
-    spec.orderable[0].reading.user_confirmed = "R9"
+
+def test_unprinted_exposed_pad_number_uses_bound_pin_name(tmp_path: Path) -> None:
+    spec, extraction, _spec_path, _extraction_path = _fixture(tmp_path)
+    spec.package.exposed_pad = ExposedPad(
+        number="17",
+        length=spec.package.body_length,
+        width=spec.package.body_width,
+    )
+    pin = PinSpec(
+        number="17",
+        name="Exposed Thermal Pad",
+        electrical_type="passive",
+        reading=Reading(
+            page=1,
+            vision="Exposed Thermal Pad",
+            vision_record="vision.advisory.json",
+        ),
+    )
+    findings: list[SpecFinding] = []
+    partspec_module._pin_checks(  # pyright: ignore[reportPrivateUsage]
+        spec, tmp_path, pin, 0, extraction.pages[0], findings
+    )
+    assert not any(item.code == "vision_unparseable" for item in findings)
+
+
+def test_orderable_mechanical_mismatch_cannot_be_downgraded(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.orderable[0].mpn = "NOT-EXAMPLE"
     _save_spec(spec, spec_path)
     report = check_part_spec(
         spec,
@@ -775,15 +1426,12 @@ def test_orderable_mechanical_mismatch_uses_verified_confirmation(
         extraction_path=extraction_path,
     )
     assert any(
-        item.code == "mechanical_mismatch"
+        item.code == "orderable_mpn_mismatch"
         and item.field == "orderable[0]"
         and item.severity == "error"
         for item in report.findings
     )
-    assert any(
-        item.code == "user_confirmation_unverified" and item.field == "orderable[0]"
-        for item in report.findings
-    )
+    assert "mechanical_unconfirmed_user_confirmed" not in {item.code for item in report.findings}
 
 
 def test_pin_view_is_recorded_without_extra_validation(tmp_path: Path) -> None:

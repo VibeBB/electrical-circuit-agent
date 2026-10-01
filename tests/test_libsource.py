@@ -321,7 +321,7 @@ def test_import_refuses_protected_destinations_and_out_of_root_official_sources(
     [
         (".step", b"ISO-10303-21;\n", True),
         (".step", b"not a STEP", False),
-        (".stpz", gzip.compress(b"ISO-10303-21"), True),
+        (".stpz", gzip.compress(b"ISO-10303-21", mtime=0), True),
         (".stpz", b"not gzip", False),
         (".wrl", b"#VRML V2.0 utf8\n", True),
         (".wrl", b"not VRML", False),
