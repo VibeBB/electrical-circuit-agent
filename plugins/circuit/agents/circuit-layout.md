@@ -62,6 +62,15 @@ stack-up expectations, finish, assembly notes), write them into board text on a
 documentation layer rather than leaving them implied — a fab drawing that only
 shows copper communicates half the intent.
 
+When authoring or tuning a project footprint, complete the mandatory STEP path:
+generate with `circuit_model_generate`, inspect with `circuit_model_inspect`,
+run `circuit_library_verify`, and create/answer the datasheet comparison with
+`circuit_model_compare` and `circuit_vision_answer`. Do not treat missing model
+evidence as complete. If a manufacturer STEP produces
+`model_terminals_unseparable`, stop and ask a HumanRequest-style question about
+the unseparable terminals and a suitable authoritative alternative; never
+bypass or weaken the check.
+
 Advisory Konnect checks for this stage include board info/extents/layers,
 `score_placement`, dry-run `refine_placement_force_directed`, design rules and
 netclasses, dry-run `fix_connectivity`, `query_traces`, `get_connected_items`,

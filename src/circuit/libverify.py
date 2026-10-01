@@ -116,6 +116,17 @@ class VerifiedModel(BaseModel):
     export_oracle: ModelExportReport | None = None
 
 
+class ModelInspectionReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_kind: Literal["circuit_model_inspection"] = "circuit_model_inspection"
+    verdict: Literal["pass", "fail"]
+    path: Path
+    sha256: str | None
+    facts: VerifiedModelInspection | None
+    findings: list[VerifyFinding]
+
+
 class ModelCrossCheckGeometry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2250,6 +2261,74 @@ def _verify_model_geometry(
         closed_shells=tuple(solid.closed_shell for solid in facts.solids),
         pin1_marker=marker,
         pin1_color_marker=color_marker,
+    )
+
+
+def inspect_model_file(
+    spec: PartSpec,
+    footprint_path: Path,
+    model_path: Path,
+    *,
+    tolerance_mm: float = 0.02,
+) -> ModelInspectionReport:
+    """Inspect one STEP file against its PartSpec and footprint geometry."""
+
+    if not math.isfinite(tolerance_mm) or tolerance_mm < 0:
+        raise ValueError("tolerance_mm must be finite and non-negative")
+    resolved: Path | None = None
+    try:
+        candidate = model_path.resolve(strict=True)
+    except OSError:
+        candidate = None
+    if candidate is not None and candidate.is_file():
+        resolved = candidate
+    model_sha256 = _sha256(resolved) if resolved is not None else None
+    findings: list[VerifyFinding] = []
+    facts: VerifiedModelInspection | None = None
+    try:
+        footprint = parse_footprint(footprint_path)
+    except (LibItemError, OSError) as exc:
+        footprint = None
+        _finding(
+            findings,
+            "model_footprint_unavailable",
+            "error",
+            str(footprint_path),
+            f"footprint inspection failed: {exc}",
+            model_sha256=model_sha256,
+        )
+    if resolved is None:
+        _finding(
+            findings,
+            "model_missing",
+            "error",
+            str(model_path),
+            "STEP model file is missing or unreadable",
+            model_sha256=model_sha256,
+        )
+    elif footprint is not None:
+        model = ModelRef(
+            path=str(model_path),
+            offset=(0.0, 0.0, 0.0),
+            scale=(1.0, 1.0, 1.0),
+            rotate=(0.0, 0.0, 0.0),
+        )
+        facts = _verify_model_geometry(
+            spec,
+            footprint,
+            footprint_path,
+            model,
+            resolved,
+            model_sha256,
+            tolerance_mm,
+            findings,
+        )
+    return ModelInspectionReport(
+        verdict="fail" if any(item.severity == "error" for item in findings) else "pass",
+        path=model_path,
+        sha256=model_sha256,
+        facts=facts,
+        findings=findings,
     )
 
 

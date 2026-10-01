@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from circuit.mcp_server import tool_specs
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = REPO_ROOT / "plugins" / "circuit"
 
@@ -47,6 +49,11 @@ EXPECTED_POST_TOOL_USE_HOOKS = {
     "record-authoring-commit",
     "record-image-observation",
     "record-vision-tool-event",
+}
+EXPECTED_CIRCUIT_MCP_TOOLS = {
+    "circuit_model_generate",
+    "circuit_model_inspect",
+    "circuit_model_compare",
 }
 
 
@@ -124,6 +131,10 @@ def check_plugin(plugin_dir: Path) -> list[str]:
                 )
 
     registered = _registered_tools()
+    circuit_tools = {tool.name for tool in tool_specs()}
+    missing_circuit_tools = EXPECTED_CIRCUIT_MCP_TOOLS - circuit_tools
+    if missing_circuit_tools:
+        reasons.append(f"missing circuit MCP tools {sorted(missing_circuit_tools)}")
     for agent in plugin.agents:
         for tool in agent.tools:
             if tool not in registered:

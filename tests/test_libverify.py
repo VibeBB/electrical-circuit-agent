@@ -21,7 +21,7 @@ from circuit.libsource import (
     SourceInfo,
 )
 from circuit.libtestboard import TestBoard, TestBoardFinding
-from circuit.libverify import LibraryVerification, verify_library_part
+from circuit.libverify import LibraryVerification, inspect_model_file, verify_library_part
 from circuit.lineage import (
     FootprintBase,
     FootprintLineage,
@@ -1676,6 +1676,18 @@ def test_footprint_and_geometry_rules(
         footprint_kwargs=footprint_kwargs,
     )
     assert expected_codes <= _codes(report)
+
+
+def test_inspect_model_file_reports_missing_model(tmp_path: Path) -> None:
+    report = inspect_model_file(
+        _dual_spec(),
+        Path(__file__).parent / "data" / "library" / "modern.kicad_mod",
+        tmp_path / "missing.step",
+    )
+
+    assert report.verdict == "fail"
+    assert report.sha256 is None
+    assert [finding.code for finding in report.findings] == ["model_missing"]
 
 
 def test_model_and_tolerance_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

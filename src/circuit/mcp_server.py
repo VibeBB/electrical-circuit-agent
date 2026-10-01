@@ -42,6 +42,7 @@ from . import (
     libreview,
     libsource,
     libverify,
+    model3d,
     netlist,
     partspec,
     raster,
@@ -502,6 +503,49 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_model_generate",
+        "Generate a deterministic STEP model and provenance manifest from a PartSpec and footprint",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "footprint_path": {"type": "string"},
+                "output_dir": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["part_spec_path", "footprint_path"],
+        },
+    ),
+    (
+        "circuit_model_inspect",
+        "Inspect a STEP model against its PartSpec and footprint, returning facts and findings",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "footprint_path": {"type": "string"},
+                "model_path": {"type": "string"},
+                "tolerance_mm": {"type": "number", "default": 0.02},
+                "output_path": {"type": "string"},
+            },
+            "required": ["part_spec_path", "footprint_path", "model_path"],
+        },
+    ),
+    (
+        "circuit_model_compare",
+        "Create a datasheet/model comparison using the existing vision read and answer flow",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "footprint_path": {"type": "string"},
+                "model_path": {"type": "string"},
+                "out_dir": {"type": "string"},
+            },
+            "required": ["part_spec_path", "footprint_path", "model_path"],
+        },
+    ),
+    (
         "circuit_vision_answer",
         "Record answers to a tool-managed vision-read batch",
         {
@@ -882,6 +926,9 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_datasheet_extract": _anno("Datasheet extraction", write=True),
     "circuit_vision_read": _anno("Create datasheet vision reads", write=True),
     "circuit_vision_compare": _anno("Compare library art with datasheet", write=True),
+    "circuit_model_generate": _anno("Generate deterministic STEP model", write=True),
+    "circuit_model_inspect": _anno("Inspect STEP model facts and findings", write=True),
+    "circuit_model_compare": _anno("Compare STEP model with datasheet drawing", write=True),
     "circuit_vision_answer": _anno("Record datasheet vision answers", write=True),
     "circuit_part_author_commit": _anno("Seal a blind authoring lane", write=True),
     "circuit_part_author_compare": _anno("Compare sealed authoring lanes", write=True),
@@ -984,6 +1031,40 @@ def _authoring_tool(name: str, args: dict[str, Any]) -> tuple[Any, list[Path]] |
             else Path(str(args["part_spec_path"])).resolve().parent
             / "vision-reads"
             / batch.batch_id
+        )
+        return (
+            {
+                "batch_id": batch.batch_id,
+                "batch_path": str(batch_dir / "batch.json"),
+                "items": [
+                    {
+                        "read_id": item.read_id,
+                        "kind": item.kind,
+                        "prompt": item.prompt,
+                        "bindings": item.bindings,
+                        "image_path": str(batch_dir / item.image_path),
+                    }
+                    for item in batch.items
+                ],
+            },
+            [batch_dir / item.image_path for item in batch.items],
+        )
+    if name == "circuit_model_compare":
+        spec_path = Path(str(args["part_spec_path"]))
+        out_dir = Path(str(args["out_dir"])) if isinstance(args.get("out_dir"), str) else None
+        batch = libraryvision.compare_model(
+            spec_path,
+            Path(str(args["footprint_path"])),
+            Path(str(args["model_path"])),
+            out_dir=out_dir,
+            lane=os.environ.get("CIRCUIT_AUTHORING_LANE", "main"),
+            profile=os.environ.get("CIRCUIT_LLM_PROFILE", ""),
+            model=os.environ.get("CIRCUIT_LLM_MODEL", "unknown"),
+        )
+        batch_dir = (
+            out_dir.resolve()
+            if out_dir is not None
+            else spec_path.resolve().parent / "vision-reads" / batch.batch_id
         )
         return (
             {
@@ -1419,6 +1500,34 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 "part-spec",
             )
             output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_model_generate":
+            spec_path = Path(str(args["part_spec_path"]))
+            spec = partspec.load_part_spec(spec_path)
+            footprint_path = Path(str(args["footprint_path"]))
+            output_dir = Path(str(args.get("output_dir") or spec_path.parent / "models"))
+            result = model3d.generate_model(spec, footprint_path, output_dir)
+            output = _output_path(
+                spec_path,
+                _optional_string(args.get("output_path")),
+                "model-generation",
+            )
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_model_inspect":
+            spec_path = Path(str(args["part_spec_path"]))
+            spec = partspec.load_part_spec(spec_path)
+            model_path = Path(str(args["model_path"]))
+            result = libverify.inspect_model_file(
+                spec,
+                Path(str(args["footprint_path"])),
+                model_path,
+                tolerance_mm=float(args.get("tolerance_mm", 0.02)),
+            )
+            output = _output_path(
+                model_path,
+                _optional_string(args.get("output_path")),
+                "inspection",
+            )
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         elif name == "circuit_land_pattern":
             spec_path = Path(str(args["part_spec_path"]))
             spec = partspec.load_part_spec(spec_path)
@@ -1766,7 +1875,12 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
         content: list[ContentBlock] = [TextContent(type="text", text=_json(value))]
         image_limit = (
             _MAX_VISION_IMAGES
-            if name in {"circuit_vision_read", "circuit_vision_compare"}
+            if name
+            in {
+                "circuit_vision_read",
+                "circuit_vision_compare",
+                "circuit_model_compare",
+            }
             else _MAX_INLINE_IMAGES
         )
         for image_path in image_paths[:image_limit]:
