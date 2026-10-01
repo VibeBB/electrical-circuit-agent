@@ -271,6 +271,17 @@ def test_table_prompt_and_normalization_are_fixed(
     assert record.impressions[item.read_id] == FIXTURE_IMPRESSION
 
 
+def test_pin_labels_prompt_has_no_trailing_quote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, batch = _batch(tmp_path, monkeypatch, kind="pin_labels")
+    item = next(item for item in batch.items if not item.control)
+    assert item.prompt == (
+        "List every pin number visible in this pinout drawing with the signal name printed next "
+        'to it, as a JSON object {"<number>": "<name>"}.'
+    )
+
+
 @pytest.mark.parametrize(
     "impression",
     [

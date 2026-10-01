@@ -35,6 +35,10 @@ def _read_profile(path: Path) -> dict[str, object] | None:
     return cast(dict[str, object], data)
 
 
+def _profile_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
 def _atomic_write(path: Path, payload: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
@@ -53,6 +57,8 @@ def main() -> int:
     active = settings.get("active_profile")
     findings: list[str] = []
     store = Path.home() / ".openhands" / "profiles"
+    templates: dict[str, str | None] = {name: None for name in _PROFILES}
+    preserved: list[str] = []
 
     if not isinstance(active, str) or not active:
         findings.append("no active_profile in ~/.openhands/settings.json")
@@ -61,17 +67,41 @@ def main() -> int:
         if template is None:
             findings.append(f"active_profile {active!r} is unreadable")
         else:
-            for name in _PROFILES:
+            author_b_name = active
+            author_b_template = template
+            active_model = template.get("model")
+            if isinstance(active_model, str):
+                for candidate_path in sorted(store.glob("*.json"), key=lambda path: path.name):
+                    if candidate_path.stem.startswith("vibebb-"):
+                        continue
+                    candidate = _read_profile(candidate_path)
+                    if candidate is None:
+                        continue
+                    candidate_model = candidate.get("model")
+                    if isinstance(candidate_model, str) and candidate_model != active_model:
+                        author_b_name = candidate_path.stem
+                        author_b_template = candidate
+                        break
+            profile_templates = {
+                "vibebb-part-author-a": (active, template),
+                "vibebb-part-author-b": (author_b_name, author_b_template),
+            }
+            for name, (source_name, profile_template) in profile_templates.items():
                 destination = store / f"{name}.json"
-                if destination.is_file():
+                if _profile_exists(destination):
+                    preserved.append(name)
                     continue
+                templates[name] = source_name
                 try:
-                    _atomic_write(destination, json.dumps(template, indent=2) + "\n")
-                    findings.append(f"provisioned {name} from {active}")
+                    _atomic_write(
+                        destination,
+                        json.dumps(profile_template, indent=2) + "\n",
+                    )
+                    findings.append(f"provisioned {name} from {source_name}")
                 except OSError as exc:
                     findings.append(f"could not write {destination}: {exc}")
 
-    missing = [name for name in _PROFILES if not (store / f"{name}.json").is_file()]
+    missing = [name for name in _PROFILES if not _profile_exists(store / f"{name}.json")]
     profiles = {name: _read_profile(store / f"{name}.json") for name in _PROFILES}
     models = [
         profile.get("model")
@@ -95,6 +125,8 @@ def main() -> int:
                 "profiles": _PROFILES,
                 "missing": missing,
                 "authoring_model_diversity": diversity,
+                "templates": templates,
+                "preserved": preserved,
                 "findings": findings,
             }
         )

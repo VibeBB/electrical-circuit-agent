@@ -45,7 +45,7 @@ _PROMPTS: dict[VisionKind, str] = {
     "pin_labels": (
         "List every pin number visible in this pinout drawing with the signal "
         "name printed next to it, "
-        'as a JSON object {"<number>": "<name>"}."'
+        'as a JSON object {"<number>": "<name>"}.'
     ),
     "table": (
         "Transcribe the table in this image as JSON: a list of rows, each row "

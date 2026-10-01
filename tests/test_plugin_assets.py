@@ -151,6 +151,11 @@ def test_ensure_part_author_profiles_provisions_and_reports_diversity(
     payload = json.loads(proc.stdout)
     assert payload["missing"] == []
     assert payload["authoring_model_diversity"] == "same"
+    assert payload["templates"] == {
+        "vibebb-part-author-a": "test-model",
+        "vibebb-part-author-b": "test-model",
+    }
+    assert payload["preserved"] == []
     for name in ("vibebb-part-author-a", "vibebb-part-author-b"):
         assert json.loads((profiles / f"{name}.json").read_text(encoding="utf-8"))["model"] == (
             "test-model"
@@ -168,7 +173,16 @@ def test_ensure_part_author_profiles_provisions_and_reports_diversity(
         check=False,
     )
     assert distinct.returncode == 0
-    assert json.loads(distinct.stdout)["authoring_model_diversity"] == "distinct"
+    distinct_payload = json.loads(distinct.stdout)
+    assert distinct_payload["authoring_model_diversity"] == "distinct"
+    assert distinct_payload["templates"] == {
+        "vibebb-part-author-a": None,
+        "vibebb-part-author-b": None,
+    }
+    assert distinct_payload["preserved"] == [
+        "vibebb-part-author-a",
+        "vibebb-part-author-b",
+    ]
 
 
 def test_ensure_llm_profiles_tolerates_missing_settings(tmp_path: Path) -> None:

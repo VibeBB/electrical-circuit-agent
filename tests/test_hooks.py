@@ -45,6 +45,14 @@ LIBRARY_REVIEW_SCRIPT = (
     / "scripts"
     / "record_library_review.py"
 )
+PART_AUTHOR_PROFILES_SCRIPT = (
+    Path(__file__).parents[1]
+    / "plugins"
+    / "circuit"
+    / "hooks"
+    / "scripts"
+    / "ensure_part_author_profiles.py"
+)
 
 
 def _run_protect_hook(payload: dict[str, Any]) -> subprocess.CompletedProcess[str]:
@@ -129,6 +137,44 @@ def test_protect_allows_reading_agent_canvas_events() -> None:
         },
     }
     assert _run_protect_hook(payload).returncode == 0
+
+
+def test_part_author_profiles_use_first_distinct_model(tmp_path: Path) -> None:
+    profile_dir = tmp_path / ".openhands" / "profiles"
+    profile_dir.mkdir(parents=True)
+    (tmp_path / ".openhands" / "settings.json").write_text(
+        json.dumps({"active_profile": "active-model"}), encoding="utf-8"
+    )
+    for name, model in (
+        ("active-model", "model-active"),
+        ("aaa-model", "model-a"),
+        ("zzz-model", "model-z"),
+        ("vibebb-candidate", "model-ignored"),
+    ):
+        (profile_dir / f"{name}.json").write_text(
+            json.dumps({"model": model}),
+            encoding="utf-8",
+        )
+    (profile_dir / "000-unreadable.json").write_text("{", encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(PART_AUTHOR_PROFILES_SCRIPT)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+    assert output["templates"] == {
+        "vibebb-part-author-a": "active-model",
+        "vibebb-part-author-b": "aaa-model",
+    }
+    author_a = json.loads((profile_dir / "vibebb-part-author-a.json").read_text(encoding="utf-8"))
+    author_b = json.loads((profile_dir / "vibebb-part-author-b.json").read_text(encoding="utf-8"))
+    assert author_a["model"] == "model-active"
+    assert author_b["model"] == "model-a"
 
 
 def test_protect_denies_terminal_design_writes() -> None:

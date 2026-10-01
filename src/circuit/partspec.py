@@ -1539,7 +1539,13 @@ def _vision_read_binding(
 def _vision_transcription_matches(expected: str, actual: str) -> bool:
     expected_text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", expected))
     actual_text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", actual))
-    return bool(expected_text) and expected_text in actual_text
+    return bool(expected_text) and (
+        re.search(
+            rf"(?<![0-9A-Za-z.]){re.escape(expected_text)}(?![0-9A-Za-z])",
+            actual_text,
+        )
+        is not None
+    )
 
 
 def _vision_name_map_matches(expected: dict[str, str], actual: object) -> bool:

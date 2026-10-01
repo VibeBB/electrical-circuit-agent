@@ -26,6 +26,7 @@ from circuit.partspec import (
     PinTable,
     Reading,
     SpecFinding,
+    _vision_transcription_matches,  # pyright: ignore[reportPrivateUsage]
     check_part_spec,
     load_part_spec,
     parse_dimension_text,
@@ -42,6 +43,23 @@ _IMPRESSION = (
     "manufacturing recommendations or assumptions about a footprint."
 )
 _REDERIVED_BY_PDF: dict[Path, tuple[DatasheetExtraction, Path]] = {}
+
+
+@pytest.mark.parametrize(
+    ("expected", "actual", "matches"),
+    [
+        ("1", "16", False),
+        ("0.5", "10.5", False),
+        ("1.68", "□1.68±0.07", True),
+        ("", "1", False),
+    ],
+)
+def test_vision_transcription_matches_token_boundaries(
+    expected: str,
+    actual: str,
+    matches: bool,
+) -> None:
+    assert _vision_transcription_matches(expected, actual) is matches
 
 
 @pytest.fixture(autouse=True)
