@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  attestations: read
 
 concurrency:
   group: locked-image-check
@@ -23,6 +24,7 @@ jobs:
       image: ${{ steps.lock.outputs.image }}
       digest: ${{ steps.lock.outputs.digest }}
       attestation: ${{ steps.lock.outputs.attestation }}
+      sbom_attestation: ${{ steps.sbom.outputs.sbom_attestation }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -100,6 +102,42 @@ jobs:
               output.write(f"digest={digest}\n")
               output.write(f"attestation={attestation}\n")
           PY
+      - id: sbom
+        env:
+          LOCK_PATH: docker/image-digests.json
+          LOCK_ENTRY: circuit_tools
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          path = Path(os.environ["LOCK_PATH"])
+          entry = None
+          if path.is_file():
+              data = json.loads(path.read_text(encoding="utf-8"))
+              if not isinstance(data, dict):
+                  raise SystemExit("image digest lock must be a JSON object")
+              entry = data.get(os.environ["LOCK_ENTRY"])
+          if entry is not None and not isinstance(entry, dict):
+              raise SystemExit("image lock entry must be an object")
+          sbom_attestation = entry.get("sbom_attestation") if entry else None
+          if entry and entry.get("digest") is None and entry.get("tag") is None:
+              if sbom_attestation is not None:
+                  raise SystemExit("unpublished image entry cannot have an SBOM attestation")
+              sbom_attestation = ""
+          elif sbom_attestation is not None:
+              parsed = urlsplit(sbom_attestation) if isinstance(sbom_attestation, str) else None
+              if (
+                  parsed is None
+                  or parsed.scheme != "https"
+                  or not parsed.netloc
+                  or any(character.isspace() for character in sbom_attestation)
+              ):
+                  raise SystemExit("image lock SBOM attestation must be an HTTPS URL")
+          print(f"sbom_attestation={sbom_attestation or ''}")
+          PY
   check:
     needs: check-lock
     if: needs.check-lock.outputs.present == 'true'
@@ -131,6 +169,20 @@ jobs:
           gh attestation verify "oci://${IMAGE}@${DIGEST}" \
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
+      - name: Warn when tools image has no SBOM attestation
+        if: needs.check-lock.outputs.sbom_attestation == ''
+        run: echo "::warning::circuit_tools image lock has no SBOM attestation; continuing"
+      - name: Verify tools image SBOM attestation
+        if: needs.check-lock.outputs.sbom_attestation != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ needs.check-lock.outputs.image }}
+          DIGEST: ${{ needs.check-lock.outputs.digest }}
+        run: |
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
+            --predicate-type https://spdx.dev/Document/v2.3
       - run: uv run python scripts/pull_locked_image.py --entry circuit_tools
       - id: image
         run: echo "ref=$(uv run python scripts/print_locked_image.py --entry circuit_tools)" >> "$GITHUB_OUTPUT"
@@ -138,6 +190,78 @@ jobs:
         env:
           IMAGE_REF: ${{ steps.image.outputs.ref }}
         run: docker run --rm --user circuit -v "$PWD/fixtures/smoke-board:/work:ro" "$IMAGE_REF" python3 /opt/circuit/bin/smoke_kicad11_konnect.py
+      - name: Smoke locked image through the plugin launcher
+        env:
+          CIRCUIT_VERIFY_ATTESTATION: ${{ needs.check-lock.outputs.attestation != '' && 'require' || 'auto' }}
+          GH_TOKEN: ${{ github.token }}
+          OPENHANDS_PROJECT_DIR: ${{ github.workspace }}
+          SMOKE_OUT: ${{ github.workspace }}/circuit-smoke-out
+        run: |
+          set -euo pipefail
+          mkdir -p "$SMOKE_OUT"
+          launcher=plugins/circuit/scripts/circuit_launcher.py
+          python3 "$launcher" prewarm
+          python3 "$launcher" doctor > "$SMOKE_OUT/doctor.json"
+          set +e
+          python3 "$launcher" author \
+            --brief tests/data/brief_led_loop.json \
+            --intake tests/data/brief_led_loop.intake.json \
+            --workdir "$SMOKE_OUT/authoring" \
+            > "$SMOKE_OUT/author.stdout.json"
+          author_status=$?
+          set -e
+          python3 - "$SMOKE_OUT" "$author_status" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          out = Path(sys.argv[1])
+          author_status = int(sys.argv[2])
+          workdir = out / "authoring"
+          report_path = workdir / "circuit-reports" / "design-report.json"
+          if report_path.is_file():
+              raw_report = report_path.read_text(encoding="utf-8")
+              try:
+                  report = json.loads(raw_report)
+              except json.JSONDecodeError:
+                  print(raw_report)
+                  report = {}
+              if isinstance(report, dict):
+                  for name in ("connectivity", "erc", "drc"):
+                      gate = report.get(name)
+                      verdict = gate.get("verdict") if isinstance(gate, dict) else "missing"
+                      print(f"{name}: {verdict}")
+              else:
+                  print(raw_report)
+          else:
+              print((out / "author.stdout.json").read_text(encoding="utf-8"))
+              report = {}
+          result_path = workdir / "e2e-authoring.json"
+          result = (
+              json.loads(result_path.read_text(encoding="utf-8"))
+              if result_path.is_file()
+              else {}
+          )
+          gates_pass = all(
+              isinstance(report.get(name), dict)
+              and report[name].get("verdict") == "pass"
+              for name in ("connectivity", "erc", "drc")
+          )
+          if (
+              author_status != 0
+              or report.get("verdict") != "pass"
+              or not gates_pass
+              or result.get("verdict") != "pass"
+          ):
+              raise SystemExit("circuit launcher authoring smoke did not pass")
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: locked-circuit-launcher-smoke
+          path: ${{ github.workspace }}/circuit-smoke-out/
+          if-no-files-found: ignore
+          retention-days: 14
       - run: uv run python scripts/verify_all.py --stage standard
         env:
           CIRCUIT_TOOLS_IMAGE: ${{ steps.image.outputs.ref }}

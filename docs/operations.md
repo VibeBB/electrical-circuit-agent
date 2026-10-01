@@ -1,3 +1,20 @@
+## SBOM attestations
+
+`publish-circuit-images.yml` generates and attests an SPDX-2.3 SBOM for the
+tools image and uploads it for 30 days. It stores the returned URL as
+`sbom_attestation`, which `locked-image-check.yml` verifies when present;
+an absent URL warns and continues. SBOM steps are skipped when `skip_tools`
+is active.
+## Launcher-side verification
+
+`CIRCUIT_VERIFY_ATTESTATION` accepts `auto` (the default), `require`, or
+`off`. Before pulling a lock-provided image, and on every `prewarm`, the
+launcher uses `gh attestation verify` with the lock entry and publisher
+workflow. `auto` prints one note and skips for an image override, missing
+attestation, missing `gh`, or failed `gh auth status`; once verification
+starts, failure or timeout prevents the pull. `require` makes skip conditions
+errors, while `off` never verifies. Ordinary invocations do not re-verify a
+locally present image, and `--warn` doctor paths never verify.
 # Operations
 
 ## Development environment
@@ -63,7 +80,7 @@ determinism, so published digests are locked.
 |---|---|
 | `ci.yml` | fast verification plus tools image/smoke/standard verification depending on change scope |
 | `publish-circuit-images.yml` | GHCR tools/server publishing, post-publish smoke, lock update bot PR |
-| `locked-image-check.yml` | Digest-pinned image verification on main push and weekly |
+| `locked-image-check.yml` | Digest-pinned image and launcher smoke verification on main push and weekly |
 | `main-ci-failure-issue.yml` | Filing CI/image failure Issues on main and closing them on green |
 | `check-dependency-updates.yml` | Weekly PPA/PyPI/GitHub/CERN/action update report |
 | `workflow-lint.yml` | actionlint workflow validation and zizmor static analysis, uploaded to code scanning |
@@ -84,14 +101,18 @@ The publisher creates a GitHub build-provenance attestation for the
 `circuit-tools` image and stores its URL in the `circuit_tools` lock entry,
 which is mirrored into the plugin lock. When the URL is present,
 `locked-image-check.yml` verifies the image digest against
-`publish-circuit-images.yml` before pulling it. Older locks without attestation
+`publish-circuit-images.yml` before pulling it. The workflow preserves its
+image-internal Konnect smoke and also prewarms the locked image through
+`circuit_launcher.py`, runs `doctor` and the shipped LED-loop authoring gate,
+and uploads its reports even on failure. Older locks without attestation
 metadata emit a warning and continue; a failed provenance verification fails
 the image check.
 
 The scheduled dependency check writes Markdown and JSON reports under the
 runner's temporary directory, adds the run URL to the Markdown and step
 summary, and exposes the JSON `outdated_count` as the workflow's `outdated`
-output. It closes the report Issue only when no update candidates remain.
+output and `unknown_count`. Fetch failures remain unknown rather than
+outdated, and the report Issue stays open until both counts are zero.
 The report can be checked locally as follows. `--dry-run` prints it to stdout
 without changing GitHub Issues.
 
@@ -896,3 +917,7 @@ session-scoped key bound to the right provider lane.
 With P5 the phased vision-deepening plan is fully implemented; ADR-0016
 through ADR-0020 are the normative records (the research plan document
 was removed).
+
+## CI runner network auditing
+
+CI and image-publishing jobs use `step-security/harden-runner` in audit-only mode. It observes network egress without blocking requests; per-run insights are available in the GitHub Actions job summary.

@@ -49,6 +49,9 @@ jobs:
       id-token: write # OIDC for build-provenance attestation
       attestations: write # stores the attestation
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
@@ -125,6 +128,43 @@ jobs:
             TOOLS_TAG="${SOURCE_SHA}-tools"
           fi
           printf 'TOOLS_REF=%s\nTOOLS_DIGEST=%s\nTOOLS_TAG=%s\n' "$TOOLS_REF" "${TOOLS_REF##*@}" "$TOOLS_TAG" >> "$GITHUB_ENV"
+      - name: Generate tools SPDX SBOM
+        if: inputs.skip_tools != true
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.TOOLS_REF }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/circuit-tools.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Validate tools SPDX SBOM
+        if: inputs.skip_tools != true
+        run: |
+          python3 - "${{ runner.temp }}/circuit-tools.spdx.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          sbom = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if sbom.get("spdxVersion") != "SPDX-2.3":
+              raise SystemExit("tools SBOM must use SPDX-2.3")
+          PY
+      - name: Attest tools SBOM
+        if: inputs.skip_tools != true
+        id: attest_sbom
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ghcr.io/vibebb/circuit-tools
+          subject-digest: ${{ steps.tools.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/circuit-tools.spdx.json
+          push-to-registry: true
+      - name: Upload tools SPDX SBOM
+        if: inputs.skip_tools != true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: circuit-tools-spdx-sbom
+          path: ${{ runner.temp }}/circuit-tools.spdx.json
+          retention-days: 30
       - name: Measure published tools
         env:
           TOOLS_REF: ${{ env.TOOLS_REF }}
@@ -211,6 +251,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SKIP_TOOLS: ${{ inputs.skip_tools }}
           ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+          SBOM_ATTESTATION_URL: ${{ steps.attest_sbom.outputs.attestation-url }}
         run: |
           set -euo pipefail
           retry() {
@@ -301,6 +342,7 @@ jobs:
               --entry circuit_tools --image "ghcr.io/${IMAGE_OWNER}/circuit-tools" \
               --tag "$TOOLS_TAG" --digest "$TOOLS_DIGEST" --published-at "$published_at" \
               --attestation "$ATTESTATION_URL" \
+              --sbom-attestation "$SBOM_ATTESTATION_URL" \
               --workflow-run "$workflow_run" --dockerfile docker/circuit-tools.Dockerfile \
               --tools-json "$RUNNER_TEMP/circuit-tools.json"
           fi

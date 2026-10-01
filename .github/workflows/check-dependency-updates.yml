@@ -38,11 +38,13 @@ jobs:
           printf '\nworkflow: %s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> "$REPORT_MARKDOWN"
           cat "$REPORT_MARKDOWN" >> "$GITHUB_STEP_SUMMARY"
           echo "outdated=$(python3 -c 'import json; print(json.load(open("'"$REPORT_JSON"'", encoding="utf-8"))["outdated_count"])')" >> "$GITHUB_OUTPUT"
+          echo "unknown_count=$(python3 -c 'import json; print(json.load(open("'"$REPORT_JSON"'", encoding="utf-8"))["unknown_count"])')" >> "$GITHUB_OUTPUT"
       - name: Update report issue
         env:
           GH_TOKEN: ${{ github.token }}
           REPORT_MARKDOWN: ${{ runner.temp }}/report.md
           OUTDATED: ${{ steps.report.outputs.outdated }}
+          UNKNOWN_COUNT: ${{ steps.report.outputs.unknown_count }}
         run: |
           set -euo pipefail
           gh label create dependency-updates --repo "$GITHUB_REPOSITORY" --color 0366d6 \
@@ -56,6 +58,6 @@ jobs:
               --title "Dependency update check report" \
               --label dependency-updates --body-file "$REPORT_MARKDOWN" | sed 's#.*/##')
           fi
-          if [ "$OUTDATED" = "0" ] && [ -n "$number" ]; then
+          if [ "$OUTDATED" = "0" ] && [ "$UNKNOWN_COUNT" = "0" ] && [ -n "$number" ]; then
             gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "No update candidates remain."
           fi
