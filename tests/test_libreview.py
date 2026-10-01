@@ -35,6 +35,7 @@ from circuit.partspec import (
     PinTable,
     Reading,
 )
+from pinout_fixtures import geometry_for_names, pinout_drawing
 
 
 def _reading(
@@ -74,6 +75,7 @@ def _spec(pdf_sha256: str = hashlib.sha256(b"pdf").hexdigest()) -> PartSpec:
             extraction_path="extraction.json",
         ),
         package=package,
+        pinout=pinout_drawing({str(number): f"SIG{number}" for number in range(1, 7)}),
         land_pattern=LandPattern(
             source="datasheet",
             dimensions={"pitch": Dimension(nom=1.0, reading=reading)},
@@ -223,6 +225,7 @@ def test_blind_questions_select_pins_deterministically_and_omit_expected(tmp_pat
         key=lambda number: hashlib.sha256(f"{packet}{number}".encode()).digest(),
     )[:2]
     assert {item.question_id for item in questions[5:]} == {
+        "pinout.view",
         "pin.1",
         "pin.6",
         *(f"pin.{number}" for number in selected),
@@ -254,6 +257,7 @@ def test_blind_questions_do_not_sample_the_exposed_pad_pin() -> None:
     assert "pin.5" in pin_questions
     private_api: Any = libreview
     assert private_api._question_crop_field("pin.2", spec) == "pin_table"
+    assert private_api._question_crop_field("pinout.view", spec) == "pinout"
 
 
 def test_unlabelled_exposed_pad_row_maps_to_the_part_symbol_and_footprint_pin(
@@ -1072,7 +1076,7 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
         return extraction
 
     def check(
-        _spec: PartSpec,
+        checked_spec: PartSpec,
         _extraction: DatasheetExtraction,
         *,
         spec_path: Path,
@@ -1086,6 +1090,14 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
             pdf_sha256=hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
             checked_readings=1,
             findings=[],
+            pinout=geometry_for_names(
+                checked_spec.pinout.labels_vision,
+                pin_count=checked_spec.package.pin_count,
+                topology="dual",
+                page=checked_spec.pinout.page,
+            )
+            if checked_spec.pinout is not None
+            else None,
         )
 
     def verify(
@@ -1222,6 +1234,9 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert "base64," not in review_html.lower()
     assert "http://" not in review_html.lower()
     assert "Land-pattern drawing-view crop" not in review_html
+    assert "Pinout name-at-position" in review_html
+    assert review["pinout_comparisons"]
+    assert 'src="crops/pinout.png"' in review_html
     assert "Placement overlay — not to scale" in review_html
     assert "render_unavailable" in review["unknowns"]
     assert "overlay_scale_unknown" in review["unknowns"]
@@ -1236,6 +1251,8 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert crop_fields["land_pattern.drawing_view"]["crop_bbox"] == [0, 0, 66, 56]
     assert 'src="crops/package.drawing_view.png"' in blind_html
     assert 'src="crops/pin_table.png"' in blind_html
+    assert 'src="crops/pinout.png"' in blind_html
+    assert any(item["field"] == "pinout" for item in review["crops"])
     assert any(item["field"] == "orderable.0.row" for item in review["crops"])
     page_hashes = {item["page"]: item["sha256"] for item in review["evidence_pages"]}
     for page_record in review["evidence_pages"]:

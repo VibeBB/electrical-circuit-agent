@@ -22,6 +22,7 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
 from . import datasheet, kicad_cli
+from . import pinout as pinout_oracle
 from .datasheet import DatasheetExtraction, PageExtraction
 from .landpattern import Density, LandPatternResult, compute_land_pattern
 from .libitems import FootprintDef, PadDef, SymbolDef, parse_footprint, parse_symbol
@@ -36,6 +37,7 @@ from .partspec import (
     load_part_spec,
     part_spec_sha256,
 )
+from .pinout import PinoutGeometry
 
 EVENTS_DIR_ENV = "CIRCUIT_AGENT_EVENTS_DIR"
 DEFAULT_EVENTS_ROOT = Path(".openhands/agent-canvas/dev_conversations")
@@ -326,6 +328,8 @@ def _readings(spec: PartSpec) -> list[tuple[str, Reading, Dimension | None]]:
         (f"orderable.{index}.reading", variant.reading, None)
         for index, variant in enumerate(spec.orderable)
     )
+    if spec.pinout is not None:
+        values.append(("pinout.view_reading", spec.pinout.view_reading, None))
     return values
 
 
@@ -379,6 +383,16 @@ def blind_questions(spec: PartSpec, packet_id: str) -> list[BlindQuestion]:
             expected="yes" if spec.package.exposed_pad is not None else "no",
         ),
     ]
+    if spec.pinout is not None:
+        questions.append(
+            BlindQuestion(
+                question_id="pinout.view",
+                prompt="Is the pinout drawing a top view or a bottom view?",
+                page=spec.pinout.page,
+                bbox=spec.pinout.bbox,
+                expected=spec.pinout.view,
+            )
+        )
     exposed_number = (
         spec.package.exposed_pad.number if spec.package.exposed_pad is not None else None
     )
@@ -1143,6 +1157,8 @@ def _cited_bboxes(
     table_bbox = _numeric_bbox(table.get("bbox")) if table is not None else None
     if table_bbox is not None:
         results.append(("pin_table", spec.pin_table.page, table_bbox))
+    if spec.pinout is not None:
+        results.append(("pinout", spec.pinout.page, spec.pinout.bbox))
     return results
 
 
@@ -1248,6 +1264,62 @@ def _dimension_records(spec: PartSpec, crops: dict[str, _CropRecord]) -> list[di
             }
         )
     return records
+
+
+def _pinout_comparison_rows(
+    spec: PartSpec,
+    geometry: PinoutGeometry | None,
+    symbol: SymbolDef | None,
+) -> list[dict[str, Any]]:
+    if geometry is None:
+        return []
+    spec_names = {pin.number: pin.name for pin in spec.pins}
+    symbol_names: dict[str, list[str]] = {}
+    if symbol is not None:
+        for pin in symbol.pins:
+            symbol_names.setdefault(pin.number, []).append(pin.name)
+    rows: list[dict[str, Any]] = []
+    for label in geometry.labels:
+        vision_name = (
+            spec.pinout.labels_vision.get(label.number) if spec.pinout is not None else None
+        )
+        partspec_name = spec_names.get(label.number)
+        drawing_name = label.name
+        symbol_pin_names = sorted(set(symbol_names.get(label.number, [])))
+        symbol_name = ", ".join(symbol_pin_names) if symbol_pin_names else None
+        mismatch_fields: list[str] = []
+        if partspec_name is None or not symbol_pin_names:
+            mismatch_fields.append("number")
+        if (
+            vision_name is None
+            or drawing_name is None
+            or not pinout_oracle.names_equal(vision_name, drawing_name)
+        ):
+            mismatch_fields.append("vision_name")
+        if (
+            partspec_name is None
+            or drawing_name is None
+            or not pinout_oracle.names_equal(partspec_name, drawing_name)
+        ):
+            mismatch_fields.append("part_spec_name")
+        if (
+            not symbol_pin_names
+            or drawing_name is None
+            or any(not pinout_oracle.names_equal(name, drawing_name) for name in symbol_pin_names)
+        ):
+            mismatch_fields.append("symbol_name")
+        rows.append(
+            {
+                "number": label.number,
+                "drawing_name": drawing_name,
+                "vision_name": vision_name,
+                "part_spec_name": partspec_name,
+                "symbol_name": symbol_name,
+                "mismatch_fields": mismatch_fields,
+                "mismatch": bool(mismatch_fields),
+            }
+        )
+    return rows
 
 
 def _cell_text(
@@ -1849,6 +1921,8 @@ def _question_crop_field(question_id: str, spec: PartSpec) -> str:
         return "pin_table"
     if question_id == "exposed_pad" and spec.package.exposed_pad is not None:
         return "package.exposed_pad.length"
+    if question_id == "pinout.view":
+        return "pinout"
     if question_id.startswith("pin."):
         return "pin_table"
     return "pin_table"
@@ -1966,6 +2040,27 @@ def _review_html(review: dict[str, Any]) -> str:
         + "</tr>"
         for row in review["pin_comparisons"]
     )
+    pinout_cell_keys = (
+        "number",
+        "drawing_name",
+        "vision_name",
+        "part_spec_name",
+        "symbol_name",
+    )
+
+    def pinout_cell(row: dict[str, Any], key: str) -> str:
+        value = row.get(key)
+        text = "—" if value is None or value == "" else str(value)
+        class_name = ' class="mismatch"' if key in row.get("mismatch_fields", []) else ""
+        return f"<td{class_name}>{escape(text)}</td>"
+
+    pinout_rows_html = "".join(
+        "<tr>"
+        + "".join(pinout_cell(row, key) for key in pinout_cell_keys)
+        + ('<td class="mismatch">Mismatch</td>' if row.get("mismatch") else "<td>—</td>")
+        + "</tr>"
+        for row in review.get("pinout_comparisons", [])
+    )
 
     def dimension_crop(row: dict[str, Any]) -> str:
         path = row.get("crop_path")
@@ -2053,6 +2148,32 @@ def _review_html(review: dict[str, Any]) -> str:
         )
         or "<p>No orderable-row evidence crop is available.</p>"
     )
+    pinout_crop = next(
+        (item for item in crop_records if item.get("field") == "pinout"),
+        None,
+    )
+    pinout_crop_html = (
+        crop_figure(pinout_crop, "Pinout drawing")
+        if pinout_crop is not None
+        else "<p>No pinout evidence crop is available.</p>"
+    )
+    pinout_finding_codes = {
+        "footprint_chirality_mismatch",
+        "footprint_rotation_mismatch",
+        "footprint_order_mismatch",
+    }
+    pinout_findings = [
+        item
+        for item in findings
+        if item["code"].startswith("pinout_") or item["code"] in pinout_finding_codes
+    ]
+    pinout_findings_html = (
+        "".join(
+            f"<li><strong>{escape(item['code'])}</strong>: {escape(item['message'])}</li>"
+            for item in pinout_findings
+        )
+        or "<li>None.</li>"
+    )
     message = html.escape(review["message_template"])
     unknowns = "".join(f"<li>{html.escape(item)}</li>" for item in review["unknowns"])
     return (
@@ -2071,7 +2192,17 @@ def _review_html(review: dict[str, Any]) -> str:
         "<th>PartSpec type</th>"
         "<th>Symbol number</th><th>Symbol name</th><th>Symbol type</th><th>Footprint pad</th>"
         "<th>Mismatch</th>"
-        "</tr></thead><tbody>" + pin_rows + "</tbody></table><h2>Dimensions</h2><table><thead><tr>"
+        "</tr></thead><tbody>"
+        + pin_rows
+        + "</tbody></table><h2>Pinout name-at-position</h2>"
+        + pinout_crop_html
+        + "<table><thead><tr><th>Number</th><th>Drawing name</th><th>Vision name</th>"
+        "<th>PartSpec name</th><th>Symbol name</th><th>Mismatch</th>"
+        "</tr></thead><tbody>"
+        + pinout_rows_html
+        + "</tbody></table><h3>Relevant pinout findings</h3><ul>"
+        + pinout_findings_html
+        + "</ul><h2>Dimensions</h2><table><thead><tr>"
         "<th>Field</th><th>Label</th><th>Kind</th><th>Min</th><th>Nom</th><th>Max</th>"
         "<th>Page</th><th>Evidence crop</th><th>Crop SHA-256</th></tr></thead><tbody>"
         + dimension_rows
@@ -2326,6 +2457,7 @@ def build_review_packet(
         symbol_def = parse_symbol(symbol_lib, symbol_name)
     pin_rows = _pin_table_rows(spec, extraction, evidence_dir) if extraction is not None else []
     pin_rows = _augment_pin_rows(pin_rows, symbol_def, footprint_def)
+    pinout_rows = _pinout_comparison_rows(spec, part_check.pinout, symbol_def)
 
     renders: list[dict[str, str]] = []
     render_dir = packet_dir / "renders"
@@ -2521,6 +2653,7 @@ def build_review_packet(
             for item in questions
         ],
         "pin_comparisons": pin_rows,
+        "pinout_comparisons": pinout_rows,
         "dimensions": dimensions,
         "evidence_pages": extracted_pages,
         "crops": [item.model_dump(mode="json") for item in crops.values()],
