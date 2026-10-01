@@ -18,7 +18,7 @@ and a `latest` alias. The runtime source of truth is the digest-pinned
 references in `docker/image-digests.json`. After publishing, the tools image is
 pulled and smoke is re-run; the server image is built on top of the tools
 digest with the OpenHands SDK build.py whose version follows the project pin
-(currently v1.50.0). Lock updates are separated into bot PRs. Because
+(currently v1.50.1). Lock updates are separated into bot PRs. Because
 GITHUB_TOKEN events do not start workflows, the publish workflow dispatches
 the lock-branch CI itself and merges the PR synchronously once that run
 succeeds; when the Actions policy lands the bot PR's `pull_request` run as
