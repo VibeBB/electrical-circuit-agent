@@ -31,7 +31,38 @@ case "$1 $2" in
   "workflow run")
     ;;
   "pr checks")
+    check_call=$(grep -c '^pr checks ' "$GH_STUB_CALLS")
     case "$GH_STUB_CASE" in
+      unreported-then-green)
+        case "$check_call" in
+          1)
+            printf "Error: no checks reported on the '%s' branch\\n" \
+              'bot/update-image-digests-test' >&2
+            exit 1
+            ;;
+          2)
+            printf "Error: no required checks reported on the '%s' branch\\n" \
+              'bot/update-image-digests-test' >&2
+            exit 1
+            ;;
+          3)
+            printf '[{"name":"verify","state":"PENDING","bucket":"pending"}]\\n'
+            exit 8
+            ;;
+          *)
+            printf '[{"name":"verify","state":"SUCCESS","bucket":"pass"}]\\n'
+            ;;
+        esac
+        ;;
+      no-required-checks-always)
+        printf "Error: no required checks reported on the '%s' branch\\n" \
+          'bot/update-image-digests-test' >&2
+        exit 1
+        ;;
+      unexpected-check-error)
+        printf 'stub transport error: permission denied\\n' >&2
+        exit 1
+        ;;
       required-failure)
         printf '[{"name":"verify","state":"FAILURE","bucket":"fail"}]\\n'
         ;;
@@ -137,6 +168,64 @@ def test_pin_pr_state_and_required_checks(
         assert "api -X POST repos/" in call_log
     if case == "required-failure":
         assert "--auto --squash --delete-branch" not in call_log
+
+
+def test_unreported_checks_transition_to_green_json(
+    publish_pin_pr: tuple[Path, dict[str, str], Path],
+    tmp_path: Path,
+) -> None:
+    script, env, calls = publish_pin_pr
+    env.update(
+        {
+            "GH_STUB_CASE": "unreported-then-green",
+            "PUBLISH_PIN_PR_REQUIRED_WAIT_ATTEMPTS": "4",
+        }
+    )
+
+    result = run_helper(script, env)
+    summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    call_log = calls.read_text(encoding="utf-8")
+
+    assert result.returncode == 0
+    assert call_log.count("pr checks ") == 5
+    assert "--auto --squash --delete-branch" in call_log
+    assert "--squash --delete-branch" in call_log
+    assert "Auto-merge remains armed" in summary
+    assert "no checks reported" not in result.stderr
+    assert "no required checks reported" not in result.stderr
+
+
+def test_no_required_checks_arms_auto_merge(
+    publish_pin_pr: tuple[Path, dict[str, str], Path],
+    tmp_path: Path,
+) -> None:
+    script, env, calls = publish_pin_pr
+    env["GH_STUB_CASE"] = "no-required-checks-always"
+
+    result = run_helper(script, env)
+    summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    call_log = calls.read_text(encoding="utf-8")
+
+    assert result.returncode == 0
+    assert "auto-merge armed; required checks still running" in summary
+    assert call_log.count("pr checks ") == 1
+    assert "--auto --squash --delete-branch" in call_log
+
+
+def test_unexpected_required_check_error_fails_with_stderr(
+    publish_pin_pr: tuple[Path, dict[str, str], Path],
+) -> None:
+    script, env, calls = publish_pin_pr
+    env["GH_STUB_CASE"] = "unexpected-check-error"
+
+    result = run_helper(script, env)
+
+    assert result.returncode == 1
+    assert (
+        f"::error::Could not determine required checks for pin PR {PR_URL}: "
+        "stub transport error: permission denied"
+    ) in result.stderr
+    assert calls.read_text(encoding="utf-8").count("pr checks ") == 1
 
 
 def test_publish_workflow_uses_pin_helper_and_sbom_guard() -> None:
