@@ -6,8 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: digest-lock-sweep
@@ -17,6 +16,9 @@ jobs:
   sweep:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    permissions:
+      contents: write # required to merge digest-lock PRs
+      pull-requests: write # merge stalled digest-lock PRs
     steps:
       - name: Merge stalled digest-lock PRs
         env:

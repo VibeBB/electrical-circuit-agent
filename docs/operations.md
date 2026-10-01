@@ -66,10 +66,10 @@ determinism, so published digests are locked.
 | `locked-image-check.yml` | Digest-pinned image verification on main push and weekly |
 | `main-ci-failure-issue.yml` | Filing CI/image failure Issues on main and closing them on green |
 | `check-dependency-updates.yml` | Weekly PPA/PyPI/GitHub/CERN/action update report |
-| `workflow-lint.yml` | zizmor static analysis of the workflows, uploaded to code scanning |
+| `workflow-lint.yml` | actionlint workflow validation and zizmor static analysis, uploaded to code scanning |
 
-The only required secret is `GITHUB_TOKEN`. Make `fast` a required check in
-branch protection. The publish workflow publishes
+The only required secret is `GITHUB_TOKEN`. Require `fast`, `docker-smoke`,
+`plugin-load`, and `zizmor` in branch protection. The publish workflow publishes
 `ghcr.io/vibebb/circuit-tools` and `ghcr.io/vibebb/circuit-server`, and creates
 `docker/image-digests.json` for the first time via a bot PR. Filling a missing
 lock with placeholders is forbidden. Because GITHUB_TOKEN events do not start
@@ -80,8 +80,20 @@ the run via the Actions API. After merging, it dispatches `ci.yml` and
 `locked-image-check.yml` on main as observational runs recorded in the step
 summary.
 
-The dependency update report can be checked locally as follows. `--dry-run`
-prints the report to stdout without changing GitHub Issues.
+The publisher creates a GitHub build-provenance attestation for the
+`circuit-tools` image and stores its URL in the `circuit_tools` lock entry,
+which is mirrored into the plugin lock. When the URL is present,
+`locked-image-check.yml` verifies the image digest against
+`publish-circuit-images.yml` before pulling it. Older locks without attestation
+metadata emit a warning and continue; a failed provenance verification fails
+the image check.
+
+The scheduled dependency check writes Markdown and JSON reports under the
+runner's temporary directory, adds the run URL to the Markdown and step
+summary, and exposes the JSON `outdated_count` as the workflow's `outdated`
+output. It closes the report Issue only when no update candidates remain.
+The report can be checked locally as follows. `--dry-run` prints it to stdout
+without changing GitHub Issues.
 
 ```bash
 uv run python scripts/check_dependency_updates.py --dry-run

@@ -78,7 +78,12 @@ def test_image_from_lock_reads_skill_pin(tmp_path: Path) -> None:
     module = _load_launcher()
     skill_dir = tmp_path / "skills" / "circuit-workflow"
     skill_dir.mkdir(parents=True)
-    entry = {"image": "ghcr.io/x/circuit-tools", "digest": "sha256:abc", "tag": "t1"}
+    entry = {
+        "image": "ghcr.io/x/circuit-tools",
+        "digest": "sha256:abc",
+        "tag": "t1",
+        "attestation": "https://example.invalid/attestation/1",
+    }
     (skill_dir / "tools-image.json").write_text(json.dumps(entry), encoding="utf-8")
     assert module._image_from_lock(tmp_path) == "ghcr.io/x/circuit-tools@sha256:abc"
 

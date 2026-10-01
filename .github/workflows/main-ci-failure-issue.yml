@@ -3,7 +3,15 @@ name: Main CI failure issue
 on:
   # zizmor: ignore[dangerous-triggers] files a tracking Issue on completed main runs; no code is checked out
   workflow_run:
-    workflows: ["CI", "Publish circuit images", "Locked image check", "Workflow lint"]
+    workflows:
+      - "CI"
+      - "Digest lock PR sweep"
+      - "Check dependency updates"
+      - "Locked image check"
+      - "PR branch cleanup"
+      - "Publish circuit images"
+      - "Release"
+      - "Workflow lint"
     types: [completed]
     branches: [main]
 
@@ -19,7 +27,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
-      contents: read # list runs and jobs for the failed workflow
+      actions: read # reads the completed run's jobs
+      contents: read
       issues: write # file and close the main CI failure tracking Issue
     steps:
       - name: Update tracking issue
@@ -35,13 +44,20 @@ jobs:
           issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label ci-main-failure \
             --json number --jq '.[0].number // empty')
           if [ "$CONCLUSION" = success ]; then
-            if [ -n "$issue" ]; then gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --comment "Back to green: $RUN_URL"; fi
+            if [ -n "$issue" ]; then
+              gh issue close "$issue" --repo "$GITHUB_REPOSITORY" \
+                --comment "Back to green: $RUN_URL"
+            fi
             exit 0
           fi
-          if [ "$CONCLUSION" = cancelled ] || [ "$CONCLUSION" = skipped ]; then exit 0; fi
+          if [ "$CONCLUSION" = cancelled ] || [ "$CONCLUSION" = skipped ]; then
+            exit 0
+          fi
           jobs=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
             --jq '[.jobs[] | select(.conclusion=="failure") | .name] | join(", ")')
           body=$(printf '%s\n\n- run: %s\n- failed jobs: %s\n' "Main CI/image verification failed." "$RUN_URL" "${jobs:-unknown}")
-          if [ -n "$issue" ]; then gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"; else
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
             gh issue create --repo "$GITHUB_REPOSITORY" --title "Main CI failure report" --label ci-main-failure --body "$body"
           fi

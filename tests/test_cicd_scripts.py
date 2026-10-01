@@ -45,8 +45,12 @@ def test_update_and_read_image_lock(tmp_path: Path) -> None:
         workflow_run="https://example.invalid/run/1",
         dockerfile="docker/circuit-tools.Dockerfile",
         tools=tools,
+        attestation="https://example.invalid/attestation/1",
     )
     assert locked_image(lock, "circuit_tools") == f"ghcr.io/example/circuit-tools@sha256:{'a' * 64}"
+    assert json.loads(lock.read_text(encoding="utf-8"))["circuit_tools"]["attestation"] == (
+        "https://example.invalid/attestation/1"
+    )
     assert not update_lock(
         lock,
         entry="circuit_tools",
@@ -57,6 +61,40 @@ def test_update_and_read_image_lock(tmp_path: Path) -> None:
         workflow_run="https://example.invalid/run/1",
         dockerfile="docker/circuit-tools.Dockerfile",
         tools=tools,
+        attestation="https://example.invalid/attestation/1",
+    )
+
+
+def test_image_lock_rejects_empty_attestation(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="attestation"):
+        update_lock(
+            tmp_path / "image-digests.json",
+            entry="circuit_tools",
+            image="ghcr.io/example/circuit-tools",
+            tag="abc-tools",
+            digest=f"sha256:{'a' * 64}",
+            published_at="2026-09-20T00:00:00Z",
+            workflow_run="https://example.invalid/run/1",
+            dockerfile="docker/circuit-tools.Dockerfile",
+            tools={"kicad-cli": "10.99.0"},
+            attestation="",
+        )
+
+
+def test_publish_workflow_tracks_itself_and_provenance() -> None:
+    publisher = Path(".github/workflows/publish-circuit-images.yml").read_text(encoding="utf-8")
+    locked_check = Path(".github/workflows/locked-image-check.yml").read_text(encoding="utf-8")
+    assert ".github/workflows/publish-circuit-images.yml" in publisher
+    assert "actions/attest-build-provenance@" in publisher
+    assert "@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2" in publisher
+    assert '--attestation "$ATTESTATION_URL"' in publisher
+    assert 'lock.get("circuit_tools")' in locked_check
+    assert 'entry.get("image") != "ghcr.io/vibebb/circuit-tools"' in locked_check
+    assert "digest is None and tag is None" in locked_check
+    assert "attestation: ${{ steps.lock.outputs.attestation }}" in locked_check
+    assert 'gh attestation verify "oci://${IMAGE}@${DIGEST}"' in locked_check
+    assert locked_check.index("gh attestation verify") < locked_check.index(
+        "scripts/pull_locked_image.py"
     )
 
 
