@@ -78,3 +78,19 @@ def parse_text(text: str) -> list[SExpr]:
     """Parse one root s-expression and return it as a list."""
 
     return _parse(_tokens(text))
+
+
+def _quote(value: str) -> str:
+    if not value or any(character.isspace() or character in '()";\\' for character in value):
+        escapes = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+        escaped = "".join(escapes.get(character, character) for character in value)
+        return f'"{escaped}"'
+    return value
+
+
+def serialize(expr: SExpr) -> str:
+    """Serialize an s-expression, quoting atoms that require it."""
+
+    if isinstance(expr, str):
+        return _quote(expr)
+    return f"({' '.join(serialize(child) for child in expr)})"

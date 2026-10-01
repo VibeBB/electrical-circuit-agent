@@ -32,7 +32,11 @@ from . import (
     fit_sheet,
     intake,
     kicad_cli,
+    landpattern,
     libraries,
+    libreuse,
+    libsource,
+    libverify,
     netlist,
     partspec,
     raster,
@@ -455,6 +459,159 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_land_pattern",
+        "Compute a datasheet or IPC-7351B land pattern for a PartSpec",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "density": {
+                    "type": "string",
+                    "enum": ["most", "nominal", "least"],
+                    "default": "nominal",
+                },
+                "output_path": {"type": "string"},
+            },
+            "required": ["part_spec_path"],
+        },
+    ),
+    (
+        "circuit_library_candidates",
+        "Search installed and project libraries for reusable items",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "density": {
+                    "type": "string",
+                    "enum": ["most", "nominal", "least"],
+                    "default": "nominal",
+                },
+                "output_path": {"type": "string"},
+            },
+            "required": ["part_spec_path"],
+        },
+    ),
+    (
+        "circuit_library_import",
+        "Import KiCad library items with immutable source copies and provenance",
+        {
+            "type": "object",
+            "properties": {
+                "source_path": {"type": "string"},
+                "library_dir": {"type": "string"},
+                "nickname": {"type": "string"},
+                "origin": {
+                    "type": "string",
+                    "enum": [
+                        "manufacturer",
+                        "kicad_official",
+                        "cern",
+                        "third_party",
+                        "generated",
+                        "derived",
+                    ],
+                },
+                "vendor": {"type": "string"},
+                "url": {"type": "string"},
+                "retrieved_at": {"type": "string", "format": "date-time"},
+                "license": {
+                    "type": "object",
+                    "properties": {
+                        "spdx": {"type": "string"},
+                        "license_ref": {"type": "string"},
+                        "terms_url": {"type": "string"},
+                        "attribution": {"type": "string"},
+                        "redistribution": {
+                            "type": "string",
+                            "enum": ["allowed", "project_only", "unknown"],
+                        },
+                    },
+                    "required": ["attribution", "redistribution"],
+                    "anyOf": [{"required": ["spdx"]}, {"required": ["license_ref"]}],
+                },
+                "symbol_names": {"type": "array", "items": {"type": "string"}},
+                "members": {"type": "array", "items": {"type": "string"}},
+                "replace": {"type": "boolean", "default": False},
+            },
+            "required": ["source_path", "library_dir", "nickname", "origin", "vendor", "license"],
+        },
+    ),
+    (
+        "circuit_library_record",
+        "Record a generated or derived library artifact and its transformations",
+        {
+            "type": "object",
+            "properties": {
+                "library_dir": {"type": "string"},
+                "artifact_path": {"type": "string"},
+                "artifact": {
+                    "type": "string",
+                    "enum": ["symbol", "footprint", "model3d"],
+                },
+                "name": {"type": "string"},
+                "transformation": {"type": "string"},
+                "origin": {"type": "string", "enum": ["generated", "derived"]},
+                "vendor": {"type": "string"},
+                "url": {"type": "string"},
+                "license": {
+                    "type": "object",
+                    "properties": {
+                        "spdx": {"type": "string"},
+                        "license_ref": {"type": "string"},
+                        "terms_url": {"type": "string"},
+                        "attribution": {"type": "string"},
+                        "redistribution": {
+                            "type": "string",
+                            "enum": ["allowed", "project_only", "unknown"],
+                        },
+                    },
+                    "required": ["attribution", "redistribution"],
+                    "anyOf": [{"required": ["spdx"]}, {"required": ["license_ref"]}],
+                },
+                "part_spec_path": {"type": "string"},
+                "derived_from": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": [
+                "library_dir",
+                "artifact_path",
+                "artifact",
+                "name",
+                "transformation",
+            ],
+        },
+    ),
+    (
+        "circuit_library_verify",
+        "Verify an authored library part against its PartSpec, checks, and provenance",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "part_spec_check_path": {"type": "string"},
+                "symbol_lib_path": {"type": "string"},
+                "symbol_name": {"type": "string"},
+                "footprint_path": {"type": "string"},
+                "library_dir": {"type": "string"},
+                "density": {
+                    "type": "string",
+                    "enum": ["most", "nominal", "least"],
+                    "default": "nominal",
+                },
+                "tolerance_mm": {"type": "number", "default": 0.02},
+                "model_required": {"type": "boolean", "default": True},
+                "output_path": {"type": "string"},
+            },
+            "required": [
+                "part_spec_path",
+                "part_spec_check_path",
+                "symbol_lib_path",
+                "symbol_name",
+                "footprint_path",
+            ],
+        },
+    ),
+    (
         "circuit_konnect_call",
         "Invoke Konnect operations through a managed stdio session when "
         "dynamically loaded toolsets are not visible to the harness; "
@@ -535,6 +692,11 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_rasterize": _anno("Rasterize", write=True),
     "circuit_datasheet_extract": _anno("Datasheet extraction", write=True),
     "circuit_part_spec_check": _anno("PartSpec check", write=True),
+    "circuit_land_pattern": _anno("Land pattern", write=True),
+    "circuit_library_candidates": _anno("Library candidates", write=True),
+    "circuit_library_import": _anno("Library import", write=True),
+    "circuit_library_record": _anno("Library provenance record", write=True),
+    "circuit_library_verify": _anno("Library verification", write=True),
     "circuit_konnect_call": _anno("Konnect call", write=True, destructive=True, idempotent=False),
     "circuit_kicad_version": _anno("KiCad version", write=False),
 }
@@ -921,6 +1083,175 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 "part-spec",
             )
             output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_land_pattern":
+            spec_path = Path(str(args["part_spec_path"]))
+            spec = partspec.load_part_spec(spec_path)
+            density = cast(
+                landpattern.Density,
+                _literal(
+                    args,
+                    "density",
+                    ("most", "nominal", "least"),
+                    "nominal",
+                    context="circuit_land_pattern",
+                ),
+            )
+            result = landpattern.compute_land_pattern(spec, density)
+            output = _output_path(
+                spec_path,
+                _optional_string(args.get("output_path")),
+                "land-pattern",
+            )
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_library_candidates":
+            spec_path = Path(str(args["part_spec_path"]))
+            spec = partspec.load_part_spec(spec_path)
+            density = cast(
+                landpattern.Density,
+                _literal(
+                    args,
+                    "density",
+                    ("most", "nominal", "least"),
+                    "nominal",
+                    context="circuit_library_candidates",
+                ),
+            )
+            reference = landpattern.compute_land_pattern(spec, density)
+            result = libreuse.find_candidates(
+                spec,
+                roots=libraries.default_roots(),
+                project_library_dir=spec_path.parent / "library",
+                reference=reference,
+            )
+            output = _output_path(
+                spec_path,
+                _optional_string(args.get("output_path")),
+                "library-candidates",
+            )
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_library_import":
+            source_path = Path(str(args["source_path"]))
+            library_dir = Path(str(args["library_dir"]))
+            license_data = args.get("license")
+            if not isinstance(license_data, dict):
+                raise ValueError("circuit_library_import requires a license object")
+            import_source = libsource.SourceInfoInput.model_validate(
+                {
+                    "origin": args.get("origin"),
+                    "vendor": args.get("vendor"),
+                    "url": args.get("url"),
+                    "retrieved_at": args.get("retrieved_at"),
+                    "license": license_data,
+                }
+            )
+            symbol_names = args.get("symbol_names")
+            members = args.get("members")
+            result = libsource.import_library_item(
+                source_path,
+                library_dir,
+                str(args["nickname"]),
+                source=import_source,
+                symbol_names=cast(list[str], symbol_names)
+                if isinstance(symbol_names, list)
+                else None,
+                members=cast(list[str], members) if isinstance(members, list) else None,
+                replace=bool(args.get("replace", False)),
+            )
+            output = _output_path(
+                library_dir.parent / f"{args['nickname']}.json",
+                None,
+                "library-import",
+            )
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_library_record":
+            library_dir = Path(str(args["library_dir"]))
+            artifact_path = Path(str(args["artifact_path"]))
+            origin = args.get("origin")
+            source_info: libsource.SourceInfo | None = None
+            source_fields = ("origin", "vendor", "url", "license")
+            if any(args.get(field) is not None for field in source_fields):
+                if origin not in ("generated", "derived"):
+                    raise ValueError(
+                        "source metadata for a new library record requires origin "
+                        "'generated' or 'derived'"
+                    )
+                license_data = args.get("license")
+                if not isinstance(license_data, dict):
+                    raise ValueError("source metadata requires a license object")
+                source_input = libsource.SourceInfoInput.model_validate(
+                    {
+                        "origin": origin,
+                        "vendor": args.get("vendor"),
+                        "url": args.get("url"),
+                        "license": license_data,
+                    }
+                )
+                resolved_artifact = artifact_path.resolve(strict=True)
+                relative_artifact = resolved_artifact.relative_to(library_dir.resolve())
+                source_info = libsource.SourceInfo(
+                    **source_input.model_dump(),
+                    original_path=relative_artifact.as_posix(),
+                    original_sha256=hashlib.sha256(resolved_artifact.read_bytes()).hexdigest(),
+                )
+            part_spec_path = args.get("part_spec_path")
+            result = libsource.record_library_item(
+                library_dir,
+                artifact_path,
+                artifact=_literal(
+                    args,
+                    "artifact",
+                    ("symbol", "footprint", "model3d"),
+                    context="circuit_library_record",
+                ),
+                name=str(args["name"]),
+                source=source_info,
+                transformation=str(args["transformation"]),
+                part_spec_sha256=partspec.part_spec_sha256(Path(str(part_spec_path)))
+                if isinstance(part_spec_path, str)
+                else None,
+                derived_from=cast(list[str], args.get("derived_from", [])),
+            )
+            output = _output_path(
+                library_dir.parent / "library.json",
+                None,
+                "library-record",
+            )
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_library_verify":
+            spec_path = Path(str(args["part_spec_path"]))
+            spec = partspec.load_part_spec(spec_path)
+            density = cast(
+                landpattern.Density,
+                _literal(
+                    args,
+                    "density",
+                    ("most", "nominal", "least"),
+                    "nominal",
+                    context="circuit_library_verify",
+                ),
+            )
+            library_dir_value = args.get("library_dir")
+            library_dir = (
+                Path(str(library_dir_value)) if isinstance(library_dir_value, str) else None
+            )
+            output = _output_path(
+                spec_path,
+                _optional_string(args.get("output_path")),
+                "library-verification",
+            )
+            result = libverify.verify_library_part(
+                spec,
+                spec_path=spec_path,
+                spec_check_path=Path(str(args["part_spec_check_path"])),
+                symbol_lib=Path(str(args["symbol_lib_path"])),
+                symbol_name=str(args["symbol_name"]),
+                footprint_path=Path(str(args["footprint_path"])),
+                library_dir=library_dir,
+                reference=landpattern.compute_land_pattern(spec, density),
+                tolerance_mm=float(args.get("tolerance_mm", 0.02)),
+                model_required=bool(args.get("model_required", True)),
+                output_path=output,
+            )
         elif name == "circuit_konnect_call":
             konnect_arguments = args.get("arguments")
             ops = args.get("ops")

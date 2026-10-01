@@ -1,0 +1,9 @@
+(module "Legacy"
+  (layer F.Cu)
+  (attr through_hole)
+  (fp_text reference REF** (at 0 0) (layer F.SilkS))
+  (fp_text value Legacy (at 0 1) (layer F.Fab))
+  (pad 1 thru_hole rect (at 0 0) (size 1 1) (drill 0.5)
+    (layers *.Cu *.Mask))
+  (fp_line (start -1 -1) (end 1 1) (layer F.SilkS) (width 0.15))
+)

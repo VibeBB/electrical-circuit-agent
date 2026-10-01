@@ -5,20 +5,29 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from collections import Counter
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import advisory
-from .datasheet import DatasheetExtraction, PageExtraction, page_tables, page_words
+from . import advisory, intake
+from .datasheet import DatasheetExtraction, PageExtraction, PdfWord, page_tables, page_words
 
 _NUMBER = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)")
 _SYMBOL_PREFIX = re.compile(r"^([□⌀ØR])\s*")
 _TOKEN_SPLIT = re.compile(r"[\s,]+")
+_PIN1_CORNER = re.compile(r"\b(?P<corner>(?:top|bottom)[\s_-]+(?:left|right))\b", re.IGNORECASE)
+PinCorner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
+_MIRRORED_CORNERS: dict[PinCorner, PinCorner] = {
+    "top_left": "top_right",
+    "top_right": "top_left",
+    "bottom_left": "bottom_right",
+    "bottom_right": "bottom_left",
+}
 
 
 class Reading(BaseModel):
@@ -29,7 +38,7 @@ class Reading(BaseModel):
     mechanical: str | None = None
     vision: str = Field(min_length=1)
     vision_record: str = Field(min_length=1)
-    user_confirmed: str | None = Field(default=None, pattern=r"^Q[0-9]+$")
+    user_confirmed: str | None = Field(default=None, pattern=r"^R[0-9]+$")
 
 
 class Dimension(BaseModel):
@@ -60,6 +69,14 @@ class ExposedPad(BaseModel):
 
 
 class PackageSpec(BaseModel):
+    """Package dimensions use the KiCad top view: pin 1 at top-left, +x right, +y down.
+
+    `body_length` is the Y extent along the pin-1 row of dual packages and
+    along the left/right sides of quad packages; `body_width` is the X extent.
+    `pin1_corner` is always expressed in top view; `drawing_view` identifies
+    the view shown in the cited pin-1 evidence.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     family: Literal[
@@ -82,8 +99,19 @@ class PackageSpec(BaseModel):
     lead_length: Dimension | None = None
     lead_width: Dimension | None = None
     exposed_pad: ExposedPad | None = None
-    pin1_corner: Literal["top_left", "top_right", "bottom_left", "bottom_right"]
+    pins_per_side: tuple[int, int, int, int] | None = None
+    drawing_view: Literal["top", "bottom"]
+    pin1_corner: PinCorner
     pin1_reading: Reading
+
+    @model_validator(mode="after")
+    def validate_pins_per_side_family(self) -> PackageSpec:
+        if self.pins_per_side is not None and self.family not in (
+            "no_lead_quad",
+            "gullwing_quad",
+        ):
+            raise ValueError("pins_per_side is only valid for quad package families")
+        return self
 
 
 class LandPad(BaseModel):
@@ -112,6 +140,8 @@ class LandPattern(BaseModel):
 
 
 class PinSpec(BaseModel):
+    """A pin's optional view identifies the datasheet drawing view for its reading."""
+
     model_config = ConfigDict(extra="forbid")
 
     number: str
@@ -130,6 +160,15 @@ class PinSpec(BaseModel):
         "open_emitter",
         "no_connect",
     ]
+    view: Literal["top", "bottom"] | None = None
+    reading: Reading
+
+
+class OrderableVariant(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mpn: str
+    package_code: str
     reading: Reading
 
 
@@ -149,9 +188,11 @@ class PartSpec(BaseModel):
     mpn: str
     manufacturer: str
     datasheet: DatasheetRef
+    intake_path: str | None = None
     package: PackageSpec
     land_pattern: LandPattern | None = None
     pins: list[PinSpec] = Field(min_length=1)
+    orderable: list[OrderableVariant] = Field(min_length=1)
 
 
 class ParsedDimension(BaseModel):
@@ -311,12 +352,157 @@ def _all_readings(spec: PartSpec) -> list[tuple[str, Reading, Dimension | None]]
     ]
     readings.append(("package.pin1_reading", spec.package.pin1_reading, None))
     readings.extend((f"pins[{index}]", pin.reading, None) for index, pin in enumerate(spec.pins))
+    readings.extend(
+        (f"orderable[{index}]", variant.reading, None)
+        for index, variant in enumerate(spec.orderable)
+    )
     return readings
 
 
 def _resolved(base: Path, value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else base / path
+
+
+def _user_requirements(spec: PartSpec, spec_dir: Path) -> set[str]:
+    if spec.intake_path is None or not any(
+        reading.user_confirmed is not None for _, reading, _ in _all_readings(spec)
+    ):
+        return set()
+    try:
+        intake_record = intake.load_intake(_resolved(spec_dir, spec.intake_path))
+    except (OSError, ValueError):
+        return set()
+    return {
+        requirement.id for requirement in intake_record.requirements if requirement.source == "user"
+    }
+
+
+def _read_page_words(path: Path) -> bool:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(value, list):
+        return False
+    try:
+        for item in cast(list[object], value):
+            PdfWord.model_validate(item)
+    except ValueError:
+        return False
+    return True
+
+
+def _page_artifact_findings(page: PageExtraction, extraction_dir: Path) -> list[SpecFinding]:
+    findings: list[SpecFinding] = []
+    png_path = _resolved(extraction_dir, page.png_path)
+    try:
+        png_sha256 = hashlib.sha256(png_path.read_bytes()).hexdigest()
+    except OSError:
+        findings.append(
+            SpecFinding(
+                code="evidence_missing",
+                severity="error",
+                field=f"pages[{page.page}].png_path",
+                message=f"page image is missing: {png_path}",
+                page=page.page,
+            )
+        )
+    else:
+        if png_sha256 != page.png_sha256:
+            findings.append(
+                SpecFinding(
+                    code="evidence_sha_mismatch",
+                    severity="error",
+                    field=f"pages[{page.page}].png_path",
+                    message="page image SHA-256 differs from the extraction manifest",
+                    page=page.page,
+                )
+            )
+    for lane in page.lanes:
+        if lane.status != "ok":
+            continue
+        lane_path = (
+            _resolved(extraction_dir, lane.words_path) if lane.words_path is not None else None
+        )
+        if lane_path is None or not _read_page_words(lane_path):
+            findings.append(
+                SpecFinding(
+                    code="evidence_missing",
+                    severity="error",
+                    field=f"pages[{page.page}].lanes.{lane.lane}.words_path",
+                    message="successful lane word artifact is missing or invalid",
+                    page=page.page,
+                )
+            )
+    return findings
+
+
+def _observation_log(spec_dir: Path) -> Path | None:
+    configured = os.environ.get("CIRCUIT_IMAGE_OBSERVATIONS")
+    if configured:
+        path = Path(configured)
+        return path if path.is_file() else None
+    for directory in (spec_dir, *spec_dir.parents):
+        path = directory / "observations" / "circuit" / "image-observations.jsonl"
+        if path.is_file():
+            return path
+    return None
+
+
+def _observed_image_hashes(path: Path) -> set[str]:
+    hashes: set[str] = set()
+    try:
+        with path.open(encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict):
+                    digest = cast(dict[str, object], value).get("image_sha256")
+                    if isinstance(digest, str):
+                        hashes.add(digest)
+    except (OSError, UnicodeDecodeError):
+        return set()
+    return hashes
+
+
+def _pin1_corner_findings(
+    package: PackageSpec,
+    reading: Reading,
+    field: str,
+    findings: list[SpecFinding],
+) -> None:
+    matches = list(_PIN1_CORNER.finditer(reading.vision))
+    if len(matches) != 1:
+        findings.append(
+            SpecFinding(
+                code="pin1_unparseable",
+                severity="error",
+                field=field,
+                message="pin-1 vision reading must contain exactly one supported corner phrase",
+                page=reading.page,
+            )
+        )
+        return
+    corner = re.sub(r"[\s-]+", "_", matches[0].group("corner").lower())
+    expected = package.pin1_corner
+    if package.drawing_view == "bottom":
+        expected = _MIRRORED_CORNERS[expected]
+    if corner != expected:
+        findings.append(
+            SpecFinding(
+                code="pin1_mismatch",
+                severity="error",
+                field=field,
+                message=(
+                    f"pin-1 vision corner {corner} differs from {expected} "
+                    f"in {package.drawing_view} view"
+                ),
+                page=reading.page,
+            )
+        )
 
 
 def _read_vision(
@@ -404,9 +590,20 @@ def _dimension_checks(
     spec_dir: Path,
     extraction: DatasheetExtraction,
     extraction_dir: Path,
+    confirmation_verified: bool,
     findings: list[SpecFinding],
 ) -> None:
     _read_vision(reading, spec_dir, page, field, findings)
+    if page is not None and page.drawing_page and reading.bbox is None:
+        findings.append(
+            SpecFinding(
+                code="bbox_missing",
+                severity="warning",
+                field=field,
+                message="dimension reading on a drawing page has no bounded region",
+                page=reading.page,
+            )
+        )
     try:
         parsed = parse_dimension_text(reading.vision)
     except ValueError as exc:
@@ -441,10 +638,10 @@ def _dimension_checks(
             SpecFinding(
                 code=(
                     "mechanical_unconfirmed_user_confirmed"
-                    if reading.user_confirmed is not None
+                    if confirmation_verified
                     else "mechanical_mismatch"
                 ),
-                severity="warning" if reading.user_confirmed is not None else "error",
+                severity="warning" if confirmation_verified else "error",
                 field=field,
                 message="mechanical lane does not support every vision number",
                 page=reading.page,
@@ -482,6 +679,7 @@ def _pin_checks(
     pin: PinSpec,
     index: int,
     page: PageExtraction | None,
+    confirmation_verified: bool,
     findings: list[SpecFinding],
 ) -> None:
     field = f"pins[{index}]"
@@ -505,10 +703,10 @@ def _pin_checks(
             SpecFinding(
                 code=(
                     "mechanical_unconfirmed_user_confirmed"
-                    if reading.user_confirmed is not None
+                    if confirmation_verified
                     else "mechanical_mismatch"
                 ),
-                severity="warning" if reading.user_confirmed is not None else "error",
+                severity="warning" if confirmation_verified else "error",
                 field=field,
                 message="mechanical lane does not support the pin number and name",
                 page=reading.page,
@@ -527,6 +725,47 @@ def _pin_checks(
                 severity="warning",
                 field=field,
                 message="no pdfplumber pin-table row matches the pin number and name",
+                page=reading.page,
+            )
+        )
+
+
+def _orderable_variant_checks(
+    spec: PartSpec,
+    variant: OrderableVariant,
+    index: int,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    spec_dir: Path,
+    page: PageExtraction | None,
+    confirmation_verified: bool,
+    findings: list[SpecFinding],
+) -> None:
+    field = f"orderable[{index}]"
+    reading = variant.reading
+    _read_vision(reading, spec_dir, page, field, findings)
+    matches_spec = (
+        variant.mpn.casefold() == spec.mpn.casefold() and variant.package_code == spec.package.code
+    )
+    if not matches_spec:
+        return
+    mechanical_text = " ".join(
+        _mechanical_words(extraction, extraction_dir, reading.page, reading)
+    ).casefold()
+    if (
+        spec.mpn.casefold() not in mechanical_text
+        or variant.package_code.casefold() not in mechanical_text
+    ):
+        findings.append(
+            SpecFinding(
+                code=(
+                    "mechanical_unconfirmed_user_confirmed"
+                    if confirmation_verified
+                    else "mechanical_mismatch"
+                ),
+                severity="warning" if confirmation_verified else "error",
+                field=field,
+                message="mechanical lane does not support the orderable MPN and package code",
                 page=reading.page,
             )
         )
@@ -569,16 +808,41 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
                 message="exposed pad number is not present in the pin list",
             )
         )
-    if package.family in ("no_lead_quad", "gullwing_quad") and package.pin_count % 4:
+    if not any(
+        variant.mpn.casefold() == spec.mpn.casefold() and variant.package_code == package.code
+        for variant in spec.orderable
+    ):
         findings.append(
             SpecFinding(
-                code="pin_count_family",
+                code="package_variant_unbound",
                 severity="error",
-                field="package.pin_count",
-                message="quad package pin count must be divisible by four",
+                field="orderable",
+                message="no orderable variant binds the PartSpec MPN to the package code",
             )
         )
-    elif package.family in ("no_lead_dual", "gullwing_dual") and package.pin_count % 2:
+    quad_family = package.family in ("no_lead_quad", "gullwing_quad")
+    dual_family = package.family in ("no_lead_dual", "gullwing_dual")
+    side_counts: tuple[int, int, int, int] | None = None
+    if quad_family:
+        if package.pins_per_side is None:
+            if package.pin_count % 4 == 0:
+                pins_per_side = package.pin_count // 4
+                side_counts = (pins_per_side, pins_per_side, pins_per_side, pins_per_side)
+        else:
+            side_counts = package.pins_per_side
+        if side_counts is None or sum(side_counts) != package.pin_count:
+            findings.append(
+                SpecFinding(
+                    code="pin_count_family",
+                    severity="error",
+                    field="package.pin_count",
+                    message=(
+                        "quad side pin counts must sum to pin_count; equal splits require "
+                        "divisibility by four"
+                    ),
+                )
+            )
+    elif dual_family and package.pin_count % 2:
         findings.append(
             SpecFinding(
                 code="pin_count_family",
@@ -587,25 +851,48 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
                 message="dual package pin count must be divisible by two",
             )
         )
-    if (
-        package.family in ("no_lead_quad", "gullwing_quad", "no_lead_dual", "gullwing_dual")
-        and package.pitch is not None
-    ):
+    if (quad_family or dual_family) and package.pitch is not None:
         pitch = package.pitch.nom
         if pitch is None and package.pitch.min is not None and package.pitch.max is not None:
             pitch = (package.pitch.min + package.pitch.max) / 2
-        body_side = _dimension_upper(package.body_length)
-        sides = 4 if package.family in ("no_lead_quad", "gullwing_quad") else 2
-        pins_per_side = package.pin_count // sides
-        if pitch is not None and body_side is not None and pitch * (pins_per_side - 1) >= body_side:
-            findings.append(
-                SpecFinding(
-                    code="pitch_exceeds_body",
-                    severity="error",
-                    field="package.pitch",
-                    message="pitch span must be smaller than the body length",
-                )
+        if pitch is not None and quad_family and side_counts is not None:
+            side_dimensions = (
+                ("left", side_counts[0], package.body_length),
+                ("bottom", side_counts[1], package.body_width),
+                ("right", side_counts[2], package.body_length),
+                ("top", side_counts[3], package.body_width),
             )
+            for side, pins_per_side, dimension in side_dimensions:
+                body_side = _dimension_upper(dimension)
+                if (
+                    pins_per_side > 1
+                    and body_side is not None
+                    and pitch * (pins_per_side - 1) >= body_side
+                ):
+                    findings.append(
+                        SpecFinding(
+                            code="pitch_exceeds_body",
+                            severity="error",
+                            field="package.pitch",
+                            message=f"{side} pitch span must be smaller than its body extent",
+                        )
+                    )
+        elif pitch is not None and dual_family:
+            body_length = _dimension_upper(package.body_length)
+            pins_per_side = package.pin_count // 2
+            if (
+                pins_per_side > 1
+                and body_length is not None
+                and pitch * (pins_per_side - 1) >= body_length
+            ):
+                findings.append(
+                    SpecFinding(
+                        code="pitch_exceeds_body",
+                        severity="error",
+                        field="package.pitch",
+                        message="dual-row pitch span must be smaller than body_length",
+                    )
+                )
     if package.exposed_pad is not None:
         body_length = _dimension_upper(package.body_length)
         body_width = _dimension_upper(package.body_width)
@@ -686,8 +973,56 @@ def check_part_spec(
 
     pages = {page.page: page for page in extraction.pages}
     readings = _all_readings(spec)
+    orderable_by_field = {
+        f"orderable[{index}]": variant for index, variant in enumerate(spec.orderable)
+    }
+    user_requirements = _user_requirements(spec, spec_dir)
+    cited_pages = {reading.page for _, reading, _ in readings}
+    for page_number in cited_pages:
+        page = pages.get(page_number)
+        if page is not None:
+            findings.extend(_page_artifact_findings(page, extraction_dir))
+
+    observation_log = _observation_log(spec_dir)
+    if observation_log is None:
+        findings.append(
+            SpecFinding(
+                code="vision_observation_log_missing",
+                severity="warning",
+                field="observations",
+                message="no image observation log was found for the cited datasheet pages",
+            )
+        )
+    else:
+        observed_hashes = _observed_image_hashes(observation_log)
+        for page_number in cited_pages:
+            page = pages.get(page_number)
+            if page is not None and page.png_sha256 not in observed_hashes:
+                findings.append(
+                    SpecFinding(
+                        code="vision_not_observed",
+                        severity="error",
+                        field=f"pages[{page_number}].png_path",
+                        message="page image SHA-256 is not recorded in the observation log",
+                        page=page_number,
+                    )
+                )
+
     for field, reading, dimension in readings:
         page = pages.get(reading.page)
+        confirmation_verified = (
+            reading.user_confirmed is not None and reading.user_confirmed in user_requirements
+        )
+        if reading.user_confirmed is not None and not confirmation_verified:
+            findings.append(
+                SpecFinding(
+                    code="user_confirmation_unverified",
+                    severity="error",
+                    field=field,
+                    message=(f"{reading.user_confirmed} is not a user-sourced intake requirement"),
+                    page=reading.page,
+                )
+            )
         if page is None:
             findings.append(
                 SpecFinding(
@@ -707,11 +1042,29 @@ def check_part_spec(
                 spec_dir,
                 extraction,
                 extraction_dir,
+                confirmation_verified,
                 findings,
             )
         elif field == "package.pin1_reading":
             _read_vision(reading, spec_dir, page, field, findings)
+            _pin1_corner_findings(spec.package, reading, field, findings)
+        elif field in orderable_by_field:
+            _orderable_variant_checks(
+                spec,
+                orderable_by_field[field],
+                int(field.removeprefix("orderable[").removesuffix("]")),
+                extraction,
+                extraction_dir,
+                spec_dir,
+                page,
+                confirmation_verified,
+                findings,
+            )
     for index, pin in enumerate(spec.pins):
+        reading = pin.reading
+        confirmation_verified = (
+            reading.user_confirmed is not None and reading.user_confirmed in user_requirements
+        )
         _pin_checks(
             spec,
             extraction,
@@ -719,11 +1072,11 @@ def check_part_spec(
             spec_dir,
             pin,
             index,
-            pages.get(pin.reading.page),
+            pages.get(reading.page),
+            confirmation_verified,
             findings,
         )
 
-    cited_pages = {reading.page for _, reading, _ in readings}
     for page_number in cited_pages:
         page = pages.get(page_number)
         if page is None:

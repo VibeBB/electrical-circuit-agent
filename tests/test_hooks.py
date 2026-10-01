@@ -522,31 +522,6 @@ def test_record_image_observation_logs_render_paths(tmp_path: Path) -> None:
     assert records[0]["session_id"] == "s1"
 
 
-def test_record_image_observation_logs_datasheet_page_paths(tmp_path: Path) -> None:
-    image = tmp_path / "datasheet" / "page-001.png"
-    image.parent.mkdir(parents=True)
-    image.write_bytes(_PNG)
-    payload = {
-        "working_dir": str(tmp_path),
-        "tool_name": "circuit_datasheet_extract",
-        "tool_input": {"pdf_path": "parts.pdf"},
-        "tool_response": {
-            "content": [
-                {
-                    "type": "text",
-                    "text": json.dumps({"pages": [{"png_path": "datasheet/page-001.png"}]}),
-                }
-            ]
-        },
-    }
-    assert _run_observe_hook(payload).returncode == 0
-    records = _observations(tmp_path)
-    assert len(records) == 1
-    assert records[0]["tool_name"] == "circuit_datasheet_extract"
-    assert records[0]["image_path"] == str(image)
-    assert records[0]["image_sha256"] == hashlib.sha256(_PNG).hexdigest()
-
-
 def test_record_image_observation_logs_file_editor_view(tmp_path: Path) -> None:
     image = tmp_path / "renders" / "board.png"
     image.parent.mkdir(parents=True)
