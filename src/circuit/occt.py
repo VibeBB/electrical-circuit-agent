@@ -172,11 +172,26 @@ def write_step(shape: Shape, path: Path, *, product_name: str) -> None:
         )
         escaped_name = product_name.replace("'", "''")
         product = re.compile(r"(PRODUCT\()'[^']*(?:''[^']*)*',\s*'[^']*(?:''[^']*)*'")
-        content = product.sub(
-            lambda match: f"{match.group(1)}'{escaped_name}','{escaped_name}'",
-            content,
-            count=1,
-        )
+        product_index = 0
+
+        def normalize_product(match: re.Match[str]) -> str:
+            nonlocal product_index
+            product_index += 1
+            name = (
+                escaped_name if product_index == 1 else f"{escaped_name} solid {product_index - 1}"
+            )
+            return f"{match.group(1)}'{name}','{name}'"
+
+        content = product.sub(normalize_product, content)
+        occurrence = re.compile(r"(NEXT_ASSEMBLY_USAGE_OCCURRENCE\()'[^']*'")
+        occurrence_index = 0
+
+        def normalize_occurrence(match: re.Match[str]) -> str:
+            nonlocal occurrence_index
+            occurrence_index += 1
+            return f"{match.group(1)}'{occurrence_index}'"
+
+        content = occurrence.sub(normalize_occurrence, content)
         path.write_text(content, encoding="ascii")
     except OcctError:
         raise

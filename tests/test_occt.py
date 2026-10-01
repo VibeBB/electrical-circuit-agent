@@ -6,7 +6,12 @@ from circuit import occt
 
 
 def test_step_round_trip_is_deterministic_and_inspectable(tmp_path: Path) -> None:
-    shape = occt.box(-1.0, -2.0, 0.0, 2.0, 4.0, 1.5)
+    shape = occt.compound(
+        (
+            occt.box(-1.0, -2.0, 0.0, 2.0, 4.0, 1.5),
+            occt.box(3.0, 0.0, 0.0, 0.5, 0.5, 0.5),
+        )
+    )
     step_path = tmp_path / "model.step"
 
     occt.write_step(shape, step_path, product_name="fixture")
@@ -16,14 +21,13 @@ def test_step_round_trip_is_deterministic_and_inspectable(tmp_path: Path) -> Non
     assert step_path.read_bytes() == first
     assert b"1970-01-01T00:00:00" in first
     facts = occt.inspect(occt.read_step(step_path))
-    assert facts.solid_count == 1
+    assert facts.solid_count == 2
     assert facts.valid
     assert facts.units == "mm"
     assert facts.solids[0].volume == pytest.approx(12.0)
     assert facts.solids[0].closed_shell
-    assert facts.solids[0].bbox.xyz == pytest.approx(
-        (-1.0, -2.0, 0.0, 1.0, 2.0, 1.5), abs=2e-7
-    )
+    assert facts.solids[1].volume == pytest.approx(0.125)
+    assert facts.solids[0].bbox.xyz == pytest.approx((-1.0, -2.0, 0.0, 1.0, 2.0, 1.5), abs=2e-7)
 
 
 def test_slab_regions_preserve_source_solid_and_area() -> None:
