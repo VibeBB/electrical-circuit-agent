@@ -368,6 +368,25 @@ def _socket_mounts() -> list[str]:
     return []
 
 
+def _resolve_llm_model() -> None:
+    profile = os.environ.get("CIRCUIT_LLM_PROFILE")
+    if not profile or os.environ.get("CIRCUIT_LLM_MODEL"):
+        return
+    model = "unknown"
+    if Path(profile).name == profile:
+        profile_path = Path.home() / ".openhands" / "profiles" / f"{profile}.json"
+        try:
+            value = json.loads(profile_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            value = None
+        if isinstance(value, dict):
+            profile_data = cast(dict[str, object], value)
+            profile_model = profile_data.get("model")
+            if isinstance(profile_model, str):
+                model = profile_model
+    os.environ["CIRCUIT_LLM_MODEL"] = model
+
+
 def _docker_argv(image: str, source: Path | None, inner_argv: list[str]) -> list[str]:
     workdir = os.environ.get("OPENHANDS_PROJECT_DIR") or os.getcwd()
     argv = [
@@ -419,6 +438,7 @@ def main() -> int:
         )
         return 2
 
+    _resolve_llm_model()
     try:
         _attestation_mode()
     except ValueError as exc:

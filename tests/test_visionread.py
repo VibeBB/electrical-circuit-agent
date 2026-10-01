@@ -1,0 +1,411 @@
+from __future__ import annotations
+
+import hashlib
+import shutil
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from PIL import Image
+
+from circuit.datasheet import DatasheetExtraction, PageExtraction
+from circuit.visionread import (
+    VisionAnswerInput,
+    VisionAnswerRecord,
+    VisionBatch,
+    VisionKind,
+    VisionReadError,
+    VisionReadItem,
+    VisionReadRequest,
+    _render_pdfium,  # pyright: ignore[reportPrivateUsage]
+    _render_pdftoppm,  # pyright: ignore[reportPrivateUsage]
+    create_read_batch,
+    record_answers,
+)
+from vision_fixtures import FIXTURE_CONTROL, FIXTURE_IMPRESSION
+
+
+def _synthetic_pdf(path: Path) -> None:
+    stream = b"0 0 0 rg\n20 30 10 10 re f\n"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> /Contents 4 0 R >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"endstream",
+    ]
+    document = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, content in enumerate(objects, start=1):
+        offsets.append(len(document))
+        document.extend(f"{index} 0 obj\n".encode())
+        document.extend(content)
+        document.extend(b"\nendobj\n")
+    xref_offset = len(document)
+    document.extend(f"xref\n0 {len(offsets)}\n".encode())
+    document.extend(b"0000000000 65535 f \n")
+    document.extend(b"".join(f"{offset:010} 00000 n \n".encode() for offset in offsets[1:]))
+    document.extend(
+        f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\n"
+        f"startxref\n{xref_offset}\n%%EOF\n".encode()
+    )
+    path.write_bytes(document)
+
+
+def _extraction(tmp_path: Path) -> Path:
+    pdf_path = tmp_path / "part.pdf"
+    _synthetic_pdf(pdf_path)
+    page_png = tmp_path / "page.png"
+    Image.new("RGB", (100, 100), "white").save(page_png)
+    extraction = DatasheetExtraction(
+        artifact_kind="circuit_datasheet_extraction",
+        pdf_path=pdf_path.name,
+        pdf_sha256=hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
+        page_count=1,
+        pages=[
+            PageExtraction(
+                page=1,
+                width_pt=100,
+                height_pt=100,
+                png_path=page_png.name,
+                png_sha256=hashlib.sha256(page_png.read_bytes()).hexdigest(),
+                dpi=72,
+                text_layer=True,
+                lanes=[],
+                tables_path=None,
+                table_count=0,
+                vector_objects=0,
+                drawing_page=False,
+                order_similarity=1,
+            )
+        ],
+        tools={},
+    )
+    extraction_path = tmp_path / "extraction.json"
+    extraction_path.write_text(extraction.model_dump_json(), encoding="utf-8")
+    return extraction_path
+
+
+def test_both_rasterizers_use_pdf_points_for_y_down_crop_geometry(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "square.pdf"
+    _synthetic_pdf(pdf_path)
+    if shutil.which("pdftoppm") is None:
+        pytest.skip("pdftoppm is unavailable")
+    bbox = (15.0, 55.0, 35.0, 75.0)
+    outputs = (tmp_path / "pdftoppm.png", tmp_path / "pdfium.png")
+
+    _render_pdftoppm(pdf_path, outputs[0], 1, bbox, 72)
+    _render_pdfium(pdf_path, outputs[1], 1, bbox, 100, 100, 72)
+
+    for output in outputs:
+        with Image.open(output) as image:
+            rgb = image.convert("RGB")
+            assert rgb.size == (20, 20)
+            assert rgb.getpixel((9, 9)) == (0, 0, 0)
+            assert rgb.getpixel((1, 1)) == (255, 255, 255)
+
+
+def test_read_batch_limits_request_count_before_loading_extraction(tmp_path: Path) -> None:
+    request = VisionReadRequest(field="x", page=1, bbox=(1, 1, 2, 2), kind="view")
+
+    for requests in ([], [request] * 8):
+        with pytest.raises(VisionReadError, match=r"1\.\.7"):
+            create_read_batch(
+                tmp_path / "missing.json",
+                requests,
+                out_dir=tmp_path / f"count-{len(requests)}",
+            )
+
+
+def test_read_batch_selects_lane_rasterizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_rasterizers(monkeypatch)
+    extraction_path = _extraction(tmp_path)
+    request = [VisionReadRequest(field="x", page=1, bbox=(20, 55, 30, 65), kind="view")]
+
+    for lane, expected in (("a", "pdftoppm"), ("b", "pdfium"), ("main", "pdftoppm")):
+        batch = create_read_batch(
+            extraction_path,
+            request,
+            out_dir=tmp_path / f"lane-{lane}",
+            lane=lane,
+        )
+        assert {item.rasterizer for item in batch.items} == {expected}
+
+
+def test_pdftoppm_uses_configured_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuit import visionread
+
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        commands.append(command)
+        Image.new("RGB", (2, 2), "white").save(Path(command[-1]).with_suffix(".png"))
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setenv("CIRCUIT_PDFTOPPM", "custom-pdftoppm --example-option")
+    monkeypatch.setattr(visionread.subprocess, "run", run)
+    output = tmp_path / "crop.png"
+
+    _render_pdftoppm(tmp_path / "part.pdf", output, 1, (0, 0, 2, 2), 72)
+
+    assert commands[0][:2] == ["custom-pdftoppm", "--example-option"]
+    assert output.is_file()
+
+
+def test_oversized_crop_is_rejected_without_tiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extraction_path = _extraction(tmp_path)
+    extraction = DatasheetExtraction.model_validate_json(
+        extraction_path.read_text(encoding="utf-8")
+    )
+    extraction.pages[0].width_pt = 10000
+    extraction_path.write_text(extraction.model_dump_json(), encoding="utf-8")
+    batch_dir = tmp_path / "oversized"
+
+    with pytest.raises(VisionReadError, match="bbox too large"):
+        create_read_batch(
+            extraction_path,
+            [
+                VisionReadRequest(
+                    field="drawing",
+                    page=1,
+                    bbox=(0, 10, 10000, 90),
+                    kind="view",
+                )
+            ],
+            out_dir=batch_dir,
+        )
+
+    assert not (batch_dir / "batch.json").exists()
+    assert not list(batch_dir.rglob("*.png"))
+
+
+def _stub_rasterizers(monkeypatch: pytest.MonkeyPatch) -> None:
+    from circuit import visionread
+
+    def render(
+        _pdf: Path,
+        output: Path,
+        _page: int,
+        bbox: tuple[float, float, float, float],
+        *_args: object,
+    ) -> None:
+        Image.new(
+            "RGB",
+            (
+                max(1, round(bbox[2] - bbox[0])),
+                max(1, round(bbox[3] - bbox[1])),
+            ),
+            "white",
+        ).save(output)
+
+    monkeypatch.setattr(visionread, "_render_pdfium", render)
+    monkeypatch.setattr(visionread, "_render_pdftoppm", render)
+
+    def control_image(path: Path, size: tuple[int, int]) -> str:
+        Image.new("RGB", size, "white").save(path)
+        return FIXTURE_CONTROL
+
+    monkeypatch.setattr(
+        visionread,
+        "_control_image",
+        control_image,
+    )
+
+
+def _batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    kind: VisionKind = "table",
+) -> tuple[Path, VisionBatch]:
+    _stub_rasterizers(monkeypatch)
+    extraction_path = _extraction(tmp_path)
+    batch_dir = tmp_path / "vision-batch"
+    batch = create_read_batch(
+        extraction_path,
+        [
+            VisionReadRequest(
+                field="pin_table",
+                page=1,
+                bbox=(20, 55, 30, 65),
+                kind=kind,
+            )
+        ],
+        out_dir=batch_dir,
+    )
+    return batch_dir / "batch.json", batch
+
+
+def test_table_prompt_and_normalization_are_fixed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    item = next(item for item in batch.items if not item.control)
+    assert item.prompt == (
+        "Transcribe the table in this image as JSON: a list of rows, each row a list of cell "
+        "strings in left-to-right order, including header rows. Use an empty "
+        "string for an empty cell."
+    )
+    answers: dict[str, dict[str, object]] = {
+        entry.read_id: {
+            "answer": (
+                '[["Pin\\u00a0 No.", " Name "], ["1", "SW\\nOUT"]]'
+                if not entry.control
+                else FIXTURE_CONTROL
+            ),
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for entry in batch.items
+    }
+
+    record = record_answers(batch_path, answers)
+
+    assert record.status[item.read_id] == "ok"
+    assert record.normalized[item.read_id] == [["Pin No.", "Name"], ["1", "SW OUT"]]
+    assert record.impressions[item.read_id] == FIXTURE_IMPRESSION
+
+
+@pytest.mark.parametrize(
+    "impression",
+    [
+        "",
+        "This image is clear. " * 3,
+        "The marks are clear, the image is legible, the border does not obscure text, the spacing "
+        "appears regular, and no unusual glyphs or unexpected line breaks can be seen, while the "
+        "surrounding table layout offers enough context for a reader to distinguish labels and "
+        "values without guessing, despite the close crop around the edges.",
+    ],
+)
+def test_answer_rejects_missing_short_or_single_sentence_impressions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    impression: str,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    answers: dict[str, dict[str, object]] = {
+        item.read_id: {
+            "answer": FIXTURE_CONTROL if item.control else '[["1", "SW"]]',
+            "impression": impression,
+        }
+        for item in batch.items
+    }
+
+    with pytest.raises(VisionReadError, match="read_ids"):
+        record_answers(batch_path, answers)
+
+    assert not (batch_path.parent / "answers.json").exists()
+
+
+def test_missing_control_impression_rejects_whole_batch_then_allows_resubmission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    answers: dict[str, dict[str, object]] = {
+        item.read_id: {
+            "answer": FIXTURE_CONTROL if item.control else '[["1", "SW"]]',
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for item in batch.items
+    }
+    control_id = next(item.read_id for item in batch.items if item.control)
+    answers[control_id] = {"answer": FIXTURE_CONTROL}
+
+    with pytest.raises(VisionReadError, match=control_id):
+        record_answers(batch_path, answers)
+    assert not (batch_path.parent / "answers.json").exists()
+
+    answers[control_id] = {
+        "answer": FIXTURE_CONTROL,
+        "impression": FIXTURE_IMPRESSION,
+    }
+    record = record_answers(batch_path, answers)
+
+    assert record.control_passed
+    assert (batch_path.parent / "answers.json").is_file()
+
+
+def test_table_answer_with_wrong_shape_is_unparseable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    item = next(item for item in batch.items if not item.control)
+    answers: dict[str, dict[str, object]] = {
+        entry.read_id: {
+            "answer": FIXTURE_CONTROL if entry.control else '{"not":"rows"}',
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for entry in batch.items
+    }
+
+    record = record_answers(batch_path, answers)
+
+    assert record.status[item.read_id] == "unparseable"
+
+
+def test_successful_answer_write_is_answer_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    answers: dict[str, dict[str, object]] = {
+        item.read_id: {
+            "answer": FIXTURE_CONTROL if item.control else '[["1", "SW"]]',
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for item in batch.items
+    }
+    record_answers(batch_path, answers)
+    stored = (batch_path.parent / "answers.json").read_bytes()
+
+    with pytest.raises(VisionReadError, match="answers already exist"):
+        record_answers(batch_path, answers)
+
+    assert (batch_path.parent / "answers.json").read_bytes() == stored
+
+
+def test_tool_models_forbid_extra_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError):
+        VisionReadRequest.model_validate(
+            {
+                "field": "x",
+                "page": 1,
+                "bbox": [1, 1, 2, 2],
+                "kind": "table",
+                "candidate_value": "not allowed",
+            }
+        )
+    with pytest.raises(ValueError):
+        VisionAnswerInput.model_validate(
+            {"answer": "text", "impression": FIXTURE_IMPRESSION, "candidate_value": "no"}
+        )
+
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    invalid_item = batch.items[0].model_dump(mode="json")
+    invalid_item["candidate_value"] = "no"
+    with pytest.raises(ValueError):
+        VisionReadItem.model_validate(invalid_item)
+    invalid_batch = batch.model_dump(mode="json")
+    invalid_batch["candidate_value"] = "no"
+    with pytest.raises(ValueError):
+        VisionBatch.model_validate(invalid_batch)
+
+    answers: dict[str, dict[str, object]] = {
+        item.read_id: {
+            "answer": FIXTURE_CONTROL if item.control else '[["1", "SW"]]',
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for item in batch.items
+    }
+    record = record_answers(batch_path, answers)
+    invalid_record = record.model_dump(mode="json")
+    invalid_record["candidate_value"] = "no"
+    with pytest.raises(ValueError):
+        VisionAnswerRecord.model_validate(invalid_record)

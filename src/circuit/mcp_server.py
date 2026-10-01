@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,7 +24,9 @@ from pydantic import BaseModel
 
 from . import (
     __version__,
+    advisory,
     apiserver,
+    authoring,
     brief,
     connectivity,
     datasheet,
@@ -44,6 +47,7 @@ from . import (
     report,
     sch_lint,
     stackup,
+    visionread,
 )
 from . import mcp_konnect as _mcp_konnect
 from .mcp_args import (
@@ -449,6 +453,72 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_vision_read",
+        "Create datasheet image crops for visual reading; every image must receive an answer "
+        "and a multi-sentence impression describing appearance, legibility, ambiguity, and "
+        "anything surprising.",
+        {
+            "type": "object",
+            "properties": {
+                "extraction_path": {"type": "string"},
+                "requests": {"type": "array", "items": {"type": "object"}},
+                "out_dir": {"type": "string"},
+            },
+            "required": ["extraction_path", "requests"],
+        },
+    ),
+    (
+        "circuit_vision_answer",
+        "Record answers to a tool-managed vision-read batch",
+        {
+            "type": "object",
+            "properties": {
+                "batch_path": {"type": "string"},
+                "answers": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "answer": {"type": "string"},
+                            "impression": {
+                                "type": "string",
+                                "minLength": advisory.IMPRESSION_MIN_LENGTH,
+                            },
+                        },
+                        "required": ["answer", "impression"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["batch_path", "answers"],
+        },
+    ),
+    (
+        "circuit_part_author_commit",
+        "Seal this lane's PartSpec with a required overall datasheet impression.",
+        {
+            "type": "object",
+            "properties": {
+                "run_dir": {"type": "string"},
+                "part_spec_path": {"type": "string"},
+                "impression": {
+                    "type": "string",
+                    "minLength": advisory.IMPRESSION_MIN_LENGTH,
+                },
+            },
+            "required": ["run_dir", "part_spec_path", "impression"],
+        },
+    ),
+    (
+        "circuit_part_author_compare",
+        "Re-derive and reveal both sealed authoring lanes; unavailable to lane authors.",
+        {
+            "type": "object",
+            "properties": {"run_dir": {"type": "string"}},
+            "required": ["run_dir"],
+        },
+    ),
+    (
         "circuit_part_spec_check",
         "Cross-check an authored PartSpec against datasheet extraction and evidence",
         {
@@ -765,6 +835,10 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_stackup": _anno("Stackup", write=True),
     "circuit_rasterize": _anno("Rasterize", write=True),
     "circuit_datasheet_extract": _anno("Datasheet extraction", write=True),
+    "circuit_vision_read": _anno("Create datasheet vision reads", write=True),
+    "circuit_vision_answer": _anno("Record datasheet vision answers", write=True),
+    "circuit_part_author_commit": _anno("Seal a blind authoring lane", write=True),
+    "circuit_part_author_compare": _anno("Compare sealed authoring lanes", write=True),
     "circuit_part_spec_check": _anno("PartSpec check", write=True),
     "circuit_land_pattern": _anno("Land pattern", write=True),
     "circuit_library_candidates": _anno("Library candidates", write=True),
@@ -791,17 +865,92 @@ def tool_specs() -> list[Tool]:
     ]
 
 
+_MAX_VISION_IMAGES = 8
+
+
+def _authoring_tool(name: str, args: dict[str, Any]) -> tuple[Any, list[Path]] | None:
+    if name == "circuit_vision_read":
+        raw_requests = args.get("requests")
+        if not isinstance(raw_requests, list) or not all(
+            isinstance(item, dict) for item in cast(list[Any], raw_requests)
+        ):
+            raise ValueError("circuit_vision_read requires a list of request objects")
+        out_dir = Path(str(args["out_dir"])) if isinstance(args.get("out_dir"), str) else None
+        batch = visionread.create_read_batch(
+            Path(str(args["extraction_path"])),
+            cast(list[dict[str, object]], raw_requests),
+            out_dir,
+            lane=os.environ.get("CIRCUIT_AUTHORING_LANE", "main"),
+            profile=os.environ.get("CIRCUIT_LLM_PROFILE", ""),
+            model=os.environ.get("CIRCUIT_LLM_MODEL", "unknown"),
+        )
+        batch_path = out_dir
+        if batch_path is None:
+            batch_path = Path(str(args["extraction_path"])).resolve().parent / "vision-reads"
+            batch_path = batch_path / batch.batch_id
+        else:
+            batch_path = batch_path.resolve()
+        result = {
+            "batch_id": batch.batch_id,
+            "batch_path": str(batch_path / "batch.json"),
+            "items": [
+                {
+                    "read_id": item.read_id,
+                    "kind": item.kind,
+                    "prompt": item.prompt,
+                    "image_path": str(batch_path / item.image_path),
+                }
+                for item in batch.items
+            ],
+        }
+        image_paths = [batch_path / item.image_path for item in batch.items]
+        return result, image_paths
+    if name == "circuit_vision_answer":
+        raw_answers = args.get("answers")
+        if not isinstance(raw_answers, dict):
+            raise ValueError("circuit_vision_answer requires an answers object")
+        result = visionread.record_answers(
+            Path(str(args["batch_path"])),
+            cast(
+                dict[str, str | visionread.VisionAnswerInput | dict[str, object]],
+                raw_answers,
+            ),
+        )
+        return result, []
+    if name == "circuit_part_author_commit":
+        result = authoring.commit_lane(
+            Path(str(args["run_dir"])),
+            Path(str(args["part_spec_path"])),
+            lane=os.environ.get("CIRCUIT_AUTHORING_LANE"),
+            profile=os.environ.get("CIRCUIT_LLM_PROFILE", ""),
+            model=os.environ.get("CIRCUIT_LLM_MODEL", "unknown"),
+            impression=_required_string(args, "impression", "circuit_part_author_commit"),
+        )
+        return result, []
+    if name == "circuit_part_author_compare":
+        if os.environ.get("CIRCUIT_AUTHORING_LANE") in {"a", "b"}:
+            raise ValueError("author lanes cannot reveal authoring comparisons")
+        run_dir = Path(str(args["run_dir"]))
+        result = authoring.compare_runs(run_dir)
+        authoring.write_comparison(run_dir, result)
+        return result, []
+    return None
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     return tool_specs()
 
 
-@server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResult:
     image_paths: list[Path] = []
+    result: Any = None
     try:
         args = _workspace_arguments(name, arguments or {})
-        if name == "circuit_api_server_start":
+        authoring_result = _authoring_tool(name, args)
+        if authoring_result is not None:
+            result, image_paths = authoring_result
+        elif name == "circuit_api_server_start":
             result = apiserver.start(Path(str(args["board_path"])))
         elif name == "circuit_api_server_status":
             result = apiserver.status()
@@ -1404,6 +1553,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 library_dir,
                 partspec.load_part_spec(spec_path),
                 current_id,
+                spec_path=spec_path,
             )
             output = _output_path(
                 spec_path,
@@ -1491,7 +1641,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             raise ValueError(f"unknown tool: {name}")
         value = result.model_dump() if isinstance(result, BaseModel) else result
         content: list[ContentBlock] = [TextContent(type="text", text=_json(value))]
-        for image_path in image_paths[:_MAX_INLINE_IMAGES]:
+        image_limit = _MAX_VISION_IMAGES if name == "circuit_vision_read" else _MAX_INLINE_IMAGES
+        for image_path in image_paths[:image_limit]:
             image = _image_content(image_path)
             if image is not None:
                 content.append(image)
@@ -1501,6 +1652,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             content=[TextContent(type="text", text=_json({"error": str(exc)}))],
             isError=True,
         )
+
+
+__all__ = ["call_tool", "server"]
+
+server.call_tool()(call_tool)
 
 
 async def _run() -> None:

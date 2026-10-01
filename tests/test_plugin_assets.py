@@ -13,12 +13,14 @@ PLUGIN = ROOT / "plugins" / "circuit"
 def test_plugin_loads_all_assets() -> None:
     plugin = Plugin.load(PLUGIN)
     assert plugin.name == "circuit"
-    assert len(plugin.agents) == 4
+    assert len(plugin.agents) == 6
     assert {agent.name for agent in plugin.agents} == {
         "circuit-brief",
         "circuit-schematic",
         "circuit-layout",
         "circuit-review",
+        "circuit-part-author-a",
+        "circuit-part-author-b",
     }
     assert len(plugin.skills) == 8
     assert set(plugin.mcp_config) == {"circuit", "konnect"}
@@ -40,7 +42,11 @@ def test_plugin_loads_all_assets() -> None:
     assert all(len(agent.when_to_use_examples) >= 2 for agent in plugin.agents)
     for agent in plugin.agents:
         assert agent.hooks is not None
-        assert agent.hooks.pre_tool_use[0].hooks[0].command == protect_command
+        if agent.name.startswith("circuit-part-author-"):
+            assert agent.hooks.pre_tool_use[0].hooks[0].name == "blind-author-lane-guard"
+            assert agent.hooks.post_tool_use[0].hooks[0].name == "record-authoring-commit"
+        else:
+            assert agent.hooks.pre_tool_use[0].hooks[0].command == protect_command
 
 
 def test_plugin_assets_validate_directly() -> None:
@@ -50,6 +56,11 @@ def test_plugin_assets_validate_directly() -> None:
     assert hooks.pre_tool_use
     assert hooks.session_start
     assert hooks.stop
+    assert any(
+        hook.name == "record-authoring-commit"
+        for group in hooks.post_tool_use or []
+        for hook in group.hooks
+    )
 
 
 def test_plugin_command_argument_hints() -> None:
@@ -110,6 +121,56 @@ def test_ensure_llm_profiles_provisions(tmp_path: Path) -> None:
     ]
 
 
+def test_ensure_part_author_profiles_provisions_and_reports_diversity(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import sys
+
+    script = PLUGIN / "hooks" / "scripts" / "ensure_part_author_profiles.py"
+    assert script.is_file()
+    home = tmp_path / "home"
+    profiles = home / ".openhands" / "profiles"
+    profiles.mkdir(parents=True)
+    (home / ".openhands" / "settings.json").write_text(
+        json.dumps({"active_profile": "test-model"}), encoding="utf-8"
+    )
+    (profiles / "test-model.json").write_text(
+        json.dumps({"schema_version": 1, "model": "test-model"}), encoding="utf-8"
+    )
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["missing"] == []
+    assert payload["authoring_model_diversity"] == "same"
+    for name in ("vibebb-part-author-a", "vibebb-part-author-b"):
+        assert json.loads((profiles / f"{name}.json").read_text(encoding="utf-8"))["model"] == (
+            "test-model"
+        )
+
+    profile_b_path = profiles / "vibebb-part-author-b.json"
+    profile_b = json.loads(profile_b_path.read_text(encoding="utf-8"))
+    profile_b["model"] = "independent-model"
+    profile_b_path.write_text(json.dumps(profile_b), encoding="utf-8")
+    distinct = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert distinct.returncode == 0
+    assert json.loads(distinct.stdout)["authoring_model_diversity"] == "distinct"
+
+
 def test_ensure_llm_profiles_tolerates_missing_settings(tmp_path: Path) -> None:
     import subprocess
     import sys
@@ -123,4 +184,7 @@ def test_ensure_llm_profiles_tolerates_missing_settings(tmp_path: Path) -> None:
         check=False,
     )
     assert proc.returncode == 0
-    assert json.loads(proc.stdout)["missing"] == ["vibebb-author", "vibebb-review"]
+    assert json.loads(proc.stdout)["missing"] == [
+        "vibebb-author",
+        "vibebb-review",
+    ]

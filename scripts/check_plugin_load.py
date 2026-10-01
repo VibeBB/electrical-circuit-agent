@@ -15,7 +15,14 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = REPO_ROOT / "plugins" / "circuit"
 
-EXPECTED_AGENTS = {"circuit-brief", "circuit-layout", "circuit-review", "circuit-schematic"}
+EXPECTED_AGENTS = {
+    "circuit-brief",
+    "circuit-layout",
+    "circuit-part-author-a",
+    "circuit-part-author-b",
+    "circuit-review",
+    "circuit-schematic",
+}
 EXPECTED_SKILLS = {
     "circuit-brief",
     "circuit-brief-rules",
@@ -27,11 +34,20 @@ EXPECTED_SKILLS = {
     "circuit-workflow",
 }
 EXPECTED_COMMANDS = {"design", "doctor", "drc", "erc", "export"}
-EXPECTED_SESSION_START_HOOKS = {"circuit-doctor", "ensure-llm-profiles", "intake-attachments"}
+EXPECTED_SESSION_START_HOOKS = {
+    "circuit-doctor",
+    "ensure-llm-profiles",
+    "ensure-part-author-profiles",
+    "intake-attachments",
+}
 EXPECTED_USER_PROMPT_SUBMIT_HOOKS = {"intake-attachments", "record-library-review"}
 EXPECTED_PRE_TOOL_USE_HOOKS = {"protect-libraries", "safety-rail"}
 EXPECTED_STOP_HOOKS = {"report-design-status", "intake-attachments", "record-library-review"}
-EXPECTED_POST_TOOL_USE_HOOKS = {"record-image-observation", "record-vision-tool-event"}
+EXPECTED_POST_TOOL_USE_HOOKS = {
+    "record-authoring-commit",
+    "record-image-observation",
+    "record-vision-tool-event",
+}
 
 
 def _registered_tools() -> set[str]:

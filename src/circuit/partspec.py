@@ -8,6 +8,7 @@ import math
 import os
 import re
 import tempfile
+import unicodedata
 from collections import Counter
 from collections.abc import Sequence
 from contextlib import ExitStack
@@ -18,7 +19,7 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import advisory, datasheet
+from . import advisory, datasheet, visionread
 from . import pinout as pinout_oracle
 from .datasheet import (
     DatasheetError,
@@ -69,6 +70,7 @@ class Reading(BaseModel):
     mechanical: str | None = None
     vision: str = Field(min_length=1)
     vision_record: str = Field(min_length=1)
+    vision_read: str | None = None
 
 
 class Dimension(BaseModel):
@@ -222,6 +224,7 @@ class PinoutDrawing(BaseModel):
     view_reading: Reading
     labels_vision: dict[str, str]
     vision_record: str = Field(min_length=1)
+    labels_vision_read: str | None = None
 
     @model_validator(mode="after")
     def validate_view_reading(self) -> PinoutDrawing:
@@ -241,6 +244,7 @@ class PinTable(BaseModel):
     name_col: int = Field(ge=0)
     header_rows: int = Field(default=1, ge=0)
     column_designator: str | None = None
+    vision_read: str | None = None
 
 
 class DatasheetRef(BaseModel):
@@ -265,6 +269,8 @@ class PartSpec(BaseModel):
     pins: list[PinSpec] = Field(min_length=1)
     pin_table: PinTable
     orderable: list[OrderableVariant] = Field(min_length=1)
+    authoring: str | None = None
+    orderable_vision_read: str | None = None
 
 
 class ParsedDimension(BaseModel):
@@ -1320,6 +1326,561 @@ def _pin_checks(
         )
 
 
+def _union_bbox(
+    bboxes: Sequence[tuple[float, float, float, float]],
+) -> tuple[float, float, float, float] | None:
+    if not bboxes:
+        return None
+    return (
+        min(bbox[0] for bbox in bboxes),
+        min(bbox[1] for bbox in bboxes),
+        max(bbox[2] for bbox in bboxes),
+        max(bbox[3] for bbox in bboxes),
+    )
+
+
+def _reading_cells_bbox(
+    reading: Reading,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+) -> tuple[float, float, float, float] | None:
+    if reading.cells is None:
+        return None
+    boxes: list[tuple[float, float, float, float]] = []
+    for reference in reading.cells.values():
+        table = _table_record(extraction, extraction_dir, reading.page, reference.table)
+        if table is None:
+            continue
+        bbox = _table_cell_bbox(table, reference.row, reference.col)
+        if bbox is not None:
+            boxes.append(bbox)
+    return _union_bbox(boxes)
+
+
+def _vision_read_binding(
+    spec_dir: Path,
+    ref: str | None,
+    *,
+    field: str,
+    expected_kind: visionread.VisionKind,
+    page: int,
+    bbox: tuple[float, float, float, float] | None,
+    reading: Reading | None,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    observation_log: Path | None,
+    observed_hashes: set[str],
+    findings: list[SpecFinding],
+) -> tuple[visionread.VisionBatch, visionread.VisionReadItem, object] | None:
+    if ref is None:
+        findings.append(
+            SpecFinding(
+                code="vision_read_missing",
+                severity="error",
+                field=field,
+                message="tool-managed vision read reference is required",
+                page=page,
+            )
+        )
+        return None
+    try:
+        batch, item, answers = visionread.load_vision_read(spec_dir, ref)
+    except (OSError, ValueError) as exc:
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field=field,
+                message=f"vision read could not be loaded: {exc}",
+                page=page,
+            )
+        )
+        return None
+    if item.control:
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field=field,
+                message="control reads cannot be cited as datasheet evidence",
+                page=page,
+            )
+        )
+        return None
+    if not answers.control_passed:
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field=field,
+                message="vision batch control answer did not match its challenge",
+                page=page,
+            )
+        )
+        return None
+    if batch.pdf_sha256 != extraction.pdf_sha256:
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field=field,
+                message="vision batch PDF SHA-256 differs from PartSpec datasheet SHA-256",
+                page=page,
+            )
+        )
+        return None
+    if answers.status.get(item.read_id) != "ok":
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field=field,
+                message="vision answer is unparseable or missing",
+                page=page,
+            )
+        )
+        return None
+    impression = answers.impressions.get(item.read_id)
+    try:
+        if not isinstance(impression, str):
+            raise ValueError("impression is missing")
+        advisory.impression_is_prose(impression)
+    except ValueError as exc:
+        findings.append(
+            SpecFinding(
+                code="vision_impression_missing",
+                severity="error",
+                field=field,
+                message=f"vision-read impression is missing or invalid: {exc}",
+                page=page,
+            )
+        )
+    if (
+        item.prompt != visionread.prompt_for_kind(item.kind)
+        or hashlib.sha256(item.prompt.encode("utf-8")).hexdigest() != item.prompt_sha256
+    ):
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field=field,
+                message="vision prompt differs from the fixed prompt for its kind",
+                page=page,
+            )
+        )
+        return None
+    if item.kind != expected_kind:
+        findings.append(
+            SpecFinding(
+                code="vision_read_kind_mismatch",
+                severity="error",
+                field=field,
+                message=f"expected {expected_kind!r} vision read, found {item.kind!r}",
+                page=page,
+            )
+        )
+        return None
+    target_bbox = bbox
+    if target_bbox is None and reading is not None:
+        target_bbox = _reading_cells_bbox(reading, extraction, extraction_dir)
+    if target_bbox is None:
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field=field,
+                message="reading has neither a bounding box nor cited table-cell bounds",
+                page=page,
+            )
+        )
+        return None
+    crop = item.crop_bbox
+    if item.page != page or not (
+        crop[0] <= target_bbox[0] + 1
+        and crop[1] <= target_bbox[1] + 1
+        and crop[2] >= target_bbox[2] - 1
+        and crop[3] >= target_bbox[3] - 1
+    ):
+        findings.append(
+            SpecFinding(
+                code="vision_read_region_mismatch",
+                severity="error",
+                field=field,
+                message="vision crop does not contain the cited reading region within 1 pt",
+                page=page,
+            )
+        )
+        return None
+    if observation_log is not None and item.image_sha256 not in observed_hashes:
+        findings.append(
+            SpecFinding(
+                code="vision_read_not_observed",
+                severity="error",
+                field=field,
+                message="vision crop SHA-256 is absent from the image observation log",
+                page=page,
+            )
+        )
+    normalized = answers.normalized.get(item.read_id)
+    if normalized is None:
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field=field,
+                message="vision answer normalization is missing",
+                page=page,
+            )
+        )
+        return None
+    return batch, item, normalized
+
+
+def _vision_transcription_matches(expected: str, actual: str) -> bool:
+    expected_text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", expected))
+    actual_text = re.sub(r"\s+", "", unicodedata.normalize("NFKC", actual))
+    return bool(expected_text) and expected_text in actual_text
+
+
+def _vision_name_map_matches(expected: dict[str, str], actual: object) -> bool:
+    if not isinstance(actual, dict):
+        return False
+    labels = cast(dict[str, object], actual)
+    if set(expected) != set(labels):
+        return False
+    for number, expected_name in expected.items():
+        actual_name = labels.get(number)
+        if not isinstance(actual_name, str) or not pinout_oracle.names_equal(
+            expected_name, actual_name
+        ):
+            return False
+    return True
+
+
+def _vision_table_rows(value: object) -> list[list[str]] | None:
+    if not isinstance(value, list):
+        return None
+    rows: list[list[str]] = []
+    for raw_row in cast(list[object], value):
+        if not isinstance(raw_row, list):
+            return None
+        row: list[str] = []
+        for cell in cast(list[object], raw_row):
+            if not isinstance(cell, str):
+                return None
+            row.append(cell)
+        rows.append(row)
+    return rows
+
+
+def _table_value_matches(value: str, cell: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(value)}(?!\w)", cell) is not None
+
+
+def _table_pairs_equal(
+    first: list[tuple[str, str]], second: list[tuple[str, str]]
+) -> tuple[bool, list[tuple[str, str]], list[tuple[str, str]]]:
+    unmatched = list(first)
+    extra: list[tuple[str, str]] = []
+    for number, name in second:
+        match_index = next(
+            (
+                index
+                for index, candidate in enumerate(unmatched)
+                if candidate[0] == number and pinout_oracle.names_equal(candidate[1], name)
+            ),
+            None,
+        )
+        if match_index is None:
+            extra.append((number, name))
+        else:
+            unmatched.pop(match_index)
+    return not unmatched and not extra, unmatched, extra
+
+
+def _table_pairs(
+    rows: list[list[str]],
+    number_col: int,
+    name_col: int,
+    start_row: int,
+) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for row in rows[start_row:]:
+        number_text = row[number_col] if number_col < len(row) else ""
+        name = row[name_col].strip() if name_col < len(row) else ""
+        if not name:
+            continue
+        pairs.extend((number, name) for number in _pin_tokens(number_text))
+    return pairs
+
+
+def _pin_table_vision_checks(
+    spec: PartSpec,
+    spec_dir: Path,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    observation_log: Path | None,
+    observed_hashes: set[str],
+    findings: list[SpecFinding],
+) -> None:
+    table_ref = spec.pin_table
+    if table_ref.vision_read is None:
+        _vision_read_binding(
+            spec_dir,
+            None,
+            field="pin_table",
+            expected_kind="table",
+            page=table_ref.page,
+            bbox=None,
+            reading=None,
+            extraction=extraction,
+            extraction_dir=extraction_dir,
+            observation_log=observation_log,
+            observed_hashes=observed_hashes,
+            findings=findings,
+        )
+        return
+    table = _table_record(extraction, extraction_dir, table_ref.page, table_ref.table)
+    rows = _table_rows(table) if table is not None else None
+    citations: dict[int, list[CellRef]] = {}
+    boxes: list[tuple[float, float, float, float]] = []
+    valid_citations = True
+    for pin in spec.pins:
+        references = list(pin.reading.cells.values()) if pin.reading.cells is not None else []
+        if not references:
+            valid_citations = False
+            continue
+        row_indices = {
+            reference.row for reference in references if reference.table == table_ref.table
+        }
+        columns = {reference.col for reference in references if reference.table == table_ref.table}
+        if (
+            len(row_indices) != 1
+            or table_ref.number_col not in columns
+            or table_ref.name_col not in columns
+            or any(reference.table != table_ref.table for reference in references)
+        ):
+            valid_citations = False
+            continue
+        row_index = next(iter(row_indices))
+        citations.setdefault(row_index, []).extend(references)
+        if table is not None:
+            for reference in references:
+                bbox = _table_cell_bbox(table, reference.row, reference.col)
+                if bbox is not None:
+                    boxes.append(bbox)
+                else:
+                    valid_citations = False
+    target_bbox = _union_bbox(boxes)
+    if not valid_citations or target_bbox is None or rows is None:
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field="pin_table",
+                message="pin readings must cite number and name cells in the bound pin table",
+                page=table_ref.page,
+            )
+        )
+        return
+    binding = _vision_read_binding(
+        spec_dir,
+        table_ref.vision_read,
+        field="pin_table",
+        expected_kind="table",
+        page=table_ref.page,
+        bbox=target_bbox,
+        reading=None,
+        extraction=extraction,
+        extraction_dir=extraction_dir,
+        observation_log=observation_log,
+        observed_hashes=observed_hashes,
+        findings=findings,
+    )
+    if binding is None:
+        return
+    _, _, normalized = binding
+    vision_rows = _vision_table_rows(normalized)
+    if vision_rows is None:
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field="pin_table",
+                message="pin-table vision answer is not a row list",
+                page=table_ref.page,
+            )
+        )
+        return
+    mechanical_pairs: list[tuple[str, str]] = []
+    for row_index in sorted(citations):
+        if not 0 <= row_index < len(rows):
+            findings.append(
+                SpecFinding(
+                    code="vision_read_invalid",
+                    severity="error",
+                    field="pin_table",
+                    message=f"pin reading cites missing table row {row_index}",
+                    page=table_ref.page,
+                )
+            )
+            return
+        number_text = rows[row_index][table_ref.number_col] or ""
+        name = rows[row_index][table_ref.name_col] or ""
+        mechanical_pairs.extend((number, name) for number in _pin_tokens(number_text))
+    vision_pairs = _table_pairs(
+        vision_rows,
+        table_ref.number_col,
+        table_ref.name_col,
+        table_ref.header_rows,
+    )
+    equal, missing, extra = _table_pairs_equal(mechanical_pairs, vision_pairs)
+    if equal:
+        return
+    max_columns = max((len(row) for row in vision_rows), default=0)
+    column_shift = any(
+        _table_pairs_equal(
+            mechanical_pairs,
+            _table_pairs(vision_rows, table_ref.number_col, column, table_ref.header_rows),
+        )[0]
+        for column in range(max_columns)
+        if column not in (table_ref.number_col, table_ref.name_col)
+    )
+    findings.append(
+        SpecFinding(
+            code="vision_table_mismatch",
+            severity="error",
+            field="pin_table",
+            message=(
+                f"pin-table vision rows differ from cited mechanical cells; missing={missing}, "
+                f"extra={extra}, column_shift={column_shift}"
+            ),
+            page=table_ref.page,
+        )
+    )
+
+
+def _orderable_vision_checks(
+    spec: PartSpec,
+    spec_dir: Path,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    observation_log: Path | None,
+    observed_hashes: set[str],
+    findings: list[SpecFinding],
+) -> None:
+    if spec.orderable_vision_read is None:
+        _vision_read_binding(
+            spec_dir,
+            None,
+            field="orderable",
+            expected_kind="table",
+            page=spec.orderable[0].reading.page,
+            bbox=None,
+            reading=None,
+            extraction=extraction,
+            extraction_dir=extraction_dir,
+            observation_log=observation_log,
+            observed_hashes=observed_hashes,
+            findings=findings,
+        )
+        return
+    boxes: list[tuple[float, float, float, float]] = []
+    pages = {variant.reading.page for variant in spec.orderable}
+    valid = len(pages) == 1
+    page_number = next(iter(pages)) if pages else spec.pin_table.page
+    for variant in spec.orderable:
+        if variant.reading.page != page_number:
+            valid = False
+            continue
+        table = _table_record(extraction, extraction_dir, page_number, variant.row.table)
+        rows = _table_rows(table) if table is not None else None
+        if rows is None or not 0 <= variant.row.row < len(rows):
+            valid = False
+            continue
+        for column in range(len(rows[variant.row.row])):
+            bbox = _table_cell_bbox(table, variant.row.row, column) if table is not None else None
+            if bbox is None:
+                valid = False
+            else:
+                boxes.append(bbox)
+    target_bbox = _union_bbox(boxes)
+    if not valid or target_bbox is None:
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field="orderable",
+                message="orderable variants do not cite one readable table region",
+                page=page_number,
+            )
+        )
+        return
+    binding = _vision_read_binding(
+        spec_dir,
+        spec.orderable_vision_read,
+        field="orderable",
+        expected_kind="table",
+        page=page_number,
+        bbox=target_bbox,
+        reading=None,
+        extraction=extraction,
+        extraction_dir=extraction_dir,
+        observation_log=observation_log,
+        observed_hashes=observed_hashes,
+        findings=findings,
+    )
+    if binding is None:
+        return
+    _, _, normalized = binding
+    vision_rows = _vision_table_rows(normalized)
+    if vision_rows is None:
+        findings.append(
+            SpecFinding(
+                code="vision_read_invalid",
+                severity="error",
+                field="orderable",
+                message="orderable vision answer is not a row list",
+                page=page_number,
+            )
+        )
+        return
+    normalized_rows = [
+        [re.sub(r"\s+", " ", unicodedata.normalize("NFKC", cell)).casefold() for cell in row]
+        for row in vision_rows
+    ]
+    mismatches: list[str] = []
+    for variant in spec.orderable:
+        mpn = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", variant.mpn)).casefold()
+        package_code = re.sub(
+            r"\s+",
+            " ",
+            unicodedata.normalize("NFKC", variant.package_designator),
+        ).casefold()
+        matching_rows = [
+            row_index
+            for row_index, row in enumerate(normalized_rows)
+            if any(_table_value_matches(mpn, cell) for cell in row)
+        ]
+        if len(matching_rows) != 1:
+            mismatches.append(f"{variant.mpn}: rows={matching_rows}")
+            continue
+        row = normalized_rows[matching_rows[0]]
+        if not any(_table_value_matches(package_code, cell) for cell in row):
+            mismatches.append(f"{variant.mpn}: package code {variant.package_designator!r} missing")
+    if mismatches:
+        findings.append(
+            SpecFinding(
+                code="vision_table_mismatch",
+                severity="error",
+                field="orderable",
+                message="orderable vision table does not bind each MPN to one package row: "
+                + "; ".join(mismatches),
+                page=page_number,
+            )
+        )
+
+
 def _table_record(
     extraction: DatasheetExtraction,
     extraction_dir: Path,
@@ -2234,6 +2795,7 @@ def check_part_spec(
             findings.extend(_page_artifact_findings(page, extraction_dir))
 
     observation_log = _observation_log(spec_dir)
+    observed_hashes: set[str] = set()
     if observation_log is None:
         findings.append(
             SpecFinding(
@@ -2489,6 +3051,128 @@ def check_part_spec(
                         page=spec.pinout.page,
                     )
                 )
+
+        vision_extraction = derived_extraction or extraction
+        vision_extraction_dir = derived_dir if derived_extraction is not None else extraction_dir
+        pinout_labels_binding: (
+            tuple[visionread.VisionBatch, visionread.VisionReadItem, object] | None
+        ) = None
+        for field, reading, _ in readings:
+            expected_kind: visionread.VisionKind = (
+                "pin1_corner"
+                if field == "package.pin1_reading"
+                else "view"
+                if field == "pinout.view_reading"
+                else "transcribe"
+            )
+            binding = _vision_read_binding(
+                spec_dir,
+                reading.vision_read,
+                field=field,
+                expected_kind=expected_kind,
+                page=reading.page,
+                bbox=reading.bbox,
+                reading=reading,
+                extraction=vision_extraction,
+                extraction_dir=vision_extraction_dir,
+                observation_log=observation_log,
+                observed_hashes=observed_hashes,
+                findings=findings,
+            )
+            if binding is None:
+                continue
+            _, _, normalized = binding
+            value_matches = False
+            if expected_kind == "transcribe":
+                value_matches = isinstance(normalized, str) and _vision_transcription_matches(
+                    reading.vision, normalized
+                )
+            elif expected_kind == "pin1_corner":
+                corner = _PIN1_CORNER.search(reading.vision)
+                expected_corner = (
+                    re.sub(r"[\s-]+", "_", corner.group("corner").casefold())
+                    if corner is not None
+                    else None
+                )
+                value_matches = normalized == expected_corner
+            elif expected_kind == "view":
+                expected_view = spec.pinout.view if spec.pinout is not None else None
+                value_matches = isinstance(normalized, str) and normalized == expected_view
+            if not value_matches:
+                findings.append(
+                    SpecFinding(
+                        code="vision_read_mismatch",
+                        severity="error",
+                        field=field,
+                        message="tool-owned vision answer differs from the PartSpec reading",
+                        page=reading.page,
+                    )
+                )
+
+        _pin_table_vision_checks(
+            spec,
+            spec_dir,
+            vision_extraction,
+            vision_extraction_dir,
+            observation_log,
+            observed_hashes,
+            findings,
+        )
+        _orderable_vision_checks(
+            spec,
+            spec_dir,
+            vision_extraction,
+            vision_extraction_dir,
+            observation_log,
+            observed_hashes,
+            findings,
+        )
+        if spec.pinout is not None:
+            pinout_labels_binding = _vision_read_binding(
+                spec_dir,
+                spec.pinout.labels_vision_read,
+                field="pinout.labels_vision",
+                expected_kind="pin_labels",
+                page=spec.pinout.page,
+                bbox=spec.pinout.bbox,
+                reading=None,
+                extraction=vision_extraction,
+                extraction_dir=vision_extraction_dir,
+                observation_log=observation_log,
+                observed_hashes=observed_hashes,
+                findings=findings,
+            )
+            if pinout_labels_binding is not None:
+                _, _, normalized = pinout_labels_binding
+                if not _vision_name_map_matches(spec.pinout.labels_vision, normalized):
+                    findings.append(
+                        SpecFinding(
+                            code="vision_read_mismatch",
+                            severity="error",
+                            field="pinout.labels_vision",
+                            message="tool-owned pin labels differ from labels_vision",
+                            page=spec.pinout.page,
+                        )
+                    )
+                if pinout_geometry is not None:
+                    derived_names = {
+                        label.number: label.name
+                        for label in pinout_geometry.labels
+                        if label.name is not None
+                    }
+                    if not _vision_name_map_matches(derived_names, normalized):
+                        findings.append(
+                            SpecFinding(
+                                code="vision_pinout_mismatch",
+                                severity="error",
+                                field="pinout",
+                                message=(
+                                    "tool-owned pin labels differ from freshly derived "
+                                    "pinout geometry"
+                                ),
+                                page=spec.pinout.page,
+                            )
+                        )
 
         _consistency_checks(spec, findings)
         return PartSpecReport(

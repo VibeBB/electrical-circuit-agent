@@ -111,6 +111,47 @@ def test_socket_mounts_existing_kicad_api_socket(
     assert module._socket_mounts() == ["-v", f"{socket_path}:{socket_path}"]
 
 
+def test_resolve_llm_model_from_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_path = tmp_path / ".openhands" / "profiles" / "author.json"
+    profile_path.parent.mkdir(parents=True)
+    profile_path.write_text(json.dumps({"model": "provider/model"}), encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("CIRCUIT_LLM_PROFILE", "author")
+    monkeypatch.delenv("CIRCUIT_LLM_MODEL", raising=False)
+
+    _load_launcher()._resolve_llm_model()
+
+    assert os.environ["CIRCUIT_LLM_MODEL"] == "provider/model"
+
+
+@pytest.mark.parametrize("profile_contents", ["missing", "{invalid}", '{"other":"value"}'])
+def test_resolve_llm_model_falls_back_for_unreadable_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    profile_contents: str,
+) -> None:
+    if profile_contents != "missing":
+        profile_path = tmp_path / ".openhands" / "profiles" / "author.json"
+        profile_path.parent.mkdir(parents=True)
+        profile_path.write_text(profile_contents, encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("CIRCUIT_LLM_PROFILE", "author")
+    monkeypatch.delenv("CIRCUIT_LLM_MODEL", raising=False)
+
+    _load_launcher()._resolve_llm_model()
+
+    assert os.environ["CIRCUIT_LLM_MODEL"] == "unknown"
+
+
+def test_resolve_llm_model_preserves_explicit_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CIRCUIT_LLM_PROFILE", "author")
+    monkeypatch.setenv("CIRCUIT_LLM_MODEL", "explicit/model")
+
+    _load_launcher()._resolve_llm_model()
+
+    assert os.environ["CIRCUIT_LLM_MODEL"] == "explicit/model"
+
+
 def test_ensure_image_warn_mode_never_pulls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

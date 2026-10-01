@@ -376,7 +376,12 @@ def check_libraries(
                 tolerance_mm=fresh.inputs.tolerance_mm,
                 model_required=fresh.inputs.model_required,
             )
-            status = review_status(project_library, spec, current_id)
+            status = review_status(
+                project_library,
+                spec,
+                current_id,
+                spec_path=fresh.inputs.part_spec_path,
+            )
         except (OSError, ValueError):
             reasons.append(f"human_review_invalid: {lib_id}")
             continue

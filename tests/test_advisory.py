@@ -8,6 +8,8 @@ from pydantic import ValidationError
 from circuit.advisory import (
     AdvisoryResult,
     VisualReviewDetail,
+    _impression_is_prose,  # pyright: ignore[reportPrivateUsage]
+    impression_is_prose,
     parse_visual_review,
     review_record_path,
     write_review_record,
@@ -173,3 +175,8 @@ def test_impression_min_length_floor() -> None:
     assert result.detail is not None
     result.detail["impression"] = "A short note. With two sentences."
     assert parse_visual_review(result) is None
+
+
+def test_public_impression_validator_preserves_private_alias() -> None:
+    assert impression_is_prose(LONG_IMPRESSION) == LONG_IMPRESSION
+    assert _impression_is_prose is impression_is_prose

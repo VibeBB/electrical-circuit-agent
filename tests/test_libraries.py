@@ -215,7 +215,12 @@ def _review_status_stub(
     packet: str,
     state: Literal["approved", "rejected", "pending", "invalid"],
 ) -> Callable[..., ReviewStatus]:
-    def fake_review_status(_library_dir: Path, _spec: PartSpec, _packet_id: str) -> ReviewStatus:
+    def fake_review_status(
+        _library_dir: Path,
+        _spec: PartSpec,
+        _packet_id: str,
+        **_kwargs: object,
+    ) -> ReviewStatus:
         return ReviewStatus(
             artifact_kind="circuit_library_review_status",
             packet_id=packet,

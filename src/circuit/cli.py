@@ -180,7 +180,12 @@ def cmd_library_review(args: argparse.Namespace) -> int:
                 tolerance_mm=args.tolerance_mm,
                 model_required=args.model_required,
             )
-            result = libreview.review_status(library_dir, spec, current_id)
+            result = libreview.review_status(
+                library_dir,
+                spec,
+                current_id,
+                spec_path=spec_path,
+            )
     except (OSError, ValueError) as exc:
         return _fail("library-review", str(exc))
     payload = result.model_dump(mode="json")
