@@ -16,6 +16,8 @@ MERGE_WAIT_ATTEMPTS=${PUBLISH_PIN_PR_MERGE_WAIT_ATTEMPTS:-36}
 MERGE_WAIT_SECONDS=${PUBLISH_PIN_PR_MERGE_WAIT_SECONDS:-10}
 RETRY_ATTEMPTS=${PUBLISH_PIN_PR_RETRY_ATTEMPTS:-3}
 RETRY_DELAY_SECONDS=${PUBLISH_PIN_PR_RETRY_DELAY_SECONDS:-10}
+REQUIRED_CHECKS_STDERR_FILE=$(mktemp)
+trap 'rm -f "$REQUIRED_CHECKS_STDERR_FILE"' EXIT
 
 write_summary() {
   printf '%s\n' "$1"
@@ -143,14 +145,32 @@ required_check_counts() {
 }
 
 read_required_checks() {
-  local checks_json
+  local checks_json checks_error
+  : > "$REQUIRED_CHECKS_STDERR_FILE"
   checks_json=$(gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required \
-    --json name,state,bucket 2>/dev/null) || true
-  if [ -z "$checks_json" ] || ! jq -e 'type == "array"' >/dev/null <<< "$checks_json"; then
-    return 1
+    --json name,state,bucket 2>"$REQUIRED_CHECKS_STDERR_FILE") || true
+  if [ -n "$checks_json" ] &&
+    jq -e 'type == "array"' >/dev/null 2>&1 <<< "$checks_json"; then
+    printf '%s\n' "$checks_json"
+    return 0
   fi
-  printf '%s\n' "$checks_json"
-  return 0
+  checks_error=$(<"$REQUIRED_CHECKS_STDERR_FILE")
+  if [ -z "$checks_json" ] &&
+    [[ "$checks_error" == *"no checks reported on the"* ||
+      "$checks_error" == *"no required checks reported on the"* ]]; then
+    printf '[]\n'
+    return 0
+  fi
+  return 1
+}
+
+report_required_checks_error() {
+  local detail
+  detail=$(<"$REQUIRED_CHECKS_STDERR_FILE")
+  detail=${detail//$'\r'/}
+  detail=${detail//$'\n'/ }
+  printf '::error::Could not determine required checks for pin PR %s: %s\n' \
+    "$PR_URL" "$detail" >&2
 }
 
 arm_auto_merge() {
@@ -175,7 +195,7 @@ for ((attempt = 1; attempt <= REQUIRED_WAIT_ATTEMPTS; attempt++)); do
   approve_gated_runs
   if ! checks_json=$(read_required_checks); then
     check_pin_pr_state
-    echo "::error::Could not determine required checks for pin PR ${PR_URL}." >&2
+    report_required_checks_error
     exit 1
   fi
   read -r failures pending total <<< "$(required_check_counts "$checks_json")"
@@ -206,7 +226,7 @@ for ((attempt = 1; attempt <= MERGE_WAIT_ATTEMPTS; attempt++)); do
   check_pin_pr_state
   if ! checks_json=$(read_required_checks); then
     check_pin_pr_state
-    echo "::error::Could not determine required checks for pin PR ${PR_URL}." >&2
+    report_required_checks_error
     exit 1
   fi
   read -r failures pending total <<< "$(required_check_counts "$checks_json")"
