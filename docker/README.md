@@ -47,8 +47,9 @@ publishes the tools/server images to GHCR and records the actual digests in
 Publishing is done by `.github/workflows/publish-circuit-images.yml`. After the
 tools image is verified, the OpenHands SDK v1.50.1 server image is built, with
 the immutable tags `<commit>-tools` and `<commit>-latest-source` plus the
-`latest` alias. Lock updates are separated into bot PRs that auto-merge only
-when that PR's CI succeeds.
+`latest` alias. Lock updates are separated into bot PRs. The publish workflow
+checks required PR statuses for up to 30 minutes, ignores non-required failures,
+and arms squash auto-merge with branch deletion when checks pass or remain pending.
 
 The tools image carries a GitHub build-provenance attestation. Its URL is
 stored with the `circuit_tools` entry in the root lock and mirrored plugin
