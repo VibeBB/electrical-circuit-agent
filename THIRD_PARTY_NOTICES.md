@@ -114,6 +114,15 @@ legal advice.
 The tools image installs the runtime dependencies from `uv.lock`. The main
 direct dependencies are:
 
+- `cadquery-ocp-novtk==8.0.1.0.0`: OCP bindings under Apache-2.0 and Open CASCADE
+  Technology under LGPL-2.1 with the OCCT exception; the PyPI wheel is installed
+  without modification. The installed wheel contains no separate OCP/OCCT
+  license files; its distribution metadata identifies Apache-2.0. It bundles
+  51 `libTK*.so.8.0.1` OCCT shared libraries under
+  `cadquery_ocp_novtk.libs/`, dynamically linked by the OCP extension.
+  License sources: <https://github.com/CadQuery/OCP/blob/master/LICENSE>,
+  <https://github.com/Open-Cascade-SAS/OCCT/blob/master/LICENSE_LGPL_21.txt>,
+  and <https://github.com/Open-Cascade-SAS/OCCT/blob/master/OCCT_LGPL_EXCEPTION.txt>.
 - `mcp>=1.29,<2`: MIT — <https://pypi.org/project/mcp/>
 - `pydantic>=2`: MIT — <https://pypi.org/project/pydantic/>
 - `openhands-sdk==1.50.1`: MIT — <https://pypi.org/project/openhands-sdk/1.50.1/>

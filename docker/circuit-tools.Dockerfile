@@ -202,7 +202,7 @@ RUN if [ -f /usr/share/doc/kicad-nightly-symbols/LICENSE.md ]; then \
     && pdftoppm -v 2>&1 | grep -i poppler \
     && rsvg-convert --version | grep -i rsvg \
     && konnect --version | grep -F "${KONNECT_VERSION}" \
-    && python3 -c "import circuit, mcp, pydantic; print(circuit.__version__)" \
+    && python3 -c "import OCP, circuit, mcp, pydantic; print(circuit.__version__)" \
     && python3 -m circuit.doctor --warn \
     && rm -f /tmp/circuit-requirements.txt \
     && chown -R circuit:circuit /home/circuit
