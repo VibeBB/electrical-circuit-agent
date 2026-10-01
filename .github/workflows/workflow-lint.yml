@@ -5,18 +5,14 @@ on:
     branches: [main]
     paths: [".github/**"]
   pull_request:
-    # Digest-lock bot PRs only touch docker/image-digests.json and the
-    # plugin's tools-image.json. Filter at trigger level so no run is
-    # created: a queued (action_required) run gets killed by the
-    # branch-deleting merge with a spurious "workflow file issue" failure.
-    paths-ignore:
-      - "docker/image-digests.json"
-      - "plugins/circuit/skills/circuit-workflow/tools-image.json"
   schedule:
     - cron: "0 3 * * 1"
   # Dispatched by the publish workflow on digest-lock branches so the
-  # required zizmor check reports a verdict on the head SHA (the
-  # pull_request trigger above is path-filtered for those PRs).
+  # lint verdict also reports on the head SHA. Only the pull_request run
+  # satisfies the required zizmor check: GitHub ignores workflow_dispatch
+  # check runs for required status checks, so the PR trigger must stay
+  # unfiltered on digest-lock PRs (they only touch docker/image-digests.json
+  # and the plugin's tools-image.json).
   workflow_dispatch:
 
 permissions:
