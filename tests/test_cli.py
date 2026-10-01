@@ -31,6 +31,15 @@ def test_cli_doctor_json_shape(capsys: pytest.CaptureFixture[str]) -> None:
     assert isinstance(payload["checks"], list)
 
 
+def test_cli_library_review_exposes_packet_and_status(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(["library-review", "--help"])
+    assert error.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "packet" in help_text
+    assert "status" in help_text
+
+
 def test_cli_intake_ready(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code, payload = _run(
         [

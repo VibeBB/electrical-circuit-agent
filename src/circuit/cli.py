@@ -22,7 +22,18 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Final, Literal, cast
 
-from . import brief, connectivity, doctor, firmware, fit_sheet, intake, netlist, sch_lint
+from . import (
+    brief,
+    connectivity,
+    doctor,
+    firmware,
+    fit_sheet,
+    intake,
+    libreview,
+    netlist,
+    partspec,
+    sch_lint,
+)
 from .advisory import VisualChecklist
 
 Verdict = Literal["pass", "fail"]
@@ -137,6 +148,49 @@ def cmd_review_record(args: argparse.Namespace) -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _fail("review-record", str(exc))
     return _emit({"verdict": PASS, "record": str(path)})
+
+
+def cmd_library_review(args: argparse.Namespace) -> int:
+    spec_path = Path(args.part_spec)
+    library_dir = Path(args.library_dir)
+    symbol_lib = Path(args.symbol_lib)
+    footprint_path = Path(args.footprint)
+    try:
+        spec = partspec.load_part_spec(spec_path)
+        if args.action == "packet":
+            result = libreview.build_review_packet(
+                spec_path,
+                symbol_lib=symbol_lib,
+                symbol_name=args.symbol_name,
+                footprint_path=footprint_path,
+                library_dir=library_dir,
+                density=args.density,
+                tolerance_mm=args.tolerance_mm,
+                model_required=args.model_required,
+                out_dir=Path(args.out_dir) if args.out_dir else library_dir / "reviews",
+            )
+        else:
+            current_id = libreview.current_packet_id(
+                spec_path,
+                symbol_lib=symbol_lib,
+                symbol_name=args.symbol_name,
+                footprint_path=footprint_path,
+                library_dir=library_dir,
+                density=args.density,
+                tolerance_mm=args.tolerance_mm,
+                model_required=args.model_required,
+            )
+            result = libreview.review_status(library_dir, spec, current_id)
+    except (OSError, ValueError) as exc:
+        return _fail("library-review", str(exc))
+    payload = result.model_dump(mode="json")
+    state = getattr(result, "state", None)
+    payload["verdict"] = (
+        PASS
+        if (state == "approved" or (state is None and getattr(result, "approvable", False)))
+        else FAIL
+    )
+    return _emit(payload)
 
 
 def cmd_connectivity(args: argparse.Namespace) -> int:
@@ -275,6 +329,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     review_record_parser.add_argument("--summary", default=None)
     review_record_parser.add_argument("--out", default=None, help="output dir (default: image dir)")
     review_record_parser.set_defaults(handler=cmd_review_record)
+
+    library_review_parser = subparsers.add_parser(
+        "library-review", help="build or inspect a hash-bound library human-review packet"
+    )
+    library_review_actions = library_review_parser.add_subparsers(dest="action", required=True)
+    for action in ("packet", "status"):
+        action_parser = library_review_actions.add_parser(action)
+        action_parser.add_argument("--part-spec", required=True)
+        action_parser.add_argument("--symbol-lib", required=True)
+        action_parser.add_argument("--symbol-name", required=True)
+        action_parser.add_argument("--footprint", required=True)
+        action_parser.add_argument("--library-dir", required=True)
+        action_parser.add_argument(
+            "--density", choices=("most", "nominal", "least"), default="nominal"
+        )
+        action_parser.add_argument("--tolerance-mm", type=float, default=0.02)
+        action_parser.add_argument(
+            "--model-required",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+        )
+        if action == "packet":
+            action_parser.add_argument("--out-dir", default=None)
+        action_parser.set_defaults(handler=cmd_library_review)
 
     connectivity_parser = subparsers.add_parser(
         "connectivity", help="emit the wire-agent ConnectivitySource contract"

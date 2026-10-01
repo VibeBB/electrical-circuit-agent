@@ -302,6 +302,7 @@ ExportKind = Literal[
     "vrml",
     "glb",
     "fp_svg",
+    "sym_svg",
 ]
 
 EXPORT_KINDS: tuple[ExportKind, ...] = get_args(ExportKind)
@@ -333,7 +334,13 @@ class JobsetResult(BaseModel):
     drc_report: Path | None = None
 
 
-def export(kind: ExportKind, source: Path, out_dir: Path) -> list[Path]:
+def export(
+    kind: ExportKind,
+    source: Path,
+    out_dir: Path,
+    *,
+    symbol_name: str | None = None,
+) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     if kind in {"gerbers", "drill"}:
         args = ["pcb", "export", kind, "--output", str(out_dir) + "/", str(source)]
@@ -399,6 +406,19 @@ def export(kind: ExportKind, source: Path, out_dir: Path) -> list[Path]:
             "--sketch-pad-numbers",
             "--output",
             str(out_dir),
+            str(source),
+        ]
+    elif kind == "sym_svg":
+        if not symbol_name:
+            raise ValueError("sym_svg export requires a symbol name")
+        args = [
+            "sym",
+            "export",
+            "svg",
+            "--output",
+            str(out_dir),
+            "--symbol",
+            symbol_name,
             str(source),
         ]
     elif kind in {"ipc2581", "odb", "gencad", "vrml", "glb"}:

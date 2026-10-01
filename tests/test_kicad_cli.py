@@ -388,6 +388,33 @@ def test_export_fp_svg_builds_expected_argv(
     assert args[-1] == str(footprint)
 
 
+def test_export_sym_svg_builds_expected_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library = tmp_path / "symbols.kicad_sym"
+    library.write_text("(kicad_symbol_lib)", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_: object):
+        calls.append(args)
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("circuit.kicad_cli.run", fake_run)
+    export("sym_svg", library, tmp_path / "out", symbol_name="TPS62130")
+    args = calls[0]
+    assert args[:3] == ["sym", "export", "svg"]
+    assert args[args.index("--symbol") + 1] == "TPS62130"
+    assert args[args.index("--output") + 1] == str(tmp_path / "out")
+    assert args[-1] == str(library)
+
+
+def test_export_sym_svg_requires_name(tmp_path: Path) -> None:
+    library = tmp_path / "symbols.kicad_sym"
+    library.write_text("(kicad_symbol_lib)", encoding="utf-8")
+    with pytest.raises(ValueError, match="symbol name"):
+        export("sym_svg", library, tmp_path / "out")
+
+
 @pytest.mark.parametrize("returncode, identical", [(0, True), (5, False)])
 def test_diff_parses_json_and_exit_semantics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int, identical: bool

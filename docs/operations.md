@@ -49,6 +49,29 @@ to a drawing ID and optional revision. Project-library verification is
 recomputed from recorded inputs by the project gate; a stored passing verdict
 is not authoritative. See [ADR-0025](adr/ADR-0025-part-library-evidence-authority.md).
 
+Every project-library part also requires a human review bound to the current
+PDF, PartSpec, symbol, footprint, 3D-model hashes, and verification settings.
+Build a packet with `circuit_library_review_packet` or
+`python -m circuit library-review packet`; open `01-blind.html` first and
+answer its questions from the supplied evidence before consulting
+`02-review.html`. Submit a user event beginning with
+`CIRCUIT-LIBRARY-REVIEW <packet_id>` and the decision grammar shown in the
+packet. `circuit_library_review_status` or
+`python -m circuit library-review status` recomputes the current packet ID and
+reports whether a valid user-event approval applies. Any relevant byte change
+invalidates approval. `circuit_library_review_apply` applies corrections from
+a validated reject only when the old values still match; corrections are
+validated and recorded for regression checks.
+
+The user-event hook stores a hash-bound pointer, and the write-protection hook
+blocks normal agent writes to the event store. This is a policy barrier, not a
+cryptographic identity mechanism: arbitrary code execution under the same
+account can forge event files. Deterministic verification failures cannot be
+overridden by human approval. Three-dimensional visual review is not included.
+Human review remains mandatory until escape rates are measured; mismatch-only
+mode is not implemented and requires at least 299 accepted parts with zero
+escapes before it may be reconsidered (ADR-0026).
+
 ## Command line
 
 `python -m circuit` is the unified dispatcher matching the sibling repos'
@@ -61,6 +84,10 @@ python -m circuit intake --brief BRIEF --intake INTAKE
 python -m circuit sch-lint SCHEMATIC [--output PATH]
 python -m circuit connectivity --brief BRIEF --out PATH [--netlist NETLIST]
 python -m circuit author --brief BRIEF --workdir DIR [--intake INTAKE]
+python -m circuit library-review packet --part-spec SPEC --symbol-lib LIB \
+  --symbol-name SYMBOL --footprint FOOTPRINT --library-dir LIBRARY
+python -m circuit library-review status --part-spec SPEC --symbol-lib LIB \
+  --symbol-name SYMBOL --footprint FOOTPRINT --library-dir LIBRARY
 ```
 
 `author` execs `scripts/e2e_authoring.py` and reports a JSON verdict; the e2e

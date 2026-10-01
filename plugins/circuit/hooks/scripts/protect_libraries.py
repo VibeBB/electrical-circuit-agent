@@ -17,7 +17,11 @@ import sys
 from typing import Any, cast
 
 DESIGN_SUFFIXES = (".kicad_sch", ".kicad_pcb")
-BLOCKED_PATHS = ("/opt/circuit/libraries", "libraries/cern-kicad-libs")
+BLOCKED_PATHS = (
+    "/opt/circuit/libraries",
+    "libraries/cern-kicad-libs",
+    ".openhands/agent-canvas",
+)
 WRITE_TOOLS = {"file_editor", "apply_patch"}
 VIEW_ACTIONS = {"view", "read", "undo_edit"}
 WRITE_ACTIONS = {"create", "str_replace", "insert", "edit", "write"}

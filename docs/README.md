@@ -38,6 +38,7 @@
 | [0023](adr/ADR-0023-firmware-pinmap-interchange.md) | Firmware pin map interchange with firmware-agent |
 | [0024](adr/ADR-0024-attest-published-tools-images.md) | Attest published tools images |
 | [0025](adr/ADR-0025-part-library-evidence-authority.md) | Part library evidence authority |
+| [0026](adr/ADR-0026-library-human-review-gate.md) | Human-reviewed library packets and hash-bound approval |
 
 ## Research
 
