@@ -18,6 +18,7 @@ on:
       - "uv.lock"
       - ".github/workflows/publish-circuit-images.yml"
       - "scripts/publish_image_pin_pr.sh"
+      - "scripts/package_level_sbom.py"
       - "!docker/image-digests.json"
       # The plugin pin is written by this workflow itself; exclude it so a
       # merged pin PR does not trigger another publish.
@@ -139,9 +140,15 @@ jobs:
         with:
           image: ${{ env.TOOLS_REF }}
           format: spdx-json
-          output-file: ${{ runner.temp }}/circuit-tools.spdx.json
+          output-file: ${{ runner.temp }}/circuit-tools.full.spdx.json
           upload-artifact: false
           upload-release-assets: false
+      - name: Package tools SPDX SBOM
+        if: inputs.skip_tools != true
+        run: |
+          python3 scripts/package_level_sbom.py \
+            "$RUNNER_TEMP/circuit-tools.full.spdx.json" \
+            "$RUNNER_TEMP/circuit-tools.spdx.json"
       - name: Guard tools SPDX SBOM size
         if: inputs.skip_tools != true
         env:
@@ -177,13 +184,14 @@ jobs:
           subject-digest: ${{ steps.tools.outputs.digest }}
           sbom-path: ${{ runner.temp }}/circuit-tools.spdx.json
           push-to-registry: true
-      - name: Upload tools SPDX SBOM
+      - name: Upload full tools SPDX SBOM
         if: inputs.skip_tools != true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: circuit-tools-spdx-sbom
-          path: ${{ runner.temp }}/circuit-tools.spdx.json
-          retention-days: 30
+          path: ${{ runner.temp }}/circuit-tools.full.spdx.json
+          retention-days: 90
+          if-no-files-found: error
       - name: Measure published tools
         env:
           TOOLS_REF: ${{ env.TOOLS_REF }}

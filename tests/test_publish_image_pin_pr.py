@@ -48,7 +48,7 @@ case "$1 $2" in
     ;;
   "pr merge")
     ;;
-  api\ *)
+  api\\ *)
     if [[ "$*" == *"-X POST"*"/approve"* ]]; then
       printf 'approval response noise\\n'
     else
