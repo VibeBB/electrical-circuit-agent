@@ -81,6 +81,7 @@ def prompt_for_kind(kind: VisionKind) -> str:
 
 _CONTROL_ALPHABET = "ACDEFHJKLMNPRTUVWXY34679"
 _PDFTOPPM_ENV = "CIRCUIT_PDFTOPPM"
+_CONTROL_STATE: dict[str, tuple[str, str, str]] = {}
 
 
 class VisionReadError(ValueError):
@@ -135,6 +136,7 @@ class VisionBatch(BaseModel):
     pdf_path: str
     pdf_sha256: str
     items: list[VisionReadItem]
+    field_bindings: dict[str, str] = Field(default_factory=dict)
     control_salt: str
     control_answer_sha256: str
     control_read_sha256: str
@@ -203,6 +205,19 @@ def _atomic_json(path: Path, value: object, *, exclusive: bool = False) -> None:
     except OSError:
         temp_path.unlink(missing_ok=True)
         raise
+
+
+def _field_binding_key(control_salt: str, read_id: str) -> str:
+    return _sha256(f"{control_salt}{read_id}".encode())
+
+
+def _write_batch(batch_dir: Path, batch: VisionBatch) -> None:
+    _atomic_json(batch_dir / "batch.json", _batch_payload(batch))
+    _CONTROL_STATE[batch.batch_id] = (
+        batch.control_salt,
+        batch.control_read_sha256,
+        batch.control_answer_sha256,
+    )
 
 
 def _request(value: VisionReadRequest | dict[str, object]) -> VisionReadRequest:
@@ -442,7 +457,7 @@ def create_comparison_batch(
     )
     control_item = VisionReadItem(
         read_id=control_read_id,
-        field="control",
+        field=item.field,
         kind=kind,
         page=page,
         bbox=bbox,
@@ -459,6 +474,7 @@ def create_comparison_batch(
     items = [item, control_item]
     secrets.SystemRandom().shuffle(items)
     control_salt = secrets.token_hex(16)
+    field_bindings = {_field_binding_key(control_salt, item.read_id): item.field for item in items}
     batch = VisionBatch(
         artifact_kind="circuit_vision_read_batch",
         batch_id=batch_id,
@@ -469,11 +485,12 @@ def create_comparison_batch(
         pdf_path=str(pdf_path.resolve()),
         pdf_sha256=extraction.pdf_sha256,
         items=items,
+        field_bindings=field_bindings,
         control_salt=control_salt,
         control_answer_sha256=_sha256(f"{control_salt}comparison-control".encode()),
         control_read_sha256=_sha256(f"{control_salt}{control_read_id}".encode()),
     )
-    _atomic_json(batch_dir / "batch.json", _batch_payload(batch))
+    _write_batch(batch_dir, batch)
     return batch
 
 
@@ -501,7 +518,15 @@ def _control_image(path: Path, size: tuple[int, int]) -> str:
 def _batch_payload(batch: VisionBatch) -> dict[str, object]:
     return cast(
         dict[str, object],
-        batch.model_dump(mode="json", exclude={"items": {"__all__": {"control"}}}),
+        batch.model_dump(
+            mode="json",
+            exclude={
+                "items": {"__all__": {"control", "field"}},
+                "control_salt": True,
+                "control_answer_sha256": True,
+                "control_read_sha256": True,
+            },
+        ),
     )
 
 
@@ -589,7 +614,7 @@ def create_read_batch(
     items.append(
         VisionReadItem(
             read_id=control_read_id,
-            field="control",
+            field=secrets.choice(normalized_requests).field,
             kind="transcribe",
             page=normalized_requests[0].page,
             bbox=(0.0, 0.0, 1.0, 1.0),
@@ -605,6 +630,9 @@ def create_read_batch(
     )
     secrets.SystemRandom().shuffle(items)
     control_salt = secrets.token_hex(16)
+    field_bindings = {
+        _field_binding_key(control_salt, entry.read_id): entry.field for entry in items
+    }
     normalized_control_answer = re.sub(r"\s+", "", answer).casefold()
     batch = VisionBatch(
         artifact_kind="circuit_vision_read_batch",
@@ -616,35 +644,81 @@ def create_read_batch(
         pdf_path=str(pdf_path.resolve()),
         pdf_sha256=pdf_sha256,
         items=items,
+        field_bindings=field_bindings,
         control_salt=control_salt,
         control_answer_sha256=_sha256(f"{control_salt}{normalized_control_answer}".encode()),
         control_read_sha256=_sha256(f"{control_salt}{control_read_id}".encode()),
     )
-    _atomic_json(batch_dir / "batch.json", _batch_payload(batch))
+    _write_batch(batch_dir, batch)
     return batch
 
 
 def _load_batch(batch_path: Path) -> VisionBatch:
     try:
-        raw = json.loads(batch_path.read_text(encoding="utf-8"))
+        raw_value: object = json.loads(batch_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise VisionReadError(f"vision batch is unreadable: {exc}") from exc
+    if not isinstance(raw_value, dict):
+        raise VisionReadError("vision batch is invalid")
+    raw = cast(dict[str, object], raw_value)
+    field_bindings_value = raw.get("field_bindings")
+    if not isinstance(field_bindings_value, dict):
+        raise VisionReadError(
+            "legacy vision batch has no salted field_bindings; recreate the batch"
+        )
+    field_bindings = cast(dict[str, object], field_bindings_value)
+    items_value = raw.get("items")
+    if not isinstance(items_value, list):
+        raise VisionReadError("vision batch items are invalid")
+    batch_id = raw.get("batch_id")
+    if not isinstance(batch_id, str) or not batch_id:
+        raise VisionReadError("vision batch has an invalid batch_id")
+    control_state = _CONTROL_STATE.get(batch_id)
+    if control_state is None:
+        raise VisionReadError(
+            "vision batch control state is unavailable in this process; recreate the batch"
+        )
+    control_salt, control_read_sha256, control_answer_sha256 = control_state
+    expected_keys: set[str] = set()
+    restored_items: list[dict[str, object]] = []
+    for raw_item_value in cast(list[object], items_value):
+        if not isinstance(raw_item_value, dict):
+            raise VisionReadError("vision batch item is invalid")
+        raw_item = cast(dict[str, object], raw_item_value)
+        if "field" in raw_item or "control" in raw_item:
+            raise VisionReadError(
+                "persisted vision batch items must omit field and control; recreate the batch"
+            )
+        read_id = raw_item.get("read_id")
+        if not isinstance(read_id, str) or not read_id:
+            raise VisionReadError("vision batch item has an invalid read_id")
+        binding_key = _field_binding_key(control_salt, read_id)
+        field = field_bindings.get(binding_key)
+        if not isinstance(field, str) or not field:
+            raise VisionReadError(
+                f"vision batch has no salted field binding for read ID: {read_id}"
+            )
+        expected_keys.add(binding_key)
+        restored_items.append(
+            {
+                **raw_item,
+                "field": field,
+                "control": binding_key == control_read_sha256,
+            }
+        )
+    if expected_keys != set(field_bindings):
+        raise VisionReadError("vision batch salted field_bindings do not match its items")
+    raw["items"] = restored_items
+    raw["control_salt"] = control_salt
+    raw["control_read_sha256"] = control_read_sha256
+    raw["control_answer_sha256"] = control_answer_sha256
     try:
         batch = VisionBatch.model_validate(raw)
     except ValueError as exc:
         raise VisionReadError(f"vision batch is invalid: {exc}") from exc
-    items = [
-        item.model_copy(
-            update={
-                "control": _sha256(f"{batch.control_salt}{item.read_id}".encode())
-                == batch.control_read_sha256
-            }
-        )
-        for item in batch.items
-    ]
-    if sum(item.control for item in items) != 1:
+    if sum(item.control for item in batch.items) != 1:
         raise VisionReadError("vision batch must identify exactly one control read")
-    return batch.model_copy(update={"items": items})
+    return batch
 
 
 def _normalize_answer(

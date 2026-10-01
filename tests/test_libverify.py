@@ -57,6 +57,24 @@ def _reading(text: str = "mechanical evidence") -> Reading:
     return Reading(page=1, bbox=(0, 0, 1, 1), vision=text, vision_record="vision.json")
 
 
+def _persist_vision_batch(batch_dir: Path, batch: VisionBatch) -> VisionBatch:
+    real_fields = [item.field for item in batch.items if not item.control]
+    if not real_fields:
+        raise AssertionError("vision fixture needs a real read")
+    control_field = real_fields[0]
+    items = [
+        item.model_copy(update={"field": control_field}) if item.control else item
+        for item in batch.items
+    ]
+    field_bindings = {
+        hashlib.sha256(f"{batch.control_salt}{item.read_id}".encode()).hexdigest(): item.field
+        for item in items
+    }
+    batch = batch.model_copy(update={"items": items, "field_bindings": field_bindings})
+    visionread._write_batch(batch_dir, batch)  # pyright: ignore[reportPrivateUsage]
+    return batch
+
+
 @pytest.fixture(autouse=True)
 def _fresh_part_spec_check(monkeypatch: pytest.MonkeyPatch) -> None:
     extraction = DatasheetExtraction(
@@ -592,10 +610,7 @@ def _write_comparison_records(
             status={read_id: "ok", control_id: "ok"},
             control_passed=True,
         )
-        (batch_dir / "batch.json").write_text(
-            batch.model_dump_json(indent=2, exclude={"items": {"__all__": {"control"}}}),
-            encoding="utf-8",
-        )
+        _persist_vision_batch(batch_dir, batch)
         (batch_dir / "answers.json").write_text(
             answers.model_dump_json(indent=2),
             encoding="utf-8",
@@ -664,7 +679,7 @@ def _attach_authoring_read(spec: PartSpec, lane_dir: Path, lane: str) -> None:
         status={control_id: "ok", read_id: "ok"},
         control_passed=True,
     )
-    (batch_dir / "batch.json").write_text(batch.model_dump_json(indent=2), encoding="utf-8")
+    _persist_vision_batch(batch_dir, batch)
     (batch_dir / "answers.json").write_text(answers.model_dump_json(indent=2), encoding="utf-8")
     spec.package.body_length.reading.vision_read = (
         f"vision-reads/fixture-{lane}/batch.json#{read_id}"

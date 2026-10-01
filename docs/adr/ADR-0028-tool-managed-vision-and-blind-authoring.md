@@ -19,8 +19,11 @@ need to remain blind to each other's conclusions until both have committed.
   models and batches contain one to seven requested images plus a control
   image. Crops are padded by four points, clamped to the page, rasterized at
   300–1200 DPI, and rejected above the image-size limit rather than tiled.
-  Batch metadata and `batch.json` are written atomically. Lane B uses pdfium;
-  lane A and other lanes use Poppler, configurable through
+  The public `batch.json` is written atomically without per-item field or
+  control markers; salted field bindings are restored by the tool. Control
+  identity and validation secrets remain in MCP process memory and are never
+  written beside the public batch. If the MCP process restarts, recreate the
+  batch and its reads. Lane B uses pdfium; lane A and other lanes use Poppler, configurable through
   `CIRCUIT_PDFTOPPM`. The tool returns prompts, metadata, and image paths, not
   mechanical extraction text.
 - Each visual answer, including the batch control, includes an answer and a

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from circuit.visionread import (
     create_comparison_batch,
     create_read_batch,
     find_comparison_evidence,
+    load_vision_read,
     record_answers,
 )
 from vision_fixtures import FIXTURE_CONTROL, FIXTURE_IMPRESSION
@@ -244,6 +246,69 @@ def _batch(
     return batch_dir / "batch.json", batch
 
 
+def _assert_control_hidden(batch_path: Path) -> None:
+    payload = json.loads(batch_path.read_text(encoding="utf-8"))
+    items = payload["items"]
+    assert len({frozenset(item) for item in items}) == 1
+    allowed_control_values = {
+        "read_id",
+        "image_path",
+        "image_sha256",
+        "bbox",
+        "crop_bbox",
+        "page",
+    }
+    assert all(
+        value != "control" or key in allowed_control_values
+        for item in items
+        for key, value in item.items()
+    )
+    assert "control_salt" not in payload
+    assert "control_read_sha256" not in payload
+    assert "control_answer_sha256" not in payload
+    assert len(payload["field_bindings"]) == len(items)
+    assert not (batch_path.parent / ".control.json").exists()
+
+
+def test_read_batch_blinds_persisted_items_and_restores_field_bindings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    _assert_control_hidden(batch_path)
+    item = next(entry for entry in batch.items if not entry.control)
+    answers: dict[str, dict[str, object]] = {
+        entry.read_id: {
+            "answer": FIXTURE_CONTROL if entry.control else '[["1", "SW"]]',
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for entry in batch.items
+    }
+    record_answers(batch_path, answers)
+
+    loaded_batch, loaded_item, answer_record = load_vision_read(
+        tmp_path, f"vision-batch/batch.json#{item.read_id}"
+    )
+
+    assert loaded_batch.field_bindings == batch.field_bindings
+    assert loaded_item.field == "pin_table"
+    assert not loaded_item.control
+    assert answer_record.batch_id == batch.batch_id
+
+
+def test_legacy_batch_without_field_bindings_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, _batch_value = _batch(tmp_path, monkeypatch)
+    payload = json.loads(batch_path.read_text(encoding="utf-8"))
+    del payload["field_bindings"]
+    batch_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(VisionReadError, match="legacy vision batch"):
+        record_answers(batch_path, {})
+
+
 def test_table_prompt_and_normalization_are_fixed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -386,6 +451,7 @@ def test_comparison_batch_binds_hashes_and_requires_mirrored_control(
         artifact_kind="footprint",
     )
     batch_path = tmp_path / "vision-reads" / batch.batch_id / "batch.json"
+    _assert_control_hidden(batch_path)
     answers: dict[str, dict[str, object]] = {
         item.read_id: {
             "answer": (
@@ -421,6 +487,8 @@ def test_comparison_batch_binds_hashes_and_requires_mirrored_control(
     assert len(current) == 1
     assert current[0].normalized is not None
     assert current[0].impression_valid
+    assert current[0].item.field == "library.footprint"
+    assert not current[0].item.control
     assert wrong_hash == []
     assert has_stale
 
