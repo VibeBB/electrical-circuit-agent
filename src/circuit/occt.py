@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 from OCP.GeomAbs import GeomAbs_Cone, GeomAbs_Cylinder, GeomAbs_Plane, GeomAbs_Sphere
-from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.Interface import Interface_Static
@@ -360,11 +361,40 @@ def transform(
     shape: Shape,
     *,
     translation: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    rotation_z_deg: float = 0.0,
+    scale: float = 1.0,
+    mirror_x: bool = False,
 ) -> Shape:
-    operation = gp_Trsf()
-    operation.SetTranslation(gp_Vec(*translation))
-    transformed = BRepBuilderAPI_Transform(shape.native, operation, True).Shape()
-    return Shape(transformed, shape.units)
+    if not math.isfinite(scale) or scale <= 0:
+        raise OcctError("scale must be finite and positive")
+    result = shape.native
+    operations: list[gp_Trsf] = []
+    if mirror_x:
+        mirror = gp_Trsf()
+        mirror.SetMirror(gp_Ax2(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0)))
+        operations.append(mirror)
+    if rotation_z_deg:
+        rotation = gp_Trsf()
+        rotation.SetRotation(
+            gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)),
+            math.radians(rotation_z_deg),
+        )
+        operations.append(rotation)
+    if scale != 1.0:
+        scaling = gp_Trsf()
+        scaling.SetScale(gp_Pnt(0.0, 0.0, 0.0), scale)
+        operations.append(scaling)
+    if translation != (0.0, 0.0, 0.0):
+        offset = gp_Trsf()
+        offset.SetTranslation(gp_Vec(*translation))
+        operations.append(offset)
+    for operation in operations:
+        result = BRepBuilderAPI_Transform(result, operation, True).Shape()
+    return Shape(result, shape.units)
+
+
+def solids(shape: Shape) -> tuple[Shape, ...]:
+    return tuple(Shape(solid, shape.units) for solid in _explore(shape.native, TopAbs_SOLID))
 
 
 def fuse(shapes: Sequence[Shape]) -> Shape:

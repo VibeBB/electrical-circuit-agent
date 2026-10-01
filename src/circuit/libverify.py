@@ -12,7 +12,7 @@ import tempfile
 from collections import Counter
 from itertools import pairwise
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -31,6 +31,7 @@ from .libitems import (
     FootprintDef,
     GraphicDef,
     LibItemError,
+    ModelRef,
     PadDef,
     SymbolDef,
     parse_footprint,
@@ -59,6 +60,9 @@ from .partspec import (
 from .pinout import PinoutGeometry
 from .ruleprofile import EffectiveRules, load_rules
 
+if TYPE_CHECKING:
+    from .occt import Bounds, Shape, ShapeFacts, SlabRegion
+
 
 class VerifyFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -67,6 +71,7 @@ class VerifyFinding(BaseModel):
     severity: Literal["error", "warning", "info"]
     subject: str
     message: str
+    model_sha256: str | None = None
 
 
 class VerifiedSymbol(BaseModel):
@@ -85,12 +90,26 @@ class VerifiedFootprint(BaseModel):
     sha256: str | None
 
 
+class VerifiedModelInspection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    solid_count: int
+    total_volume_mm3: float
+    bbox_mm: tuple[float, float, float, float, float, float]
+    units: str
+    valid: bool
+    closed_shells: tuple[bool, ...]
+    pin1_marker: str | None
+    pin1_color_marker: str | None
+
+
 class VerifiedModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str
     resolved: bool
     sha256: str | None
+    inspection: VerifiedModelInspection | None = None
 
 
 class VerificationInputs(BaseModel):
@@ -147,8 +166,18 @@ def _finding(
     severity: Literal["error", "warning", "info"],
     subject: str,
     message: str,
+    *,
+    model_sha256: str | None = None,
 ) -> None:
-    findings.append(VerifyFinding(code=code, severity=severity, subject=subject, message=message))
+    findings.append(
+        VerifyFinding(
+            code=code,
+            severity=severity,
+            subject=subject,
+            message=message,
+            model_sha256=model_sha256,
+        )
+    )
 
 
 def _correction_pointer_key(pointer: str, spec: PartSpec) -> str | None:
@@ -1527,11 +1556,496 @@ def _check_klc(
         _finding(findings, code, violation.severity, str(path), violation.message)
 
 
+def _model_pad_bbox(pad: PadDef) -> tuple[float, float, float, float]:
+    angle = math.radians(pad.rotation)
+    width = abs(pad.width * math.cos(angle)) + abs(pad.height * math.sin(angle))
+    height = abs(pad.width * math.sin(angle)) + abs(pad.height * math.cos(angle))
+    return (
+        pad.x - width / 2,
+        pad.y - height / 2,
+        pad.x + width / 2,
+        pad.y + height / 2,
+    )
+
+
+def _model_bbox(facts: ShapeFacts) -> tuple[float, float, float, float, float, float] | None:
+    solids = facts.solids
+    if not solids:
+        return None
+    return (
+        min(solid.bbox.x_min for solid in solids),
+        min(solid.bbox.y_min for solid in solids),
+        min(solid.bbox.z_min for solid in solids),
+        max(solid.bbox.x_max for solid in solids),
+        max(solid.bbox.y_max for solid in solids),
+        max(solid.bbox.z_max for solid in solids),
+    )
+
+
+def _model_dimension_bounds(
+    dimension: Dimension,
+    tolerance_mm: float,
+) -> tuple[float | None, float | None]:
+    nominal = _dimension_value(dimension)
+    lower = (
+        float(dimension.min)
+        if dimension.min is not None
+        else nominal - tolerance_mm
+        if nominal is not None
+        else None
+    )
+    upper = (
+        float(dimension.max)
+        if dimension.max is not None
+        else nominal + tolerance_mm
+        if nominal is not None
+        else None
+    )
+    return lower, upper
+
+
+def _model_pad_contains(
+    pad_bbox: tuple[float, float, float, float],
+    region_bbox: tuple[float, float, float, float],
+    tolerance: float = 0.0,
+) -> bool:
+    return (
+        pad_bbox[0] <= region_bbox[0] + tolerance
+        and pad_bbox[1] <= region_bbox[1] + tolerance
+        and pad_bbox[2] >= region_bbox[2] - tolerance
+        and pad_bbox[3] >= region_bbox[3] - tolerance
+    )
+
+
+def _model_rectangles_overlap(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> bool:
+    return (
+        min(left[2], right[2]) - max(left[0], right[0]) > 1e-9
+        and min(left[3], right[3]) - max(left[1], right[1]) > 1e-9
+    )
+
+
+def _check_model_terminals(
+    spec: PartSpec,
+    footprint: FootprintDef,
+    regions: list[SlabRegion],
+    body_bbox: tuple[float, float, float, float, float, float],
+    model_sha256: str,
+    findings: list[VerifyFinding],
+) -> None:
+    pads = [
+        (pad, _model_pad_bbox(pad))
+        for pad in footprint.pads
+        if pad.type != "np_thru_hole" and any(layer.endswith(".Cu") for layer in pad.layers)
+    ]
+    if not pads:
+        return
+    largest_pad_area = max((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) for _, bbox in pads)
+    assigned: dict[int, list[tuple[float, float]]] = {index: [] for index in range(len(pads))}
+    for region in regions:
+        region_bbox = region.bbox_xy
+        center = (
+            (region_bbox[0] + region_bbox[2]) / 2,
+            (region_bbox[1] + region_bbox[3]) / 2,
+        )
+        overlaps = [
+            index
+            for index, (_, pad_bbox) in enumerate(pads)
+            if _model_rectangles_overlap(region_bbox, pad_bbox)
+        ]
+        if len(overlaps) > 1 or region.area > largest_pad_area * 1.1:
+            _finding(
+                findings,
+                "model_terminals_unseparable",
+                "error",
+                "model.terminals",
+                "a terminal region overlaps multiple pads or exceeds the largest pad area",
+                model_sha256=model_sha256,
+            )
+        containing = [
+            index
+            for index, (_, pad_bbox) in enumerate(pads)
+            if _model_pad_contains(pad_bbox, (*center, *center))
+        ]
+        if not containing:
+            _finding(
+                findings,
+                "model_terminal_unmatched",
+                "error",
+                "model.terminals",
+                f"terminal region centered at {center} lies inside no copper pad",
+                model_sha256=model_sha256,
+            )
+            continue
+        if len(containing) > 1:
+            _finding(
+                findings,
+                "model_terminals_unseparable",
+                "error",
+                "model.terminals",
+                f"terminal region center at {center} lies inside multiple copper pads",
+                model_sha256=model_sha256,
+            )
+            continue
+        pad_index = containing[0]
+        assigned[pad_index].append(center)
+        if not _model_pad_contains(pads[pad_index][1], region_bbox, tolerance=0.025):
+            _finding(
+                findings,
+                "model_terminal_outside_pad",
+                "error",
+                f"model.pad.{pads[pad_index][0].number}",
+                "terminal region bbox is not contained by its pad bbox within 0.025 mm",
+                model_sha256=model_sha256,
+            )
+    for index, (pad, _) in enumerate(pads):
+        if not assigned[index]:
+            _finding(
+                findings,
+                "model_pad_unmatched",
+                "error",
+                f"model.pad.{pad.number}",
+                "copper pad contains no terminal region center",
+                model_sha256=model_sha256,
+            )
+        elif len(assigned[index]) > 1:
+            _finding(
+                findings,
+                "model_terminals_unseparable",
+                "error",
+                f"model.pad.{pad.number}",
+                "multiple terminal region centers map to one copper pad",
+                model_sha256=model_sha256,
+            )
+
+    pitch = spec.package.pitch.nom if spec.package.pitch is not None else None
+    body_width = body_bbox[3] - body_bbox[0]
+    body_length = body_bbox[4] - body_bbox[1]
+    if pitch is None or pitch <= 0:
+        return
+    rows: dict[tuple[str, float], set[float]] = {}
+    for index in range(len(pads)):
+        if len(assigned[index]) != 1:
+            continue
+        x, y = assigned[index][0]
+        x_distance = abs(x) - body_width / 2
+        y_distance = abs(y) - body_length / 2
+        side = "y" if y_distance >= x_distance else "x"
+        key, position = ((side, round(y, 4)), x) if side == "y" else ((side, round(x, 4)), y)
+        rows.setdefault(key, set()).add(round(position, 4))
+    for positions in rows.values():
+        ordered = sorted(positions)
+        if any(abs((right - left) - pitch) > 0.01 for left, right in pairwise(ordered)):
+            _finding(
+                findings,
+                "model_pitch",
+                "error",
+                "model.terminals",
+                f"terminal center spacing does not match nominal pitch {pitch} mm",
+                model_sha256=model_sha256,
+            )
+            break
+
+
+def _single_solid_body_bbox(
+    shape: Shape,
+    overall_bbox: tuple[float, float, float, float, float, float],
+) -> Bounds | None:
+    from . import occt
+
+    top = overall_bbox[5]
+    top_regions = occt.slab_regions(shape, top - 0.02, top - 0.01)
+    if not top_regions:
+        return None
+    top_region = max(top_regions, key=lambda region: region.area)
+    body_xy = top_region.bbox_xy
+    body_area = top_region.area
+    body_width = body_xy[2] - body_xy[0]
+    body_length = body_xy[3] - body_xy[1]
+    if body_area <= 0 or body_width <= 0 or body_length <= 0:
+        return None
+
+    bottom: float | None = None
+    cursor = overall_bbox[2]
+    while cursor < top - 0.01:
+        upper = min(cursor + 0.01, top - 0.01)
+        if upper - cursor < 1e-6:
+            break
+        regions = occt.slab_regions(shape, cursor, upper)
+        for region in regions:
+            x_min, y_min, x_max, y_max = region.bbox_xy
+            if (
+                region.area >= body_area * 0.5
+                and x_max - x_min >= body_width * 0.7
+                and y_max - y_min >= body_length * 0.7
+            ):
+                bottom = cursor
+                break
+        if bottom is not None:
+            break
+        cursor = upper
+    if bottom is None:
+        return None
+    return occt.Bounds(
+        body_xy[0],
+        body_xy[1],
+        bottom,
+        body_xy[2],
+        body_xy[3],
+        top,
+    )
+
+
+def _verify_model_geometry(
+    spec: PartSpec,
+    footprint: FootprintDef,
+    footprint_path: Path,
+    model: ModelRef,
+    resolved: Path | None,
+    model_sha256: str | None,
+    tolerance_mm: float,
+    findings: list[VerifyFinding],
+) -> VerifiedModelInspection | None:
+    path = model.path
+    if Path(path).suffix.casefold() not in {".step", ".stp"}:
+        _finding(
+            findings,
+            "model_format",
+            "error",
+            f"model.{path}",
+            "3D model must use STEP .step or .stp format",
+            model_sha256=model_sha256,
+        )
+    if (
+        model.offset != (0.0, 0.0, 0.0)
+        or model.rotate != (0.0, 0.0, 0.0)
+        or model.scale != (1.0, 1.0, 1.0)
+    ):
+        _finding(
+            findings,
+            "model_transform_not_identity",
+            "error",
+            f"model.{path}",
+            "3D model offset and rotation must be zero and scale must be one",
+            model_sha256=model_sha256,
+        )
+    if resolved is None or model_sha256 is None:
+        return None
+    try:
+        from . import occt
+
+        shape = occt.read_step(resolved)
+        facts = occt.inspect(shape)
+    except Exception as exc:
+        _finding(
+            findings,
+            "model_inspection_unavailable",
+            "error",
+            f"model.{path}",
+            f"STEP inspection failed: {exc}",
+            model_sha256=model_sha256,
+        )
+        return None
+
+    total_volume = sum(solid.volume for solid in facts.solids)
+    overall_bbox = _model_bbox(facts)
+    if (
+        not facts.valid
+        or facts.solid_count == 0
+        or facts.units != "mm"
+        or any(not solid.closed_shell or solid.volume <= 0 for solid in facts.solids)
+    ):
+        _finding(
+            findings,
+            "model_invalid",
+            "error",
+            f"model.{path}",
+            "model must contain valid positive-volume closed solids in millimetres",
+            model_sha256=model_sha256,
+        )
+    try:
+        with tempfile.TemporaryDirectory(prefix="circuit-model-roundtrip-") as directory:
+            roundtrip_path = Path(directory) / "roundtrip.step"
+            occt.write_step(shape, roundtrip_path, product_name=Path(path).stem)
+            roundtrip_shape = occt.read_step(roundtrip_path)
+            roundtrip = occt.inspect(roundtrip_shape)
+            roundtrip_bbox = _model_bbox(roundtrip)
+            original_volume = total_volume
+            roundtrip_volume = sum(solid.volume for solid in roundtrip.solids)
+            volume_changed = (
+                abs(roundtrip_volume - original_volume) / max(abs(original_volume), 1e-12) > 1e-6
+            )
+            bbox_changed = (
+                overall_bbox is None
+                or roundtrip_bbox is None
+                or any(
+                    abs(left - right) > 1e-6
+                    for left, right in zip(overall_bbox, roundtrip_bbox, strict=True)
+                )
+            )
+            if facts.solid_count != roundtrip.solid_count or volume_changed or bbox_changed:
+                raise ValueError("solid count, total volume, or bounding box changed")
+    except Exception as exc:
+        _finding(
+            findings,
+            "model_roundtrip",
+            "error",
+            f"model.{path}",
+            f"STEP write/read roundtrip changed or failed: {exc}",
+            model_sha256=model_sha256,
+        )
+
+    if not facts.solids or overall_bbox is None:
+        return None
+    body_solid = max(facts.solids, key=lambda solid: solid.volume)
+    body_bbox = body_solid.bbox
+    body_inferred = True
+    if facts.solid_count == 1:
+        try:
+            inferred_body_bbox = _single_solid_body_bbox(shape, overall_bbox)
+        except Exception as exc:
+            _finding(
+                findings,
+                "model_inspection_unavailable",
+                "error",
+                f"model.{path}",
+                f"single-solid body inspection failed: {exc}",
+                model_sha256=model_sha256,
+            )
+            return None
+        if inferred_body_bbox is None:
+            body_inferred = False
+        else:
+            body_bbox = inferred_body_bbox
+    body_values = (
+        body_bbox.x_min,
+        body_bbox.y_min,
+        body_bbox.z_min,
+        body_bbox.x_max,
+        body_bbox.y_max,
+        body_bbox.z_max,
+    )
+    body_actual = (
+        body_bbox.x_max - body_bbox.x_min,
+        body_bbox.y_max - body_bbox.y_min,
+        body_bbox.z_max - body_bbox.z_min,
+    )
+    dimensions = (
+        (spec.package.body_width, body_actual[0]),
+        (spec.package.body_length, body_actual[1]),
+        (spec.package.height, body_actual[2]),
+    )
+    dimension_mismatch = any(
+        (lower is not None and actual < lower - 1e-6)
+        or (upper is not None and actual > upper + 1e-6)
+        for dimension, actual in dimensions
+        for lower, upper in (_model_dimension_bounds(dimension, tolerance_mm),)
+    )
+    if dimension_mismatch or abs(overall_bbox[2]) > 0.01 or not body_inferred:
+        _finding(
+            findings,
+            "model_body_dimension",
+            "error",
+            f"model.{path}",
+            "model body dimensions or overall bottom Z are outside the PartSpec limits",
+            model_sha256=model_sha256,
+        )
+
+    body_bounds = occt.Bounds(*body_values)
+    geometric_marker = occt.pin1_marker(shape, body_bounds)
+    try:
+        color_marker = occt.face_color_marker(resolved, body_bounds)
+    except Exception:
+        color_marker = None
+    marker = geometric_marker.quadrant if geometric_marker is not None else None
+    if spec.package.family != "chip":
+        mismatched_markers = [
+            value
+            for value in (marker, color_marker)
+            if value is not None and value != spec.package.pin1_corner
+        ]
+        if mismatched_markers:
+            _finding(
+                findings,
+                "model_pin1_mismatch",
+                "error",
+                f"model.{path}",
+                f"model pin-1 marker disagrees with {spec.package.pin1_corner}",
+                model_sha256=model_sha256,
+            )
+        elif marker is None and color_marker is None:
+            _finding(
+                findings,
+                "model_pin1_unverifiable",
+                "error",
+                f"model.{path}",
+                "polarized package has no detectable geometric or color pin-1 marker",
+                model_sha256=model_sha256,
+            )
+
+    regions = occt.slab_regions(shape, 0.0, 0.02)
+    _check_model_terminals(
+        spec,
+        footprint,
+        regions,
+        (
+            body_bbox.x_min,
+            body_bbox.y_min,
+            body_bbox.z_min,
+            body_bbox.x_max,
+            body_bbox.y_max,
+            body_bbox.z_max,
+        ),
+        model_sha256,
+        findings,
+    )
+    courtyard = _graphic_box(
+        [graphic for graphic in footprint.graphics if graphic.layer == "F.CrtYd"]
+    )
+    model_xy = (overall_bbox[0], overall_bbox[1], overall_bbox[3], overall_bbox[4])
+    if courtyard is None or not _contains(courtyard, model_xy, 1e-6):
+        _finding(
+            findings,
+            "model_courtyard",
+            "error",
+            f"model.{path}",
+            "F.CrtYd does not enclose the union of model body and terminal bounds",
+            model_sha256=model_sha256,
+        )
+    fab = _graphic_box([graphic for graphic in footprint.graphics if graphic.layer == "F.Fab"])
+    body_xy = (body_bbox.x_min, body_bbox.y_min, body_bbox.x_max, body_bbox.y_max)
+    if fab is None or any(
+        abs(actual - expected) > 0.1 for actual, expected in zip(fab, body_xy, strict=True)
+    ):
+        _finding(
+            findings,
+            "model_fab_outline",
+            "warning",
+            f"model.{path}",
+            "F.Fab outline differs from the inspected model body by more than 0.1 mm",
+            model_sha256=model_sha256,
+        )
+    return VerifiedModelInspection(
+        solid_count=facts.solid_count,
+        total_volume_mm3=total_volume,
+        bbox_mm=overall_bbox,
+        units=facts.units,
+        valid=facts.valid,
+        closed_shells=tuple(solid.closed_shell for solid in facts.solids),
+        pin1_marker=marker,
+        pin1_color_marker=color_marker,
+    )
+
+
 def _check_models(
+    spec: PartSpec,
     footprint: FootprintDef | None,
     footprint_path: Path,
     library_dir: Path | None,
     model_required: bool,
+    tolerance_mm: float,
     findings: list[VerifyFinding],
 ) -> list[VerifiedModel]:
     if footprint is None:
@@ -1564,11 +2078,23 @@ def _check_models(
                 f"model.{path}",
                 f"3D model reference cannot be resolved: {path}",
             )
+        model_sha256 = _sha256(resolved) if resolved is not None else None
+        inspection = _verify_model_geometry(
+            spec,
+            footprint,
+            footprint_path,
+            model,
+            resolved,
+            model_sha256,
+            tolerance_mm,
+            findings,
+        )
         result.append(
             VerifiedModel(
                 path=path,
                 resolved=resolved is not None,
-                sha256=_sha256(resolved) if resolved is not None else None,
+                sha256=model_sha256,
+                inspection=inspection,
             )
         )
     return result
@@ -1896,10 +2422,12 @@ def verify_library_part(
 
     _verify_cli(symbol_lib, symbol_name, footprint_path, footprint_name, findings)
     verified_models = _check_models(
+        spec,
         footprint,
         footprint_path,
         library_dir,
         model_required,
+        tolerance_mm,
         findings,
     )
 

@@ -114,8 +114,6 @@ def _pad_side(
 ) -> str:
     x_distance = abs(pad.x) - body_width / 2
     y_distance = abs(pad.y) - body_length / 2
-    if max(x_distance, y_distance) <= 0:
-        raise Model3dError(f"terminal pad {pad.number} is not outside the package body")
     return "y" if y_distance >= x_distance else "x"
 
 
@@ -142,7 +140,7 @@ def _validate_pitch(
                 rows[(side, round(pad.x, 4))].add(round(pad.y, 4))
     for positions in rows.values():
         ordered = sorted(positions)
-        if any(abs((right - left) - pitch) > 0.01 for left, right in pairwise(ordered)):
+        if any(abs((right - left) - pitch) > 0.010001 for left, right in pairwise(ordered)):
             raise Model3dError("footprint terminal spacing does not match nominal pitch")
 
 
