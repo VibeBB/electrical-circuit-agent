@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 from typing import Any, cast
 
@@ -25,6 +26,7 @@ from . import (
     apiserver,
     brief,
     connectivity,
+    datasheet,
     doctor,
     firmware,
     fit_sheet,
@@ -32,6 +34,7 @@ from . import (
     kicad_cli,
     libraries,
     netlist,
+    partspec,
     raster,
     report,
     sch_lint,
@@ -426,6 +429,32 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_datasheet_extract",
+        "Extract PDF datasheets through Poppler, pdfplumber, and OCR as needed",
+        {
+            "type": "object",
+            "properties": {
+                "pdf_path": {"type": "string"},
+                "output_dir": {"type": "string"},
+                "pages": {"type": "array", "items": {"type": "integer"}},
+                "dpi": {"type": "integer", "default": 300},
+            },
+            "required": ["pdf_path"],
+        },
+    ),
+    (
+        "circuit_part_spec_check",
+        "Cross-check an authored PartSpec against datasheet extraction and evidence",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["part_spec_path"],
+        },
+    ),
+    (
         "circuit_konnect_call",
         "Invoke Konnect operations through a managed stdio session when "
         "dynamically loaded toolsets are not visible to the harness; "
@@ -504,6 +533,8 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_import": _anno("Import", write=True),
     "circuit_stackup": _anno("Stackup", write=True),
     "circuit_rasterize": _anno("Rasterize", write=True),
+    "circuit_datasheet_extract": _anno("Datasheet extraction", write=True),
+    "circuit_part_spec_check": _anno("PartSpec check", write=True),
     "circuit_konnect_call": _anno("Konnect call", write=True, destructive=True, idempotent=False),
     "circuit_kicad_version": _anno("KiCad version", write=False),
 }
@@ -850,6 +881,46 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 "images": [str(path) for path in images],
             }
             image_paths = images
+        elif name == "circuit_datasheet_extract":
+            source = Path(str(args["pdf_path"]))
+            output = args.get("output_dir")
+            if output is None:
+                digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
+                output_dir = source.parent / f"datasheet-{digest}"
+            else:
+                output_dir = Path(str(output))
+            requested_pages = args.get("pages")
+            extraction = datasheet.extract_datasheet(
+                source,
+                output_dir,
+                pages=cast(list[int], requested_pages)
+                if isinstance(requested_pages, list)
+                else None,
+                dpi=int(args.get("dpi", 300)),
+            )
+            result = {
+                **extraction.model_dump(mode="json"),
+                "extraction_path": str(output_dir / "extraction.json"),
+            }
+        elif name == "circuit_part_spec_check":
+            spec_path = Path(str(args["part_spec_path"]))
+            spec = partspec.load_part_spec(spec_path)
+            extraction_path = Path(spec.datasheet.extraction_path)
+            if not extraction_path.is_absolute():
+                extraction_path = spec_path.resolve().parent / extraction_path
+            extraction = datasheet.load_extraction(extraction_path)
+            result = partspec.check_part_spec(
+                spec,
+                extraction,
+                spec_path=spec_path,
+                extraction_path=extraction_path,
+            )
+            output = _output_path(
+                spec_path,
+                _optional_string(args.get("output_path")),
+                "part-spec",
+            )
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         elif name == "circuit_konnect_call":
             konnect_arguments = args.get("arguments")
             ops = args.get("ops")

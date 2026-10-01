@@ -30,6 +30,44 @@ def test_rasterize_pdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.returncode == 0
 
 
+def test_rasterize_pdf_page_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    arguments = tmp_path / "arguments.txt"
+    stub = _stub(
+        tmp_path,
+        "pdftoppm_pages",
+        '#!/bin/bash\nprintf "%s\\n" "$@" > "$CIRCUIT_TEST_ARGUMENTS"\n'
+        'prefix="${@: -1}"\n'
+        'printf x > "$prefix-3.png"\n',
+    )
+    monkeypatch.setenv("CIRCUIT_PDFTOPPM", str(stub))
+    monkeypatch.setenv("CIRCUIT_TEST_ARGUMENTS", str(arguments))
+    source = tmp_path / "datasheet.pdf"
+    source.write_bytes(b"%PDF fake")
+    images = rasterize(source, tmp_path / "pages", first_page=3, last_page=3)
+    assert [path.name for path in images] == ["datasheet-3.png"]
+    assert "-f" in arguments.read_text(encoding="utf-8").splitlines()
+    assert "-l" in arguments.read_text(encoding="utf-8").splitlines()
+
+
+def test_rasterize_rejects_invalid_page_selection(tmp_path: Path) -> None:
+    source = tmp_path / "datasheet.pdf"
+    source.write_bytes(b"%PDF fake")
+    for kwargs in (
+        {"first_page": 0},
+        {"last_page": 0},
+        {"first_page": 3, "last_page": 2},
+    ):
+        with pytest.raises(RasterizeError, match="page numbers"):
+            rasterize(source, tmp_path / "pages", **kwargs)
+
+
+def test_rasterize_rejects_page_selection_for_svg(tmp_path: Path) -> None:
+    source = tmp_path / "stackup.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    with pytest.raises(RasterizeError, match="only supported for PDF"):
+        rasterize(source, tmp_path / "pages", first_page=1)
+
+
 def test_rasterize_svg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stub = _stub(
         tmp_path,

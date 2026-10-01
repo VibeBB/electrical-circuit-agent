@@ -45,18 +45,47 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
         raise RasterizeError(f"rasterizer failed: {exc}") from exc
 
 
-def rasterize(source: Path, out_dir: Path, *, dpi: int = 150) -> list[Path]:
+def rasterize(
+    source: Path,
+    out_dir: Path,
+    *,
+    dpi: int = 150,
+    first_page: int | None = None,
+    last_page: int | None = None,
+) -> list[Path]:
     """Rasterize `source` (.pdf or .svg) to PNG pages in `out_dir`."""
     if not source.is_file() or source.stat().st_size == 0:
         raise RasterizeError(f"rasterize source is missing or empty: {source}")
     if dpi <= 0:
         raise RasterizeError("dpi must be positive")
+    effective_first = first_page if first_page is not None else 1
+    if (
+        (first_page is not None and first_page < 1)
+        or (last_page is not None and last_page < 1)
+        or (last_page is not None and last_page < effective_first)
+    ):
+        raise RasterizeError(
+            "page numbers must be positive and last_page must not precede first_page"
+        )
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = source.suffix.lower()
     if suffix == ".pdf":
         prefix = out_dir / source.stem
+        page_args: list[str] = []
+        if first_page is not None:
+            page_args.extend(["-f", str(first_page)])
+        if last_page is not None:
+            page_args.extend(["-l", str(last_page)])
         result = _run(
-            [*_command(_PDFTOPPM_ENV, "pdftoppm"), "-png", "-r", str(dpi), str(source), str(prefix)]
+            [
+                *_command(_PDFTOPPM_ENV, "pdftoppm"),
+                "-png",
+                "-r",
+                str(dpi),
+                *page_args,
+                str(source),
+                str(prefix),
+            ]
         )
         if result.returncode:
             raise RasterizeError(result.stderr.strip() or "pdftoppm failed")
@@ -65,6 +94,8 @@ def rasterize(source: Path, out_dir: Path, *, dpi: int = 150) -> list[Path]:
             key=_page_key,
         )
     elif suffix == ".svg":
+        if first_page is not None or last_page is not None:
+            raise RasterizeError("page selection is only supported for PDF sources")
         out = out_dir / f"{source.stem}.png"
         result = _run(
             [

@@ -28,6 +28,11 @@ uv run python scripts/verify_all.py --stage fast
 python3 -m circuit.doctor
 ```
 
+`pdfplumber==0.11.10` supplies the datasheet lane's word geometry, table
+extraction, and vector-object counts. Poppler remains an independent text lane
+for deterministic comparison, and Tesseract is used only for pages without a
+text layer.
+
 ## Command line
 
 `python -m circuit` is the unified dispatcher matching the sibling repos'
