@@ -575,18 +575,26 @@ def blind_questions(
         if comparison is None:
             continue
         differences = comparison.get("differences")
-        matches = (
-            comparison.get("pin1_matches"),
-            comparison.get("arrangement_matches"),
-            comparison.get("numbering_direction_matches"),
-        )
+        if item.item.kind == "compare_model":
+            matches = (
+                comparison.get("pin1_marker_matches"),
+                comparison.get("outline_matches"),
+                comparison.get("lead_arrangement_matches"),
+            )
+            artifact_kind = "model"
+        else:
+            matches = (
+                comparison.get("pin1_matches"),
+                comparison.get("arrangement_matches"),
+                comparison.get("numbering_direction_matches"),
+            )
+            artifact_kind = "footprint" if item.item.kind == "compare_footprint" else "symbol"
         if (
             all(value is True for value in matches)
             and isinstance(differences, list)
             and not differences
         ):
             continue
-        artifact_kind = "footprint" if item.item.kind == "compare_footprint" else "symbol"
         difference_text = ""
         if isinstance(differences, list):
             difference_text = "; ".join(differences)
@@ -615,6 +623,8 @@ def _comparison_evidence(
     spec_path: Path,
     symbol_lib: Path,
     footprint_path: Path,
+    models: Sequence[VerifiedModel],
+    findings: list[ReviewFinding],
 ) -> list[visionread.VisionComparisonEvidence]:
     spec_hash = _sha256(spec_path) if spec_path.is_file() else ""
     if not spec_hash:
@@ -622,7 +632,7 @@ def _comparison_evidence(
     records: list[visionread.VisionComparisonEvidence] = []
     comparisons: tuple[
         tuple[
-            visionread.VisionKind,
+            Literal["compare_footprint", "compare_symbol"],
             Literal["footprint", "symbol"],
             Path,
         ],
@@ -643,6 +653,74 @@ def _comparison_evidence(
             artifact_kind=artifact_kind,
         )
         records.extend(current)
+    footprint_hash = _sha256(footprint_path) if footprint_path.is_file() else ""
+    for model_hash in sorted({item.sha256 for item in models if item.sha256 is not None}):
+        current, stale = visionread.find_comparison_evidence(
+            spec_path.resolve().parent,
+            kind="compare_model",
+            spec_sha256=spec_hash,
+            artifact_sha256=model_hash,
+            artifact_kind="model3d",
+            additional_bindings={
+                "footprint_sha256": footprint_hash,
+                "model_sha256": model_hash,
+            },
+        )
+        if not current:
+            findings.append(
+                ReviewFinding(
+                    code="model_vision_comparison_missing",
+                    severity="error",
+                    field=f"model.{model_hash}",
+                    message=(
+                        "no current hash-bound model comparison vision record was found"
+                        + ("; an older or stale comparison exists" if stale else "")
+                    ),
+                )
+            )
+            continue
+        for evidence in current:
+            if not evidence.answers.control_passed:
+                findings.append(
+                    ReviewFinding(
+                        code="model_vision_control_failed",
+                        severity="error",
+                        field=f"model.{model_hash}",
+                        message="model comparison control was not detected",
+                        page=evidence.item.page,
+                    )
+                )
+            if evidence.normalized is None or not evidence.impression_valid:
+                findings.append(
+                    ReviewFinding(
+                        code="model_vision_record_invalid",
+                        severity="error",
+                        field=f"model.{model_hash}",
+                        message="model comparison answer or impression is missing or invalid",
+                        page=evidence.item.page,
+                    )
+                )
+            elif any(
+                evidence.normalized.get(key) is False
+                for key in (
+                    "pin1_marker_matches",
+                    "outline_matches",
+                    "lead_arrangement_matches",
+                )
+            ) or bool(evidence.normalized.get("differences")):
+                findings.append(
+                    ReviewFinding(
+                        code="model_vision_mismatch",
+                        severity="warning",
+                        field=f"model.{model_hash}",
+                        message=(
+                            "model comparison reported differences requiring human review: "
+                            + "; ".join(cast(list[str], evidence.normalized["differences"]))
+                        ),
+                        page=evidence.item.page,
+                    )
+                )
+            records.append(evidence)
     return records
 
 
@@ -3139,6 +3217,8 @@ def build_review_packet(
         spec_path=spec_path,
         symbol_lib=symbol_lib,
         footprint_path=footprint_path,
+        models=model_records,
+        findings=findings,
     )
     for evidence in comparison_evidence:
         for image_item in evidence.batch.items:
@@ -3227,8 +3307,6 @@ def build_review_packet(
         and "render_unavailable" not in unknowns
     ):
         unknowns.append("footprint_render_missing")
-    unknowns.append("3D visual review not included yet")
-
     overlay_record: dict[str, Any] | None = None
     land_crop_field = "land_pattern.drawing_view" if "land_pattern.drawing_view" in crops else None
     land_pattern_crop = crops.get(land_crop_field) if land_crop_field is not None else None
@@ -3433,6 +3511,15 @@ def build_review_packet(
         and authoring_comparison is not None
         and not any(issue.severity == "error" for issue in authoring_comparison.issues)
         and not any(item.code == "correction_regressed" for item in findings)
+        and not any(
+            item.code
+            in {
+                "model_vision_comparison_missing",
+                "model_vision_control_failed",
+                "model_vision_record_invalid",
+            }
+            for item in findings
+        )
     )
     message_template = _message_template(current_id, questions)
     review_document: dict[str, Any] = {

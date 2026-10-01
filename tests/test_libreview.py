@@ -442,6 +442,87 @@ def test_vision_comparison_mismatch_adds_mandatory_rejection_question(
     assert status.state == "rejected"
 
 
+def test_model_comparison_mismatch_adds_mandatory_human_question(tmp_path: Path) -> None:
+    vision = libreview.visionread
+    item = vision.VisionReadItem(
+        read_id="model01",
+        field="library.model3d",
+        kind="compare_model",
+        page=2,
+        bbox=(10, 20, 30, 40),
+        crop_bbox=(8, 18, 32, 42),
+        dpi=300,
+        rasterizer="pdftoppm",
+        image_path="images/model01.png",
+        image_sha256="a" * 64,
+        prompt=vision.prompt_for_kind("compare_model"),
+        prompt_sha256="b" * 64,
+        bindings={
+            "part_spec_sha256": "c" * 64,
+            "artifact_sha256": "d" * 64,
+            "artifact_kind": "model3d",
+            "footprint_sha256": "e" * 64,
+            "model_sha256": "d" * 64,
+            "render_sha256": "f" * 64,
+            "datasheet_view": "top",
+            "left_mirrored": "false",
+        },
+    )
+    batch = vision.VisionBatch(
+        artifact_kind="circuit_vision_read_batch",
+        batch_id="modelbatch",
+        created_at="2026-01-01T00:00:00Z",
+        lane="main",
+        profile="profile",
+        model="model",
+        pdf_path="part.pdf",
+        pdf_sha256="1" * 64,
+        items=[item],
+        control_salt="salt",
+        control_answer_sha256="2" * 64,
+        control_read_sha256="3" * 64,
+    )
+    answers = vision.VisionAnswerRecord(
+        artifact_kind="circuit_vision_read_answers",
+        batch_id=batch.batch_id,
+        answered_at="2026-01-01T00:00:00Z",
+        answers={item.read_id: "{}"},
+        impressions={item.read_id: "The model is clear. The marker seems misplaced."},
+        normalized={
+            item.read_id: {
+                "pin1_marker_matches": False,
+                "outline_matches": True,
+                "lead_arrangement_matches": True,
+                "differences": ["pin-1 marker is in a different quadrant"],
+            }
+        },
+        status={item.read_id: "ok"},
+        control_passed=True,
+    )
+    evidence = vision.VisionComparisonEvidence(
+        batch_path=tmp_path / "batch.json",
+        batch=batch,
+        item=item,
+        answers=answers,
+        normalized=answers.normalized[item.read_id],
+        impression=answers.impressions[item.read_id],
+        impression_valid=True,
+    )
+
+    questions = libreview.blind_questions(
+        _spec(),
+        "b" * 16,
+        comparison_evidence=[evidence],
+    )
+
+    question = next(
+        item for item in questions if item.question_id == "vision.compare_model.model01"
+    )
+    assert question.expected == "yes"
+    assert "pin-1 marker is in a different quadrant" in question.prompt
+    assert question.evidence_field == "comparison.model.model01"
+
+
 def test_unlabelled_exposed_pad_row_maps_to_the_part_symbol_and_footprint_pin(
     tmp_path: Path,
 ) -> None:
@@ -1550,7 +1631,7 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     review_path = packet.packet_dir / "review.json"
     review = json.loads(review_path.read_text(encoding="utf-8"))
     blind_html = (packet.packet_dir / "01-blind.html").read_text(encoding="utf-8")
-    assert packet.approvable is (fresh_verdict == "pass" and not regressed)
+    assert not packet.approvable
     assert packet.packet_id == review["packet_id"]
     assert (
         review["inputs"]["lineage_sha256"]
@@ -1565,6 +1646,7 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert review["artifact_hashes"]["authoring:a"] == comparison.sealed["a"]
     if regressed:
         assert any(item["code"] == "correction_regressed" for item in review["findings"])
+    assert any(item["code"] == "model_vision_comparison_missing" for item in review["findings"])
     assert review["pin_comparisons"]
     assert {
         "pin_number",
@@ -1615,7 +1697,7 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert "Placement overlay — not to scale" in review_html
     assert "render_unavailable" in review["unknowns"]
     assert "overlay_scale_unknown" in review["unknowns"]
-    assert "3D visual review not included yet" in review["unknowns"]
+    assert "3D visual review not included yet" not in review["unknowns"]
     assert "model:0" in review["artifact_hashes"]
     assert review["overlay"] is not None
     assert len(review["vision_review_images"]) == 1

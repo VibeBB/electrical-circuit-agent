@@ -33,6 +33,7 @@ VisionKind = Literal[
     "table",
     "compare_footprint",
     "compare_symbol",
+    "compare_model",
 ]
 Rasterizer = Literal["pdftoppm", "pdfium"]
 BBox = tuple[float, float, float, float]
@@ -71,6 +72,11 @@ _PROMPTS: dict[VisionKind, str] = {
         "The left image is a datasheet drawing and the right image is a CAD library rendering "
         'of the same part. Answer as JSON {"pin1_matches": bool, "arrangement_matches": bool, '
         '"numbering_direction_matches": bool, "differences": [string]}.'
+    ),
+    "compare_model": (
+        "The left image is a datasheet package drawing and the right image is a 3D CAD render of "
+        'the same part from the same side. Answer as JSON {"pin1_marker_matches": bool, '
+        '"outline_matches": bool, "lead_arrangement_matches": bool, "differences": [string]}.'
     ),
 }
 
@@ -441,7 +447,7 @@ def create_comparison_batch(
     extraction_path: Path,
     composite_path: Path,
     *,
-    kind: Literal["compare_footprint", "compare_symbol"],
+    kind: Literal["compare_footprint", "compare_symbol", "compare_model"],
     page: int,
     bbox: BBox,
     crop_bbox: BBox,
@@ -450,7 +456,8 @@ def create_comparison_batch(
     split_x: int,
     spec_sha256: str,
     artifact_sha256: str,
-    artifact_kind: Literal["footprint", "symbol"],
+    artifact_kind: Literal["footprint", "symbol", "model3d"],
+    additional_bindings: Mapping[str, str] | None = None,
     out_dir: Path | None = None,
     lane: str = "main",
     profile: str = "",
@@ -460,9 +467,37 @@ def create_comparison_batch(
     pdf_path = _extraction_pdf(extraction, extraction_path)
     if not pdf_path.is_file() or _sha256(pdf_path.read_bytes()) != extraction.pdf_sha256:
         raise VisionReadError("datasheet PDF is missing or differs from extraction")
+    extra_bindings = dict(additional_bindings or {})
+    if {"part_spec_sha256", "artifact_sha256", "artifact_kind"} & set(extra_bindings):
+        raise VisionReadError("comparison bindings cannot replace required artifact bindings")
+    bindings = {
+        "part_spec_sha256": spec_sha256,
+        "artifact_sha256": artifact_sha256,
+        "artifact_kind": artifact_kind,
+        **extra_bindings,
+    }
+    for key, digest in bindings.items():
+        if key.endswith("_sha256") and re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise VisionReadError(f"comparison binding {key} must be a SHA-256 value")
     for digest in (spec_sha256, artifact_sha256):
         if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
             raise VisionReadError("comparison bindings must be SHA-256 values")
+    if kind == "compare_model":
+        required_model_bindings = {
+            "footprint_sha256",
+            "model_sha256",
+            "render_sha256",
+            "datasheet_view",
+            "left_mirrored",
+        }
+        if artifact_kind != "model3d" or not required_model_bindings <= set(bindings):
+            raise VisionReadError("model comparison requires all model and render bindings")
+        if bindings["datasheet_view"] not in {"top", "bottom"}:
+            raise VisionReadError("model comparison datasheet_view must be top or bottom")
+        if bindings["left_mirrored"] != str(bindings["datasheet_view"] == "bottom").lower():
+            raise VisionReadError("model comparison mirroring must match its datasheet view")
+        if bindings["model_sha256"] != artifact_sha256:
+            raise VisionReadError("model comparison model hash does not match its artifact hash")
     if not composite_path.is_file():
         raise VisionReadError(f"comparison panel is missing: {composite_path}")
     with Image.open(composite_path) as opened:
@@ -486,11 +521,6 @@ def create_comparison_batch(
     composite.save(image_path, format="PNG")
     _mirror_right_panel(image_path, control_path, split_x)
     prompt = _PROMPTS[kind]
-    bindings = {
-        "part_spec_sha256": spec_sha256,
-        "artifact_sha256": artifact_sha256,
-        "artifact_kind": artifact_kind,
-    }
     item = VisionReadItem(
         read_id=read_id,
         field=f"library.{artifact_kind}",
@@ -875,6 +905,40 @@ def _normalize_answer(
             ],
         }
         return normalized_comparison, "ok"
+    if item.kind == "compare_model":
+        comparison = cast(dict[object, object], parsed)
+        expected_keys = {
+            "pin1_marker_matches",
+            "outline_matches",
+            "lead_arrangement_matches",
+            "differences",
+        }
+        if set(comparison) != expected_keys:
+            return answer, "unparseable"
+        if not all(
+            isinstance(comparison.get(key), bool)
+            for key in (
+                "pin1_marker_matches",
+                "outline_matches",
+                "lead_arrangement_matches",
+            )
+        ):
+            return answer, "unparseable"
+        differences = comparison.get("differences")
+        if not isinstance(differences, list) or not all(
+            isinstance(value, str) for value in cast(list[object], differences)
+        ):
+            return answer, "unparseable"
+        normalized_model_comparison: VisionComparison = {
+            "pin1_marker_matches": cast(bool, comparison["pin1_marker_matches"]),
+            "outline_matches": cast(bool, comparison["outline_matches"]),
+            "lead_arrangement_matches": cast(bool, comparison["lead_arrangement_matches"]),
+            "differences": [
+                re.sub(r"\s+", " ", unicodedata.normalize("NFKC", cast(str, value))).strip()
+                for value in cast(list[object], differences)
+            ],
+        }
+        return normalized_model_comparison, "ok"
     normalized_labels: dict[str, str] = {}
     for key, value in cast(dict[object, object], parsed).items():
         if not isinstance(key, str) or not isinstance(value, str):
@@ -924,16 +988,27 @@ def record_answers(
         normalized[item.read_id] = value
         status[item.read_id] = state
         if item.control:
-            if item.kind in {"compare_footprint", "compare_symbol"}:
+            if item.kind in {"compare_footprint", "compare_symbol", "compare_model"}:
                 compare = value if isinstance(value, dict) else None
-                control_passed = (
-                    state == "ok"
-                    and compare is not None
-                    and (
-                        compare.get("arrangement_matches") is False
-                        or compare.get("numbering_direction_matches") is False
+                if item.kind == "compare_model":
+                    control_passed = (
+                        state == "ok"
+                        and compare is not None
+                        and (
+                            compare.get("pin1_marker_matches") is False
+                            or compare.get("outline_matches") is False
+                            or compare.get("lead_arrangement_matches") is False
+                        )
                     )
-                )
+                else:
+                    control_passed = (
+                        state == "ok"
+                        and compare is not None
+                        and (
+                            compare.get("arrangement_matches") is False
+                            or compare.get("numbering_direction_matches") is False
+                        )
+                    )
             else:
                 control_answer = re.sub(r"\s+", "", answer_texts[item.read_id]).casefold()
                 control_passed = (
@@ -1001,10 +1076,11 @@ def load_vision_read(
 def find_comparison_evidence(
     spec_dir: Path,
     *,
-    kind: Literal["compare_footprint", "compare_symbol"],
+    kind: Literal["compare_footprint", "compare_symbol", "compare_model"],
     spec_sha256: str,
     artifact_sha256: str,
-    artifact_kind: Literal["footprint", "symbol"],
+    artifact_kind: Literal["footprint", "symbol", "model3d"],
+    additional_bindings: Mapping[str, str] | None = None,
 ) -> tuple[list[VisionComparisonEvidence], bool]:
     spec_root = spec_dir.resolve()
     reads_dir = spec_root / "vision-reads"
@@ -1028,9 +1104,23 @@ def find_comparison_evidence(
             bindings = item.bindings
             if bindings.get("artifact_kind") != artifact_kind:
                 continue
+            if kind == "compare_model" and (
+                artifact_kind != "model3d"
+                or bindings.get("model_sha256") != artifact_sha256
+                or re.fullmatch(r"[0-9a-f]{64}", bindings.get("footprint_sha256", "")) is None
+                or re.fullmatch(r"[0-9a-f]{64}", bindings.get("render_sha256", "")) is None
+                or bindings.get("datasheet_view") not in {"top", "bottom"}
+                or bindings.get("left_mirrored")
+                != str(bindings.get("datasheet_view") == "bottom").lower()
+            ):
+                stale = True
+                continue
             if (
                 bindings.get("part_spec_sha256") != spec_sha256
                 or bindings.get("artifact_sha256") != artifact_sha256
+                or any(
+                    bindings.get(key) != value for key, value in (additional_bindings or {}).items()
+                )
             ):
                 stale = True
                 continue
@@ -1044,24 +1134,22 @@ def find_comparison_evidence(
                 continue
             normalized = answers.normalized.get(item.read_id)
             comparison: VisionComparison | None = None
-            if isinstance(normalized, dict) and all(
-                isinstance(normalized.get(key), bool)
-                for key in (
-                    "pin1_matches",
-                    "arrangement_matches",
-                    "numbering_direction_matches",
+            comparison_keys = (
+                (
+                    "pin1_marker_matches",
+                    "outline_matches",
+                    "lead_arrangement_matches",
                 )
+                if kind == "compare_model"
+                else ("pin1_matches", "arrangement_matches", "numbering_direction_matches")
+            )
+            if isinstance(normalized, dict) and all(
+                isinstance(normalized.get(key), bool) for key in comparison_keys
             ):
                 differences = normalized.get("differences")
                 if isinstance(differences, list):
-                    comparison = {
-                        "pin1_matches": cast(bool, normalized["pin1_matches"]),
-                        "arrangement_matches": cast(bool, normalized["arrangement_matches"]),
-                        "numbering_direction_matches": cast(
-                            bool, normalized["numbering_direction_matches"]
-                        ),
-                        "differences": differences,
-                    }
+                    comparison = {key: cast(bool, normalized[key]) for key in comparison_keys}
+                    comparison["differences"] = differences
             impression = answers.impressions.get(item.read_id)
             impression_valid = False
             if impression is None:

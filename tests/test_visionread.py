@@ -630,6 +630,79 @@ def test_comparison_control_fails_when_mirror_is_not_detected(
     assert not record.control_passed
 
 
+def test_model_comparison_binds_render_and_uses_model_answer_shape(
+    tmp_path: Path,
+) -> None:
+    extraction_path = _extraction(tmp_path)
+    composite_path = tmp_path / "model-comparison.png"
+    Image.new("RGB", (120, 60), "white").save(composite_path, format="PNG")
+    spec_hash = "a" * 64
+    model_hash = "b" * 64
+    bindings = {
+        "footprint_sha256": "c" * 64,
+        "model_sha256": model_hash,
+        "render_sha256": "d" * 64,
+        "datasheet_view": "top",
+        "left_mirrored": "false",
+    }
+    batch = create_comparison_batch(
+        extraction_path,
+        composite_path,
+        kind="compare_model",
+        page=1,
+        bbox=(10.0, 10.0, 90.0, 90.0),
+        crop_bbox=(8.0, 8.0, 92.0, 92.0),
+        dpi=300,
+        rasterizer="pdftoppm",
+        split_x=60,
+        spec_sha256=spec_hash,
+        artifact_sha256=model_hash,
+        artifact_kind="model3d",
+        additional_bindings=bindings,
+    )
+    batch_path = tmp_path / "vision-reads" / batch.batch_id / "batch.json"
+    _assert_control_hidden(batch_path)
+    answers: dict[str, dict[str, object]] = {
+        item.read_id: {
+            "answer": (
+                '{"pin1_marker_matches":false,"outline_matches":true,'
+                '"lead_arrangement_matches":true,"differences":[]}'
+                if item.control
+                else '{"pin1_marker_matches":true,"outline_matches":true,'
+                '"lead_arrangement_matches":true,"differences":[]}'
+            ),
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for item in batch.items
+    }
+
+    record = record_answers(batch_path, answers)
+    evidence, stale = find_comparison_evidence(
+        tmp_path,
+        kind="compare_model",
+        spec_sha256=spec_hash,
+        artifact_sha256=model_hash,
+        artifact_kind="model3d",
+        additional_bindings={
+            "footprint_sha256": bindings["footprint_sha256"],
+            "model_sha256": model_hash,
+            "render_sha256": bindings["render_sha256"],
+        },
+    )
+
+    assert record.control_passed
+    assert not stale
+    assert len(evidence) == 1
+    assert evidence[0].normalized == {
+        "pin1_marker_matches": True,
+        "outline_matches": True,
+        "lead_arrangement_matches": True,
+        "differences": [],
+    }
+    assert evidence[0].item.bindings["render_sha256"] == bindings["render_sha256"]
+    assert evidence[0].impression_valid
+
+
 def test_successful_answer_write_is_answer_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
