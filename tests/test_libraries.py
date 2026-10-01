@@ -29,6 +29,7 @@ from circuit.partspec import (
     Reading,
     part_spec_sha256,
 )
+from pinout_fixtures import pinout_drawing
 
 SYMBOLS = """\
 (kicad_symbol_lib
@@ -119,6 +120,7 @@ def _project_spec() -> PartSpec:
             extraction_path="extraction.json",
         ),
         package=package,
+        pinout=pinout_drawing({"1": "PIN1", "2": "PIN2"}),
         pins=[
             PinSpec(
                 number=str(number),

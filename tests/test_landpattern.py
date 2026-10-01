@@ -23,6 +23,7 @@ from circuit.partspec import (
     PinTable,
     Reading,
 )
+from pinout_fixtures import pinout_drawing
 
 TestFamily = Literal[
     "no_lead_quad",
@@ -103,6 +104,11 @@ def _spec(
             extraction_path="extraction.json",
         ),
         package=package,
+        pinout=(
+            pinout_drawing({str(number): f"PIN{number}" for number in range(1, pin_count + 1)})
+            if family in {"no_lead_quad", "no_lead_dual", "gullwing_quad", "gullwing_dual"}
+            else None
+        ),
         land_pattern=land_pattern,
         pins=[
             PinSpec(

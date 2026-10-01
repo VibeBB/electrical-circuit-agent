@@ -19,12 +19,14 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import advisory, datasheet
+from . import pinout as pinout_oracle
 from .datasheet import (
     DatasheetError,
     DatasheetExtraction,
     PageExtraction,
     PdfWord,
 )
+from .pinout import PinoutGeometry
 
 _NUMBER = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)")
 _SYMBOL_PREFIX = re.compile(r"^([□⌀ØR])\s*")
@@ -211,6 +213,25 @@ class OrderableVariant(BaseModel):
     reading: Reading
 
 
+class PinoutDrawing(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    page: int = Field(ge=1)
+    bbox: tuple[float, float, float, float]
+    view: Literal["top", "bottom"]
+    view_reading: Reading
+    labels_vision: dict[str, str]
+    vision_record: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_view_reading(self) -> PinoutDrawing:
+        if self.view_reading.bbox is None:
+            raise ValueError("pinout view reading requires a bounding box")
+        if self.view_reading.page != self.page:
+            raise ValueError("pinout view reading page must match the pinout page")
+        return self
+
+
 class PinTable(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -240,6 +261,7 @@ class PartSpec(BaseModel):
     datasheet: DatasheetRef
     package: PackageSpec
     land_pattern: LandPattern | None = None
+    pinout: PinoutDrawing | None = None
     pins: list[PinSpec] = Field(min_length=1)
     pin_table: PinTable
     orderable: list[OrderableVariant] = Field(min_length=1)
@@ -278,6 +300,7 @@ class PartSpecReport(BaseModel):
     pdf_sha256: str
     checked_readings: int
     findings: list[SpecFinding]
+    pinout: PinoutGeometry | None = None
 
 
 def _decimal_string(value: str) -> str:
@@ -416,6 +439,8 @@ def _all_readings(spec: PartSpec) -> list[tuple[str, Reading, Dimension | None]]
         (f"orderable[{index}]", variant.reading, None)
         for index, variant in enumerate(spec.orderable)
     )
+    if spec.pinout is not None:
+        readings.append(("pinout.view_reading", spec.pinout.view_reading, None))
     return readings
 
 
@@ -577,7 +602,25 @@ def _read_vision(
     field: str,
     findings: list[SpecFinding],
 ) -> None:
-    record_path = _resolved(spec_dir, reading.vision_record)
+    _vision_record_check(
+        reading.vision_record,
+        reading.page,
+        spec_dir,
+        page,
+        field,
+        findings,
+    )
+
+
+def _vision_record_check(
+    vision_record: str,
+    page_number: int,
+    spec_dir: Path,
+    page: PageExtraction | None,
+    field: str,
+    findings: list[SpecFinding],
+) -> None:
+    record_path = _resolved(spec_dir, vision_record)
     try:
         record = advisory.AdvisoryResult.model_validate(
             json.loads(record_path.read_text(encoding="utf-8"))
@@ -592,7 +635,7 @@ def _read_vision(
                 severity="error",
                 field=field,
                 message=f"vision record is missing or invalid: {record_path}",
-                page=reading.page,
+                page=page_number,
             )
         )
         return
@@ -603,7 +646,7 @@ def _read_vision(
                 severity="error",
                 field=field,
                 message="vision record must review this page image with the datasheet checklist",
-                page=reading.page,
+                page=page_number,
             )
         )
 
@@ -727,6 +770,268 @@ def _bbox_findings(
                 page=reading.page,
             )
         )
+
+
+def _visible_pinout_tokens(
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    page: PageExtraction,
+    bbox: tuple[float, float, float, float],
+) -> list[PdfWord]:
+    lanes: dict[str, list[PdfWord]] = {}
+    for lane_name in ("poppler", "pdfplumber"):
+        words = _lane_words(extraction, extraction_dir, page.page, lane_name)
+        visible, _ = _visible_words(words, page, extraction_dir)
+        lanes[lane_name] = _words_in_bbox(visible, bbox)
+
+    poppler = lanes["poppler"]
+    pdfplumber = lanes["pdfplumber"]
+    matched_pdfplumber: set[int] = set()
+    tokens: list[PdfWord] = []
+    for poppler_word in poppler:
+        text = poppler_word.text.strip()
+        if not text:
+            continue
+        matches = [
+            (index, word)
+            for index, word in enumerate(pdfplumber)
+            if index not in matched_pdfplumber
+            and word.text.strip() == text
+            and math.dist(
+                (
+                    (poppler_word.x0 + poppler_word.x1) / 2,
+                    (poppler_word.top + poppler_word.bottom) / 2,
+                ),
+                ((word.x0 + word.x1) / 2, (word.top + word.bottom) / 2),
+            )
+            <= 1.5
+        ]
+        if not matches:
+            continue
+        index, _ = min(
+            matches,
+            key=lambda item: math.dist(
+                (
+                    (poppler_word.x0 + poppler_word.x1) / 2,
+                    (poppler_word.top + poppler_word.bottom) / 2,
+                ),
+                ((item[1].x0 + item[1].x1) / 2, (item[1].top + item[1].bottom) / 2),
+            ),
+        )
+        matched_pdfplumber.add(index)
+        tokens.append(
+            PdfWord(
+                text=text,
+                x0=poppler_word.x0,
+                top=poppler_word.top,
+                x1=poppler_word.x1,
+                bottom=poppler_word.bottom,
+            )
+        )
+    return tokens
+
+
+def _pinout_view_check(
+    pinout: PinoutDrawing,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    page: PageExtraction | None,
+    findings: list[SpecFinding],
+) -> None:
+    expected = pinout.view
+    phrase = re.compile(r"\b(top|bottom)\s+view\b")
+    problems: list[str] = []
+    mechanical = _normalise_text(pinout.view_reading.mechanical or "").casefold()
+    mechanical_match = phrase.search(mechanical)
+    if mechanical_match is None or mechanical_match.group(1) != expected:
+        problems.append("mechanical reading does not confirm the declared view")
+    if page is None:
+        problems.append("the pinout view page was not re-derived")
+    else:
+        for lane_name in ("poppler", "pdfplumber"):
+            words = _lane_words(extraction, extraction_dir, pinout.page, lane_name)
+            visible, _ = _visible_words(words, page, extraction_dir)
+            bounded = _words_in_bbox(visible, pinout.view_reading.bbox)
+            text = _normalise_text(" ".join(word.text for word in bounded)).casefold()
+            lane_match = phrase.search(text)
+            if lane_match is None or lane_match.group(1) != expected:
+                problems.append(f"{lane_name} lane does not show the declared view")
+    if problems:
+        findings.append(
+            SpecFinding(
+                code="pinout_view_unverified",
+                severity="error",
+                field="pinout",
+                message="; ".join(problems),
+                page=pinout.page,
+            )
+        )
+
+
+def _pinout_fresh_checks(
+    spec: PartSpec,
+    spec_dir: Path,
+    stored_page: PageExtraction | None,
+    derived_page: PageExtraction | None,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    findings: list[SpecFinding],
+) -> PinoutGeometry | None:
+    drawing = spec.pinout
+    if drawing is None:
+        return None
+    field = "pinout.view_reading"
+    _read_vision(drawing.view_reading, spec_dir, stored_page, field, findings)
+    _bbox_findings(drawing.view_reading, derived_page, field, findings)
+    _vision_record_check(
+        drawing.vision_record,
+        drawing.page,
+        spec_dir,
+        stored_page,
+        "pinout",
+        findings,
+    )
+    _pinout_view_check(drawing, extraction, extraction_dir, derived_page, findings)
+    if derived_page is None:
+        findings.append(
+            SpecFinding(
+                code="pinout_unverified",
+                severity="error",
+                field="pinout",
+                message="pinout page was not available from fresh PDF derivation",
+                page=drawing.page,
+            )
+        )
+        return None
+
+    tokens = _visible_pinout_tokens(extraction, extraction_dir, derived_page, drawing.bbox)
+    geometry, issues = pinout_oracle.derive_pinout(
+        tokens,
+        view=drawing.view,
+        pin_count=spec.package.pin_count,
+        page=drawing.page,
+    )
+    for issue in issues:
+        findings.append(
+            SpecFinding(
+                code=issue.code,
+                severity=issue.severity,
+                field="pinout",
+                message=issue.message,
+                page=drawing.page,
+            )
+        )
+    if geometry is None:
+        return None
+
+    labels = {label.number: label for label in geometry.labels}
+    partspec_pins: dict[str, PinSpec] = {}
+    for pin in spec.pins:
+        partspec_pins.setdefault(pin.number, pin)
+    drawing_names: dict[str, str] = {}
+    actual_names: dict[str, str] = {}
+    mismatched_names = False
+    for number in range(1, spec.package.pin_count + 1):
+        key = str(number)
+        label = labels.get(key)
+        mechanical_name = label.name if label is not None else None
+        if mechanical_name is not None:
+            drawing_names[key] = mechanical_name
+        pin = partspec_pins.get(key)
+        if pin is None:
+            mismatched_names = True
+            findings.append(
+                SpecFinding(
+                    code="pinout_name_mismatch",
+                    severity="error",
+                    field="pinout",
+                    message=f"PartSpec has no non-exposed pin {key}",
+                    page=drawing.page,
+                )
+            )
+        else:
+            actual_names[key] = pin.name
+            if mechanical_name is None or not pinout_oracle.names_equal(mechanical_name, pin.name):
+                mismatched_names = True
+                findings.append(
+                    SpecFinding(
+                        code="pinout_name_mismatch",
+                        severity="error",
+                        field="pinout",
+                        message=(
+                            f"mechanical pinout name for pin {key} "
+                            f"({mechanical_name or 'unresolved'}) differs from PartSpec "
+                            f"({pin.name})"
+                        ),
+                        page=drawing.page,
+                    )
+                )
+    expected_vision_keys = {str(number) for number in range(1, spec.package.pin_count + 1)}
+    vision_keys = set(drawing.labels_vision)
+    vision_disagreements = [
+        number
+        for number in sorted(expected_vision_keys & vision_keys, key=lambda value: int(value))
+        if number not in labels
+        or labels[number].name is None
+        or not pinout_oracle.names_equal(drawing.labels_vision[number], labels[number].name or "")
+    ]
+    missing_vision = sorted(expected_vision_keys - vision_keys, key=lambda value: int(value))
+    extra_vision = sorted(vision_keys - expected_vision_keys)
+    if missing_vision or extra_vision or vision_disagreements:
+        findings.append(
+            SpecFinding(
+                code="pinout_vision_mismatch",
+                severity="error",
+                field="pinout",
+                message=(
+                    f"vision labels differ from the mechanical pinout "
+                    f"(missing={missing_vision}, extra={extra_vision}, "
+                    f"disagree={vision_disagreements})"
+                ),
+                page=drawing.page,
+            )
+        )
+    if mismatched_names:
+        hypotheses = pinout_oracle.diagnose_permutation(
+            {label.number: (label.x, label.y) for label in geometry.labels},
+            drawing_names,
+            actual_names,
+        )
+        findings.append(
+            SpecFinding(
+                code="pinout_permutation_diagnosis",
+                severity="info",
+                field="pinout",
+                message=f"pinout name permutation hypotheses: {', '.join(hypotheses) or 'none'}",
+                page=drawing.page,
+            )
+        )
+    pin1 = labels.get("1")
+    if pin1 is not None:
+        corner = f"{'top' if pin1.y < 0 else 'bottom'}_{'left' if pin1.x < 0 else 'right'}"
+        if corner != spec.package.pin1_corner:
+            findings.append(
+                SpecFinding(
+                    code="pinout_pin1_corner_mismatch",
+                    severity="error",
+                    field="pinout",
+                    message=(
+                        f"pinout pin 1 is in {corner}, not PackageSpec {spec.package.pin1_corner}"
+                    ),
+                    page=drawing.page,
+                )
+            )
+    if geometry.winding == "cw":
+        findings.append(
+            SpecFinding(
+                code="pinout_winding_nonstandard",
+                severity="warning",
+                field="pinout",
+                message="top-view pinout labels have clockwise winding",
+                page=drawing.page,
+            )
+        )
+    return geometry
 
 
 def _tokens(text: str) -> list[str]:
@@ -1828,6 +2133,24 @@ def check_part_spec(
 ) -> PartSpecReport:
     """Cross-check every authored reading against extraction and provenance."""
     findings: list[SpecFinding] = []
+    if (
+        spec.package.family
+        in {
+            "no_lead_quad",
+            "no_lead_dual",
+            "gullwing_quad",
+            "gullwing_dual",
+        }
+        and spec.pinout is None
+    ):
+        findings.append(
+            SpecFinding(
+                code="pinout_missing",
+                severity="error",
+                field="pinout",
+                message=f"{spec.package.family} packages require a pinout drawing",
+            )
+        )
     spec_dir = spec_path.resolve().parent
     extraction_dir = extraction_path.resolve().parent
     pdf_path = _resolved(spec_dir, spec.datasheet.path)
@@ -1893,6 +2216,8 @@ def check_part_spec(
     pin_by_field = {f"pins[{index}]": (index, pin) for index, pin in enumerate(spec.pins)}
     cited_pages = {reading.page for _, reading, _ in readings}
     cited_pages.add(spec.pin_table.page)
+    if spec.pinout is not None:
+        cited_pages.add(spec.pinout.page)
     for page_number in cited_pages:
         page = stored_pages.get(page_number)
         if page is None:
@@ -1939,6 +2264,7 @@ def check_part_spec(
         if page_number in stored_pages
     ]
     derived_extraction: DatasheetExtraction | None = None
+    pinout_geometry: PinoutGeometry | None = None
     derived_dir = Path()
     with ExitStack() as cleanup_stack:
         token: Token[ExitStack | None] = _RE_DERIVATION_STACK.set(cleanup_stack)
@@ -2054,6 +2380,16 @@ def check_part_spec(
                 derived_pages.get(spec.pin_table.page),
                 findings,
             )
+            if spec.pinout is not None:
+                pinout_geometry = _pinout_fresh_checks(
+                    spec,
+                    spec_dir,
+                    stored_pages.get(spec.pinout.page),
+                    derived_pages.get(spec.pinout.page),
+                    derived_extraction,
+                    derived_dir,
+                    findings,
+                )
 
             drawing_pages = {
                 dimension.reading.page
@@ -2133,6 +2469,26 @@ def check_part_spec(
                 elif field in pin_by_field:
                     index, pin = pin_by_field[field]
                     _pin_checks(spec, spec_dir, pin, index, stored_page, findings)
+                elif field == "pinout.view_reading":
+                    _read_vision(reading, spec_dir, stored_page, field, findings)
+            if spec.pinout is not None:
+                _vision_record_check(
+                    spec.pinout.vision_record,
+                    spec.pinout.page,
+                    spec_dir,
+                    stored_pages.get(spec.pinout.page),
+                    "pinout",
+                    findings,
+                )
+                findings.append(
+                    SpecFinding(
+                        code="pinout_unverified",
+                        severity="error",
+                        field="pinout",
+                        message="pinout geometry was not freshly re-derived from the datasheet",
+                        page=spec.pinout.page,
+                    )
+                )
 
         _consistency_checks(spec, findings)
         return PartSpecReport(
@@ -2143,4 +2499,5 @@ def check_part_spec(
             pdf_sha256=spec.datasheet.sha256,
             checked_readings=len(readings),
             findings=findings,
+            pinout=pinout_geometry,
         )

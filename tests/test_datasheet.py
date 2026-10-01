@@ -3,6 +3,7 @@ import json
 import stat
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -266,3 +267,50 @@ def test_extraction_loading_rejects_invalid_json(tmp_path: Path) -> None:
     path.write_text(json.dumps({"artifact_kind": "wrong"}), encoding="utf-8")
     with pytest.raises(DatasheetError, match="could not load"):
         load_extraction(path)
+
+
+def test_rotated_character_words_rebuild_both_reading_directions() -> None:
+    private_api: Any = datasheet_module
+
+    def char(text: str, top: float, *, x: float = 10.0, b: float = -1.0) -> dict[str, object]:
+        return {
+            "text": text,
+            "x0": x - 1,
+            "x1": x + 1,
+            "top": top,
+            "bottom": top + 10,
+            "size": 10,
+            "matrix": (0, b, -b, 0, x, top),
+        }
+
+    ttb = [char(letter, index * 10) for index, letter in enumerate("PGND")]
+    btt = [char(letter, index * 10, x=30, b=1) for index, letter in enumerate("DNGP")]
+
+    assert [word.text for word in private_api._rotated_char_words(ttb)] == ["PGND"]
+    assert [word.text for word in private_api._rotated_char_words(btt)] == ["PGND"]
+
+
+def test_rotated_character_words_separate_columns_and_whitespace() -> None:
+    private_api: Any = datasheet_module
+
+    def char(text: str, top: float, *, x: float = 10.0) -> dict[str, object]:
+        return {
+            "text": text,
+            "x0": x - 1,
+            "x1": x + 1,
+            "top": top,
+            "bottom": top + 10,
+            "size": 10,
+            "matrix": (0, -1, 1, 0, x, top),
+        }
+
+    chars = [
+        *(char(letter, index * 10) for index, letter in enumerate("PG")),
+        char(" ", 20),
+        *(char(letter, index * 10 + 30) for index, letter in enumerate("ND")),
+        *(char(letter, index * 10, x=30) for index, letter in enumerate("VOS")),
+    ]
+
+    words = private_api._rotated_char_words(chars)
+    assert {word.text for word in words} == {"PG", "ND", "VOS"}
+    assert len(words) == 3

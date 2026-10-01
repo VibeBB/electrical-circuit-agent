@@ -31,6 +31,7 @@ from circuit.partspec import (
 )
 from circuit.report import DesignReport
 from circuit.sch_lint import SchLintReport
+from pinout_fixtures import pinout_drawing
 
 
 def test_mcp_server_lists_expected_tools() -> None:
@@ -134,6 +135,7 @@ def _library_tool_spec() -> PartSpec:
             extraction_path="extraction.json",
         ),
         package=package,
+        pinout=pinout_drawing({"1": "PIN1", "2": "PIN2"}),
         pins=[
             PinSpec(
                 number=str(number),

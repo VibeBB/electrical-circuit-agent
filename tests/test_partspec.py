@@ -3,6 +3,7 @@ import json
 import math
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from PIL import Image, ImageDraw
@@ -20,6 +21,7 @@ from circuit.partspec import (
     OrderableVariant,
     PackageSpec,
     PartSpec,
+    PinoutDrawing,
     PinSpec,
     PinTable,
     Reading,
@@ -29,6 +31,8 @@ from circuit.partspec import (
     parse_dimension_text,
     part_spec_sha256,
 )
+from circuit.pinout import normalized
+from pinout_fixtures import QUAD16_NAMES, pinout_drawing, quad16_fixture
 
 _IMPRESSION = (
     "The dimensional marks remain legible across the package drawing. "
@@ -56,7 +60,11 @@ def _word_records(texts: list[str]) -> list[PdfWord]:
     ]
 
 
-def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]:
+def _fixture(
+    tmp_path: Path,
+    *,
+    extra_words: Sequence[PdfWord] = (),
+) -> tuple[PartSpec, DatasheetExtraction, Path, Path]:
     pdf_path = tmp_path / "parts.pdf"
     pdf_path.write_bytes(b"%PDF-1.4 fixture")
     png_path = tmp_path / "page-001.png"
@@ -75,6 +83,7 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
         PdfWord(text="MAX mm", x0=23, top=41, x1=29, bottom=47),
         PdfWord(text="2.9", x0=8, top=49, x1=14, bottom=58),
         PdfWord(text="3.1", x0=23, top=49, x1=29, bottom=58),
+        *extra_words,
     ]
     for word in words:
         draw.rectangle(
@@ -278,6 +287,70 @@ def _fixture(tmp_path: Path) -> tuple[PartSpec, DatasheetExtraction, Path, Path]
 
 def _save_spec(spec: PartSpec, path: Path) -> None:
     path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+
+
+def _pinout_fixture(
+    tmp_path: Path,
+    *,
+    page_view: Literal["top", "bottom"] = "top",
+    declared_view: Literal["top", "bottom"] | None = None,
+    vision_mismatch: bool = False,
+    mirror_page_x: bool = False,
+) -> tuple[PartSpec, DatasheetExtraction, Path, Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    words, _, names = quad16_fixture(QUAD16_NAMES)
+    extra_words = [
+        PdfWord(
+            text=f"{page_view.title()} View",
+            x0=13,
+            top=13,
+            x1=27,
+            bottom=17,
+        )
+    ]
+    for word in words:
+        x0, x1 = word.x0 + 100, word.x1 + 100
+        if page_view == "bottom" or mirror_page_x:
+            x0, x1 = 200 - x1, 200 - x0
+        extra_words.append(
+            PdfWord(
+                text=word.text,
+                x0=x0,
+                top=word.top + 100,
+                x1=x1,
+                bottom=word.bottom + 100,
+            )
+        )
+    spec, extraction, spec_path, extraction_path = _fixture(
+        tmp_path,
+        extra_words=extra_words,
+    )
+    spec.package = spec.package.model_copy(update={"family": "gullwing_quad", "pin_count": 16})
+    spec.pins = [
+        PinSpec(
+            number=number,
+            name=name,
+            electrical_type="passive",
+            reading=Reading(
+                page=1,
+                vision=f"{number} {name}",
+                vision_record="vision.advisory.json",
+            ),
+        )
+        for number, name in names.items()
+    ]
+    spec.orderable[0].pin_count = 16
+    spec.pinout = pinout_drawing(
+        names,
+        page=1,
+        view=declared_view or page_view,
+        bbox=(70, 70, 130, 130),
+        vision_record="vision.advisory.json",
+    )
+    if vision_mismatch:
+        spec.pinout.labels_vision["1"] = "WRONG"
+    _save_spec(spec, spec_path)
+    return spec, extraction, spec_path, extraction_path
 
 
 _DIMENSION_EXAMPLES: list[
@@ -1458,3 +1531,239 @@ def test_drawing_view_and_orderable_variants_are_required(tmp_path: Path) -> Non
     del spec_value["orderable"]
     with pytest.raises(ValidationError):
         PartSpec.model_validate(spec_value)
+
+
+def test_pinout_view_reading_requires_a_bbox_on_the_pinout_page() -> None:
+    with pytest.raises(ValidationError, match="requires a bounding box"):
+        PinoutDrawing(
+            page=3,
+            bbox=(0, 0, 20, 20),
+            view="top",
+            view_reading=Reading(
+                page=3,
+                vision="Top View",
+                vision_record="vision.json",
+            ),
+            labels_vision={"1": "SW"},
+            vision_record="vision.json",
+        )
+    with pytest.raises(ValidationError, match="page must match"):
+        PinoutDrawing(
+            page=3,
+            bbox=(0, 0, 20, 20),
+            view="top",
+            view_reading=Reading(
+                page=2,
+                bbox=(0, 0, 20, 20),
+                vision="Top View",
+                vision_record="vision.json",
+            ),
+            labels_vision={"1": "SW"},
+            vision_record="vision.json",
+        )
+    pinout_value = pinout_drawing(QUAD16_NAMES).model_dump()
+    pinout_value["extra"] = "forbidden"
+    with pytest.raises(ValidationError):
+        PinoutDrawing.model_validate(pinout_value)
+
+
+def test_required_pinout_is_freshly_derived_with_names_and_ccw_winding(
+    tmp_path: Path,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _pinout_fixture(tmp_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    assert report.pinout is not None
+    assert report.pinout.winding == "ccw"
+    assert {label.number: label.name for label in report.pinout.labels} == QUAD16_NAMES
+    assert not {
+        finding.code
+        for finding in report.findings
+        if finding.field == "pinout"
+        and finding.code
+        in {
+            "pinout_view_unverified",
+            "pinout_number_missing",
+            "pinout_number_duplicate",
+            "pinout_name_unresolved",
+            "pinout_name_ambiguous",
+            "pinout_name_mismatch",
+            "pinout_vision_mismatch",
+            "pinout_pin1_corner_mismatch",
+        }
+    }
+
+
+def test_pinout_name_shift_reports_the_expected_permutation(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _pinout_fixture(tmp_path)
+    for pin in spec.pins:
+        next_number = int(pin.number) % len(QUAD16_NAMES) + 1
+        pin.name = QUAD16_NAMES[str(next_number)]
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    codes = {item.code for item in report.findings}
+    diagnosis = next(
+        item.message for item in report.findings if item.code == "pinout_permutation_diagnosis"
+    )
+
+    assert "pinout_name_mismatch" in codes
+    assert "shift+1" in diagnosis
+
+
+def test_pinout_mirrored_names_report_mirror_x(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _pinout_fixture(tmp_path)
+    _, positions, _ = quad16_fixture()
+    normalized_positions = normalized(positions)
+    for pin in spec.pins:
+        x, y = normalized_positions[pin.number]
+        mirrored = min(
+            normalized_positions,
+            key=lambda number: math.dist(
+                (-x, y),
+                normalized_positions[number],
+            ),
+        )
+        pin.name = QUAD16_NAMES[mirrored]
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    codes = {item.code for item in report.findings}
+    diagnosis = next(
+        item.message for item in report.findings if item.code == "pinout_permutation_diagnosis"
+    )
+
+    assert "pinout_name_mismatch" in codes
+    assert "mirror_x" in diagnosis
+
+
+def test_bottom_view_normalizes_to_the_same_top_view_geometry(tmp_path: Path) -> None:
+    top_spec, top_extraction, top_spec_path, top_extraction_path = _pinout_fixture(tmp_path / "top")
+    bottom_spec, bottom_extraction, bottom_spec_path, bottom_extraction_path = _pinout_fixture(
+        tmp_path / "bottom", page_view="bottom"
+    )
+
+    top_report = check_part_spec(
+        top_spec,
+        top_extraction,
+        spec_path=top_spec_path,
+        extraction_path=top_extraction_path,
+    )
+    bottom_report = check_part_spec(
+        bottom_spec,
+        bottom_extraction,
+        spec_path=bottom_spec_path,
+        extraction_path=bottom_extraction_path,
+    )
+
+    assert top_report.pinout is not None
+    assert bottom_report.pinout is not None
+    assert top_report.pinout.winding == bottom_report.pinout.winding == "ccw"
+    assert [(label.number, label.name, label.x, label.y) for label in top_report.pinout.labels] == [
+        (label.number, label.name, label.x, label.y) for label in bottom_report.pinout.labels
+    ]
+
+
+def test_wrong_declared_pinout_view_and_vision_labels_are_reported(
+    tmp_path: Path,
+) -> None:
+    wrong_view_spec, wrong_view_extraction, wrong_spec_path, wrong_extraction_path = (
+        _pinout_fixture(
+            tmp_path / "wrong-view",
+            page_view="top",
+            declared_view="bottom",
+        )
+    )
+    wrong_view_report = check_part_spec(
+        wrong_view_spec,
+        wrong_view_extraction,
+        spec_path=wrong_spec_path,
+        extraction_path=wrong_extraction_path,
+    )
+    assert "pinout_view_unverified" in {item.code for item in wrong_view_report.findings}
+    assert "pinout_pin1_corner_mismatch" in {item.code for item in wrong_view_report.findings}
+
+    vision_spec, vision_extraction, vision_spec_path, vision_extraction_path = _pinout_fixture(
+        tmp_path / "vision", vision_mismatch=True
+    )
+    vision_report = check_part_spec(
+        vision_spec,
+        vision_extraction,
+        spec_path=vision_spec_path,
+        extraction_path=vision_extraction_path,
+    )
+    assert "pinout_vision_mismatch" in {item.code for item in vision_report.findings}
+
+
+def test_top_view_clockwise_pinout_warns(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _pinout_fixture(
+        tmp_path,
+        mirror_page_x=True,
+    )
+    spec.package.pin1_corner = "top_right"
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    assert report.pinout is not None
+    assert report.pinout.winding == "cw"
+    finding = next(item for item in report.findings if item.code == "pinout_winding_nonstandard")
+    assert finding.severity == "warning"
+
+
+def test_required_pinout_missing_but_chip_pinout_is_optional(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.package.family = "gullwing_dual"
+    required = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "pinout_missing" in {item.code for item in required.findings}
+
+    spec.package.family = "chip"
+    optional = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "pinout_missing" not in {item.code for item in optional.findings}
+
+
+def test_pinout_page_missing_from_fresh_derivation_is_unverified(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _pinout_fixture(tmp_path)
+    pdf_path = (spec_path.parent / spec.datasheet.path).resolve()
+    derived, derived_dir = _REDERIVED_BY_PDF[pdf_path]
+    _REDERIVED_BY_PDF[pdf_path] = (derived.model_copy(update={"pages": []}), derived_dir)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    assert report.pinout is None
+    assert "pinout_unverified" in {item.code for item in report.findings}
