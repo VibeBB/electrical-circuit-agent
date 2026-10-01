@@ -39,6 +39,7 @@ from .libitems import (
 )
 from .libsource import (
     LibrarySourceError,
+    ProvenanceEntry,
     assert_safe_destination,
     load_library_provenance,
 )
@@ -49,6 +50,7 @@ from .lineage import (
     lineage_path_for,
     pad_changes,
 )
+from .model3d import GeneratedModel
 from .modeloracle import ModelExportReport, verify_model_export
 from .partspec import (
     Dimension,
@@ -112,6 +114,35 @@ class VerifiedModel(BaseModel):
     sha256: str | None
     inspection: VerifiedModelInspection | None = None
     export_oracle: ModelExportReport | None = None
+
+
+class ModelCrossCheckGeometry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: Path
+    sha256: str
+    body_extents_mm: tuple[float, float, float]
+    terminal_centers_xy_mm: list[tuple[float, float]]
+    pin1_quadrant: str | None
+
+
+class ModelCrossCheckFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: Literal["model_source_disagreement"] = "model_source_disagreement"
+    severity: Literal["error"] = "error"
+    message: str
+
+
+class ModelCrossCheckReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_kind: Literal["circuit_model_cross_check"] = "circuit_model_cross_check"
+    passed: bool
+    generated: ModelCrossCheckGeometry | None
+    imported: ModelCrossCheckGeometry | None
+    imported_provenance: ProvenanceEntry | None
+    findings: list[ModelCrossCheckFinding]
 
 
 class VerificationInputs(BaseModel):
@@ -1797,6 +1828,187 @@ def _single_solid_body_bbox(
         body_xy[2],
         body_xy[3],
         top,
+    )
+
+
+def _imported_model_provenance(path: Path) -> ProvenanceEntry | None:
+    resolved = path.resolve(strict=True)
+    digest = _sha256(resolved)
+    if digest is None:
+        return None
+    for root in resolved.parents:
+        if not (root / "provenance.json").is_file():
+            continue
+        relative = resolved.relative_to(root).as_posix()
+        provenance = load_library_provenance(root)
+        return next(
+            (
+                entry
+                for entry in provenance.entries
+                if entry.artifact == "model3d" and entry.path == relative and entry.sha256 == digest
+            ),
+            None,
+        )
+    return None
+
+
+def _cross_check_model_geometry(path: Path) -> ModelCrossCheckGeometry:
+    from . import occt
+
+    resolved = path.resolve(strict=True)
+    digest = _sha256(resolved)
+    if digest is None:
+        raise ValueError("model could not be hashed")
+    shape = occt.read_step(resolved)
+    facts = occt.inspect(shape)
+    overall_bbox = _model_bbox(facts)
+    if (
+        not facts.valid
+        or facts.units != "mm"
+        or not facts.solids
+        or overall_bbox is None
+        or any(not solid.closed_shell or solid.volume <= 0 for solid in facts.solids)
+    ):
+        raise ValueError("model must contain valid closed solids in millimetres")
+    body_bbox = max(facts.solids, key=lambda solid: solid.volume).bbox
+    if facts.solid_count == 1:
+        inferred = _single_solid_body_bbox(shape, overall_bbox)
+        if inferred is None:
+            raise ValueError("model body bounds cannot be separated from its terminals")
+        body_bbox = inferred
+    regions = occt.slab_regions(shape, 0.0, 0.02)
+    terminal_centers = sorted(
+        {
+            (
+                round((region.bbox_xy[0] + region.bbox_xy[2]) / 2, 5),
+                round((region.bbox_xy[1] + region.bbox_xy[3]) / 2, 5),
+            )
+            for region in regions
+        }
+    )
+    marker = occt.pin1_marker(shape, body_bbox)
+    pin1_quadrant = marker.quadrant if marker is not None else None
+    if pin1_quadrant is None:
+        pin1_quadrant = occt.face_color_marker(resolved, body_bbox)
+    return ModelCrossCheckGeometry(
+        path=resolved,
+        sha256=digest,
+        body_extents_mm=(
+            body_bbox.x_max - body_bbox.x_min,
+            body_bbox.y_max - body_bbox.y_min,
+            body_bbox.z_max - body_bbox.z_min,
+        ),
+        terminal_centers_xy_mm=terminal_centers,
+        pin1_quadrant=pin1_quadrant,
+    )
+
+
+def _terminal_centers_match(
+    left: list[tuple[float, float]],
+    right: list[tuple[float, float]],
+    tolerance_mm: float,
+) -> bool:
+    if len(left) != len(right):
+        return False
+    neighbors = [
+        [
+            right_index
+            for right_index, (right_x, right_y) in enumerate(right)
+            if math.hypot(left_x - right_x, left_y - right_y) <= tolerance_mm
+        ]
+        for left_x, left_y in left
+    ]
+    matched: dict[int, int] = {}
+
+    def augment(left_index: int, visited: set[int]) -> bool:
+        for right_index in neighbors[left_index]:
+            if right_index in visited:
+                continue
+            visited.add(right_index)
+            previous = matched.get(right_index)
+            if previous is None or augment(previous, visited):
+                matched[right_index] = left_index
+                return True
+        return False
+
+    for left_index in sorted(range(len(left)), key=lambda index: len(neighbors[index])):
+        if not neighbors[left_index] or not augment(left_index, set()):
+            return False
+    return True
+
+
+def cross_check_models(
+    generated: GeneratedModel | Path,
+    imported: Path,
+    spec: PartSpec,
+) -> ModelCrossCheckReport:
+    generated_path = generated.step_path if isinstance(generated, GeneratedModel) else generated
+    findings: list[ModelCrossCheckFinding] = []
+    generated_geometry: ModelCrossCheckGeometry | None = None
+    imported_geometry: ModelCrossCheckGeometry | None = None
+    imported_provenance: ProvenanceEntry | None = None
+    try:
+        generated_geometry = _cross_check_model_geometry(generated_path)
+    except Exception as exc:
+        findings.append(
+            ModelCrossCheckFinding(
+                message=f"generated STEP model could not be inspected: {exc}",
+            )
+        )
+    try:
+        imported_provenance = _imported_model_provenance(imported)
+        if imported_provenance is None:
+            raise ValueError("no matching hash-bound libsource provenance entry")
+        imported_geometry = _cross_check_model_geometry(imported)
+    except Exception as exc:
+        findings.append(
+            ModelCrossCheckFinding(
+                message=f"imported STEP model could not be verified: {exc}",
+            )
+        )
+    if generated_geometry is not None and imported_geometry is not None:
+        if any(
+            abs(left - right) > 0.05
+            for left, right in zip(
+                generated_geometry.body_extents_mm,
+                imported_geometry.body_extents_mm,
+                strict=True,
+            )
+        ):
+            findings.append(
+                ModelCrossCheckFinding(
+                    message="generated and imported body extents differ by more than 0.05 mm",
+                )
+            )
+        if not _terminal_centers_match(
+            generated_geometry.terminal_centers_xy_mm,
+            imported_geometry.terminal_centers_xy_mm,
+            0.05,
+        ):
+            findings.append(
+                ModelCrossCheckFinding(
+                    message=(
+                        "generated and imported terminal center sets differ by more than 0.05 mm"
+                    ),
+                )
+            )
+        if (
+            spec.package.family != "chip"
+            and (
+                generated_geometry.pin1_quadrant is None or imported_geometry.pin1_quadrant is None
+            )
+        ) or generated_geometry.pin1_quadrant != imported_geometry.pin1_quadrant:
+            findings.append(
+                ModelCrossCheckFinding(
+                    message="generated and imported pin-1 quadrants do not agree",
+                )
+            )
+    return ModelCrossCheckReport(
+        passed=not findings,
+        generated=generated_geometry,
+        imported=imported_geometry,
+        imported_provenance=imported_provenance,
+        findings=findings,
     )
 
 

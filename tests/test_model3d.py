@@ -1,11 +1,15 @@
 import hashlib
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 import pytest
 
 from circuit import occt, sexpr
-from circuit.model3d import Model3dError, footprint_to_board_xy, generate_model
+from circuit.libsource import LicenseInfo, SourceInfoInput, import_library_item
+from circuit.libverify import cross_check_models
+from circuit.model3d import GeneratedModel, Model3dError, footprint_to_board_xy, generate_model
 from circuit.partspec import (
     CellRef,
     DatasheetRef,
@@ -245,3 +249,116 @@ def test_generate_model_rejects_unsupported_family(tmp_path: Path) -> None:
 def test_kicad_cli_frame_transform_matches_asymmetric_fixture_observation() -> None:
     assert footprint_to_board_xy(0.5, -0.15, rotation_deg=0) == pytest.approx((0.5, -0.15))
     assert footprint_to_board_xy(0.5, -0.15, rotation_deg=90) == pytest.approx((0.15, 0.5))
+
+
+def _import_step(path: Path, library_dir: Path, nickname: str) -> Path:
+    report = import_library_item(
+        path,
+        library_dir,
+        nickname,
+        source=SourceInfoInput(
+            origin="manufacturer",
+            vendor="Fixture vendor",
+            url="https://example.invalid/model",
+            retrieved_at=datetime(2026, 1, 1, tzinfo=UTC),
+            license=LicenseInfo(
+                spdx="MIT",
+                attribution="Fixture vendor",
+                redistribution="allowed",
+            ),
+        ),
+    )
+    model = next(entry for entry in report.imported if entry.artifact == "model3d")
+    return library_dir / model.path
+
+
+def _generated_model(
+    tmp_path: Path,
+) -> tuple[PartSpec, Path, GeneratedModel]:
+    spec, pads = _fixture("gullwing_dual")
+    footprint = tmp_path / "Fixture.pretty" / "Fixture.kicad_mod"
+    footprint.parent.mkdir(parents=True)
+    _write_footprint(footprint, pads)
+    generated = generate_model(spec, footprint, tmp_path / "generated")
+    return spec, generated.step_path, generated
+
+
+def test_cross_check_models_accepts_hash_bound_libsource_import(tmp_path: Path) -> None:
+    spec, generated_path, generated = _generated_model(tmp_path)
+    imported_path = _import_step(generated_path, tmp_path / "library", "Manufacturer")
+
+    report = cross_check_models(generated, imported_path, spec)
+
+    assert report.passed
+    assert report.imported_provenance is not None
+    assert report.imported_provenance.source.origin == "manufacturer"
+
+
+def test_cross_check_models_rejects_terminal_center_disagreement(tmp_path: Path) -> None:
+    spec, generated_path, _generated = _generated_model(tmp_path)
+    shifted_path = tmp_path / "shifted.step"
+    shifted = occt.transform(
+        occt.read_step(generated_path),
+        translation=(0.1, 0.0, 0.0),
+    )
+    occt.write_step(shifted, shifted_path, product_name="Shifted")
+    imported_path = _import_step(shifted_path, tmp_path / "library", "Manufacturer")
+
+    report = cross_check_models(generated_path, imported_path, spec)
+
+    assert not report.passed
+    assert any(
+        finding.code == "model_source_disagreement" and "terminal center sets" in finding.message
+        for finding in report.findings
+    )
+
+
+def test_cross_check_models_rejects_pin1_quadrant_disagreement(tmp_path: Path) -> None:
+    spec, generated_path, generated = _generated_model(tmp_path)
+    mirrored_path = tmp_path / "mirrored.step"
+    mirrored = occt.transform(occt.read_step(generated_path), mirror_x=True)
+    occt.write_step(mirrored, mirrored_path, product_name="Mirrored")
+    imported_path = _import_step(mirrored_path, tmp_path / "library", "Manufacturer")
+
+    report = cross_check_models(generated, imported_path, spec)
+
+    assert not report.passed
+    assert any("pin-1 quadrants" in finding.message for finding in report.findings)
+
+
+def test_cross_check_models_rejects_body_extent_disagreement(tmp_path: Path) -> None:
+    spec, generated_path, generated = _generated_model(tmp_path)
+    scaled_path = tmp_path / "scaled.step"
+    scaled = occt.transform(occt.read_step(generated_path), scale=1.1)
+    occt.write_step(scaled, scaled_path, product_name="Scaled")
+    imported_path = _import_step(scaled_path, tmp_path / "library", "Manufacturer")
+
+    report = cross_check_models(generated, imported_path, spec)
+
+    assert not report.passed
+    assert any("body extents" in finding.message for finding in report.findings)
+
+
+def test_cross_check_models_requires_valid_import_provenance(tmp_path: Path) -> None:
+    spec, generated_path, generated = _generated_model(tmp_path)
+
+    report = cross_check_models(generated, generated_path, spec)
+
+    assert not report.passed
+    assert report.imported_provenance is None
+    assert any("hash-bound libsource provenance" in finding.message for finding in report.findings)
+
+
+def test_cross_check_models_rejects_tampered_import_provenance(tmp_path: Path) -> None:
+    spec, generated_path, generated = _generated_model(tmp_path)
+    library_dir = tmp_path / "library"
+    imported_path = _import_step(generated_path, library_dir, "Manufacturer")
+    provenance_path = library_dir / "provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["entries"][0]["sha256"] = "0" * 64
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+
+    report = cross_check_models(generated, imported_path, spec)
+
+    assert not report.passed
+    assert report.imported_provenance is None
