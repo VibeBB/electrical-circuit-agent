@@ -5,6 +5,8 @@ from typing import Any, cast
 
 import pytest
 
+from circuit import libverify as libverify_module
+from circuit.datasheet import DatasheetExtraction
 from circuit.landpattern import LandPatternResult, compute_land_pattern
 from circuit.libitems import FootprintDef, PadDef, parse_footprint
 from circuit.libsource import (
@@ -15,6 +17,7 @@ from circuit.libsource import (
 )
 from circuit.libverify import LibraryVerification, verify_library_part
 from circuit.partspec import (
+    CellRef,
     DatasheetRef,
     Dimension,
     ExposedPad,
@@ -25,6 +28,7 @@ from circuit.partspec import (
     PartSpec,
     PartSpecReport,
     PinSpec,
+    PinTable,
     Reading,
     part_spec_sha256,
 )
@@ -33,7 +37,43 @@ PadTransform = Callable[[LandPad], tuple[str, float, float, float, float, float]
 
 
 def _reading(text: str = "mechanical evidence") -> Reading:
-    return Reading(page=1, vision=text, vision_record="vision.json")
+    return Reading(page=1, bbox=(0, 0, 1, 1), vision=text, vision_record="vision.json")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_part_spec_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    extraction = DatasheetExtraction(
+        artifact_kind="circuit_datasheet_extraction",
+        pdf_path="part.pdf",
+        pdf_sha256="b" * 64,
+        page_count=0,
+        pages=[],
+        tools={},
+    )
+
+    def check(
+        _spec: PartSpec,
+        _extraction: DatasheetExtraction,
+        *,
+        spec_path: Path,
+        extraction_path: Path,
+    ) -> PartSpecReport:
+        return PartSpecReport(
+            artifact_kind="circuit_part_spec_check",
+            verdict="pass",
+            part_spec_sha256=part_spec_sha256(spec_path),
+            extraction_sha256="c" * 64,
+            pdf_sha256="b" * 64,
+            checked_readings=1,
+            findings=[],
+        )
+
+    monkeypatch.setattr(libverify_module, "check_part_spec", check)
+
+    def load(_path: Path) -> DatasheetExtraction:
+        return extraction
+
+    monkeypatch.setattr(libverify_module, "load_extraction", load)
 
 
 def _dimension(
@@ -77,7 +117,7 @@ def _pad_change(
 def _dual_spec() -> PartSpec:
     package = PackageSpec(
         family="gullwing_dual",
-        code="SOIC-4",
+        drawing_id="SOIC-4",
         pin_count=4,
         pitch=_dimension(1.27),
         body_length=_dimension(4.0),
@@ -113,10 +153,13 @@ def _dual_spec() -> PartSpec:
         orderable=[
             OrderableVariant(
                 mpn="TEST62130",
-                package_code="SOIC-4",
+                package_designator="SOIC-4",
+                pin_count=4,
+                row=CellRef(table=0, row=1, col=0),
                 reading=_reading("TEST62130 SOIC-4"),
             )
         ],
+        pin_table=PinTable(page=1, table=0, number_col=0, name_col=1),
     )
 
 
@@ -184,7 +227,7 @@ def _vqfn_spec(*, pitch: float = 0.5) -> PartSpec:
     )
     package = PackageSpec(
         family="no_lead_quad",
-        code="VQFN-16-1EP",
+        drawing_id="VQFN-16-1EP",
         pin_count=16,
         pitch=_dimension(pitch),
         body_length=_dimension(3.0, minimum=2.9, maximum=3.1),
@@ -229,10 +272,13 @@ def _vqfn_spec(*, pitch: float = 0.5) -> PartSpec:
         orderable=[
             OrderableVariant(
                 mpn="TESTVQFN16",
-                package_code="VQFN-16-1EP",
+                package_designator="VQFN-16-1EP",
+                pin_count=16,
+                row=CellRef(table=0, row=1, col=0),
                 reading=_reading("TESTVQFN16 VQFN-16-1EP"),
             )
         ],
+        pin_table=PinTable(page=1, table=0, number_col=0, name_col=1),
     )
 
 
@@ -358,7 +404,7 @@ def _write_case(
     symbol_path = symbol_dir / "Fixture.kicad_sym"
     footprint_dir = symbol_dir / "Fixture.pretty"
     footprint_dir.mkdir(parents=True, exist_ok=True)
-    footprint_path = footprint_dir / f"{spec.package.code}.kicad_mod"
+    footprint_path = footprint_dir / f"{spec.package.drawing_id}.kicad_mod"
     (tmp_path / "models").mkdir(exist_ok=True)
     (tmp_path / "models" / "fixture.step").write_text("ISO-10303-21;", encoding="utf-8")
     monkeypatch.setenv("TEST_3D_MODEL_DIR", str(tmp_path / "models"))
@@ -369,7 +415,7 @@ def _write_case(
     symbol_path.write_text(_symbol_text(spec, **symbol_args), encoding="utf-8")
     footprint_path.write_text(
         _footprint_text(
-            spec.package.code,
+            spec.package.drawing_id,
             reference,
             spec,
             pad_transform=pad_transform,
@@ -380,16 +426,6 @@ def _write_case(
     spec_path = tmp_path / "part-spec.json"
     spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     report_path = tmp_path / "part-spec-check.json"
-    check = PartSpecReport(
-        artifact_kind="circuit_part_spec_check",
-        verdict="pass",
-        part_spec_sha256=part_spec_sha256(spec_path),
-        extraction_sha256="c" * 64,
-        pdf_sha256=spec.datasheet.sha256,
-        checked_readings=1,
-        findings=[],
-    )
-    report_path.write_text(check.model_dump_json(), encoding="utf-8")
     return spec, reference, spec_path, report_path, symbol_path, footprint_path
 
 
@@ -427,11 +463,10 @@ def _verify(
         symbol_kwargs=symbol_kwargs,
         footprint_kwargs=footprint_kwargs,
     )
-    part_spec, reference, spec_path, check_path, symbol_path, footprint_path = case
+    part_spec, reference, spec_path, _check_path, symbol_path, footprint_path = case
     report = verify_library_part(
         part_spec,
         spec_path=spec_path,
-        spec_check_path=check_path,
         symbol_lib=symbol_path,
         symbol_name=part_spec.mpn,
         footprint_path=footprint_path,
@@ -460,32 +495,59 @@ def test_valid_library_part_passes_and_writes_default_report(
     assert (footprint_path.parent / "verification" / "SOIC-4.verification.json").is_file()
 
 
-def test_stale_part_spec_check_and_kicad_cli_failures_are_errors(
+def test_part_spec_must_pass_fresh_check(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    report, case = _verify(tmp_path, monkeypatch)
-    spec_path, check_path, symbol_path, footprint_path = case[2:]
-    check = PartSpecReport.model_validate_json(check_path.read_text(encoding="utf-8"))
-    check.part_spec_sha256 = "d" * 64
-    check_path.write_text(check.model_dump_json(), encoding="utf-8")
-    stale = verify_library_part(
+    _, case = _verify(tmp_path, monkeypatch)
+    spec_path, _, symbol_path, footprint_path = case[2:]
+    failed_check = PartSpecReport(
+        artifact_kind="circuit_part_spec_check",
+        verdict="fail",
+        part_spec_sha256=part_spec_sha256(spec_path),
+        extraction_sha256="c" * 64,
+        pdf_sha256="b" * 64,
+        checked_readings=1,
+        findings=[],
+    )
+
+    def fail_check(
+        _spec: PartSpec,
+        _extraction: DatasheetExtraction,
+        *,
+        spec_path: Path,
+        extraction_path: Path,
+    ) -> PartSpecReport:
+        return failed_check
+
+    monkeypatch.setattr(
+        libverify_module,
+        "check_part_spec",
+        fail_check,
+    )
+    report = verify_library_part(
         case[0],
         spec_path=spec_path,
-        spec_check_path=check_path,
         symbol_lib=symbol_path,
         symbol_name=case[0].mpn,
         footprint_path=footprint_path,
         library_dir=None,
         reference=case[1],
     )
-    assert "part_spec_unchecked" in _codes(stale)
+    assert "part_spec_unchecked" in _codes(report)
+
+
+def test_kicad_cli_failures_are_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report, case = _verify(tmp_path, monkeypatch)
+    spec_path, _, symbol_path, footprint_path = case[2:]
 
     _fake_cli(tmp_path, monkeypatch, exit_code=1)
     failed_cli = verify_library_part(
         case[0],
         spec_path=spec_path,
-        spec_check_path=check_path,
         symbol_lib=symbol_path,
         symbol_name=case[0].mpn,
         footprint_path=footprint_path,
@@ -498,7 +560,6 @@ def test_stale_part_spec_check_and_kicad_cli_failures_are_errors(
     missing_cli = verify_library_part(
         case[0],
         spec_path=spec_path,
-        spec_check_path=check_path,
         symbol_lib=symbol_path,
         symbol_name=case[0].mpn,
         footprint_path=footprint_path,
@@ -557,7 +618,7 @@ def test_symbol_footprint_property_must_match_library_nickname(
         library_dir=tmp_path / "library",
     )
     assert "symbol_property" in _codes(report)
-    assert case[0].package.code == "SOIC-4"
+    assert case[0].package.drawing_id == "SOIC-4"
 
 
 @pytest.mark.parametrize(
@@ -674,27 +735,14 @@ def test_through_hole_packages_require_through_hole_pads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, case = _verify(tmp_path, monkeypatch)
-    spec, reference, spec_path, check_path, symbol_path, footprint_path = case
+    spec, reference, spec_path, _check_path, symbol_path, footprint_path = case
     package = spec.package.model_copy(update={"family": "through_hole_inline"})
     through_hole_spec = spec.model_copy(update={"package": package})
     spec_path.write_text(through_hole_spec.model_dump_json(), encoding="utf-8")
-    check_path.write_text(
-        PartSpecReport(
-            artifact_kind="circuit_part_spec_check",
-            verdict="pass",
-            part_spec_sha256=part_spec_sha256(spec_path),
-            extraction_sha256="c" * 64,
-            pdf_sha256=spec.datasheet.sha256,
-            checked_readings=1,
-            findings=[],
-        ).model_dump_json(),
-        encoding="utf-8",
-    )
 
     report = verify_library_part(
         through_hole_spec,
         spec_path=spec_path,
-        spec_check_path=check_path,
         symbol_lib=symbol_path,
         symbol_name=spec.mpn,
         footprint_path=footprint_path,
@@ -728,33 +776,10 @@ def test_provenance_missing_sha_mismatch_and_restricted_redistribution(
     monkeypatch.setenv("TEST_3DMODEL_DIR", str(tmp_path / "models"))
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(spec.model_dump_json(), encoding="utf-8")
-    check_path = tmp_path / "check.json"
-    PartSpecReport(
-        artifact_kind="circuit_part_spec_check",
-        verdict="pass",
-        part_spec_sha256=part_spec_sha256(spec_path),
-        extraction_sha256="e" * 64,
-        pdf_sha256=spec.datasheet.sha256,
-        checked_readings=1,
-        findings=[],
-    ).model_dump_json()
-    check_path.write_text(
-        PartSpecReport(
-            artifact_kind="circuit_part_spec_check",
-            verdict="pass",
-            part_spec_sha256=part_spec_sha256(spec_path),
-            extraction_sha256="e" * 64,
-            pdf_sha256=spec.datasheet.sha256,
-            checked_readings=1,
-            findings=[],
-        ).model_dump_json(),
-        encoding="utf-8",
-    )
     reference_result = compute_land_pattern(spec)
     no_provenance = verify_library_part(
         spec,
         spec_path=spec_path,
-        spec_check_path=check_path,
         symbol_lib=symbol_path,
         symbol_name=spec.mpn,
         footprint_path=footprint_path,
@@ -801,7 +826,6 @@ def test_provenance_missing_sha_mismatch_and_restricted_redistribution(
     verified = verify_library_part(
         spec,
         spec_path=spec_path,
-        spec_check_path=check_path,
         symbol_lib=symbol_path,
         symbol_name=spec.mpn,
         footprint_path=footprint_path,
@@ -822,7 +846,7 @@ def _vqfn_case(
     spec = _vqfn_spec(pitch=pitch)
     reference = compute_land_pattern(spec)
     case = _write_case(tmp_path, monkeypatch, spec=spec)
-    part_spec, _, spec_path, check_path, symbol_path, footprint_path = case
+    part_spec, _, spec_path, _check_path, symbol_path, footprint_path = case
     footprint = parse_footprint(footprint_path)
     pads: list[PadDef] = list(footprint.pads)
     if mutation == "mirrored":
@@ -853,7 +877,6 @@ def _vqfn_case(
     report = verify_library_part(
         part_spec,
         spec_path=spec_path,
-        spec_check_path=check_path,
         symbol_lib=symbol_path,
         symbol_name=part_spec.mpn,
         footprint_path=footprint_path,

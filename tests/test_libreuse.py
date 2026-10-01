@@ -6,18 +6,20 @@ from circuit.landpattern import LandPatternResult, compute_land_pattern
 from circuit.libraries import LibraryRoots
 from circuit.libreuse import find_candidates
 from circuit.partspec import (
+    CellRef,
     DatasheetRef,
     Dimension,
     OrderableVariant,
     PackageSpec,
     PartSpec,
     PinSpec,
+    PinTable,
     Reading,
 )
 
 
 def _reading(text: str = "drawing") -> Reading:
-    return Reading(page=1, vision=text, vision_record="vision.json")
+    return Reading(page=1, bbox=(0, 0, 1, 1), vision=text, vision_record="vision.json")
 
 
 def _dimension(value: float) -> Dimension:
@@ -27,7 +29,7 @@ def _dimension(value: float) -> Dimension:
 def _spec() -> PartSpec:
     package = PackageSpec(
         family="gullwing_dual",
-        code="SOIC-4",
+        drawing_id="SOIC-4",
         pin_count=4,
         pitch=_dimension(1.27),
         body_length=_dimension(4.9),
@@ -64,10 +66,13 @@ def _spec() -> PartSpec:
         orderable=[
             OrderableVariant(
                 mpn="TPS62130RGTR",
-                package_code="SOIC-4",
+                package_designator="SOIC-4",
+                pin_count=4,
+                row=CellRef(table=0, row=1, col=0),
                 reading=_reading("TPS62130RGTR SOIC-4"),
             )
         ],
+        pin_table=PinTable(page=1, table=0, number_col=0, name_col=1),
     )
 
 
@@ -75,7 +80,7 @@ def _chip_spec() -> PartSpec:
     reading = _reading()
     package = PackageSpec(
         family="chip",
-        code="1608",
+        drawing_id="1608",
         pin_count=2,
         body_length=_dimension(1.6),
         body_width=_dimension(0.8),
@@ -108,10 +113,13 @@ def _chip_spec() -> PartSpec:
         orderable=[
             OrderableVariant(
                 mpn="EXAMPLE1608",
-                package_code="1608",
+                package_designator="1608",
+                pin_count=2,
+                row=CellRef(table=0, row=1, col=0),
                 reading=reading,
             )
         ],
+        pin_table=PinTable(page=1, table=0, number_col=0, name_col=1),
     )
 
 

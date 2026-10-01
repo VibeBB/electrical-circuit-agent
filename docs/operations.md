@@ -30,8 +30,21 @@ python3 -m circuit.doctor
 
 `pdfplumber==0.11.10` supplies the datasheet lane's word geometry, table
 extraction, and vector-object counts. Poppler remains an independent text lane
-for deterministic comparison, and Tesseract is used only for pages without a
-text layer.
+for deterministic comparison. `pillow==12.3.0` is pinned for checking that
+mechanically supporting words have visible ink in the fresh page render;
+transitively available Pillow was made explicit because visibility is part of
+the PartSpec acceptance boundary. Tesseract remains available for extraction,
+but OCR-only text cannot mechanically satisfy PartSpec checks.
+
+PartSpec verification re-derives cited pages from PDF bytes for every check.
+Stored extraction JSON is limited to artifact-integrity and vision-evidence
+checks; mechanical readings require matching Poppler and pdfplumber support in
+a tight bbox or bound table cell and visible pixels in the re-derived PNG.
+Dimension and pin-table values bind to individual cells, orderable rows bind
+exact MPN/package-designator/pin-count triples, and package drawing pages bind
+to a drawing ID and optional revision. Project-library verification is
+recomputed from recorded inputs by the project gate; a stored passing verdict
+is not authoritative. See [ADR-0025](adr/ADR-0025-part-library-evidence-authority.md).
 
 ## Command line
 

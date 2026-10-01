@@ -17,7 +17,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from . import kicad_cli
-from .landpattern import LandPatternResult, Rect, lead_rects
+from .datasheet import load_extraction
+from .landpattern import Density, LandPatternResult, Rect, lead_rects
 from .libitems import (
     FootprintDef,
     GraphicDef,
@@ -32,7 +33,13 @@ from .libsource import (
     assert_safe_destination,
     load_library_provenance,
 )
-from .partspec import Dimension, LandPad, PartSpec, PartSpecReport, part_spec_sha256
+from .partspec import (
+    Dimension,
+    LandPad,
+    PartSpec,
+    check_part_spec,
+    part_spec_sha256,
+)
 
 
 class VerifyFinding(BaseModel):
@@ -68,12 +75,25 @@ class VerifiedModel(BaseModel):
     sha256: str | None
 
 
+class VerificationInputs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    part_spec_path: Path
+    symbol_lib: Path
+    symbol_name: str
+    footprint_path: Path
+    density: Density
+    tolerance_mm: float
+    model_required: bool
+
+
 class LibraryVerification(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     artifact_kind: Literal["circuit_library_verification"]
     verdict: Literal["pass", "fail"]
     part_spec_sha256: str
+    inputs: VerificationInputs
     symbol: VerifiedSymbol
     footprint: VerifiedFootprint
     models: list[VerifiedModel]
@@ -1038,7 +1058,6 @@ def verify_library_part(
     spec: PartSpec,
     *,
     spec_path: Path,
-    spec_check_path: Path,
     symbol_lib: Path,
     symbol_name: str,
     footprint_path: Path,
@@ -1055,13 +1074,22 @@ def verify_library_part(
     findings: list[VerifyFinding] = []
     spec_hash = part_spec_sha256(spec_path) if spec_path.is_file() else ""
     try:
-        check = PartSpecReport.model_validate_json(spec_check_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        check = None
+        extraction_path = Path(spec.datasheet.extraction_path)
+        if not extraction_path.is_absolute():
+            extraction_path = spec_path.resolve().parent / extraction_path
+        extraction = load_extraction(extraction_path)
+        check = check_part_spec(
+            spec,
+            extraction,
+            spec_path=spec_path,
+            extraction_path=extraction_path,
+        )
+        check_ok = check.verdict == "pass" and check.part_spec_sha256 == spec_hash
+        check_detail = "" if check_ok else "fresh PartSpec check failed or is stale"
+    except Exception as exc:
+        check_ok = False
         check_detail = str(exc)
-    else:
-        check_detail = ""
-    if check is None or check.verdict != "pass" or check.part_spec_sha256 != spec_hash:
+    if not check_ok:
         _finding(
             findings,
             "part_spec_unchecked",
@@ -1191,6 +1219,30 @@ def verify_library_part(
         artifact_kind="circuit_library_verification",
         verdict="fail" if any(finding.severity == "error" for finding in findings) else "pass",
         part_spec_sha256=spec_hash,
+        inputs=VerificationInputs(
+            part_spec_path=Path(
+                os.path.relpath(
+                    spec_path.resolve(),
+                    (library_dir or footprint_path.parent.parent).resolve(),
+                )
+            ),
+            symbol_lib=Path(
+                os.path.relpath(
+                    symbol_lib.resolve(),
+                    (library_dir or footprint_path.parent.parent).resolve(),
+                )
+            ),
+            symbol_name=symbol_name,
+            footprint_path=Path(
+                os.path.relpath(
+                    footprint_path.resolve(),
+                    (library_dir or footprint_path.parent.parent).resolve(),
+                )
+            ),
+            density=reference.density,
+            tolerance_mm=tolerance_mm,
+            model_required=model_required,
+        ),
         symbol=VerifiedSymbol(
             lib_path=symbol_lib,
             name=symbol_name,

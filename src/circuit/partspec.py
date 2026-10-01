@@ -7,21 +7,41 @@ import json
 import math
 import os
 import re
+import tempfile
 from collections import Counter
+from collections.abc import Sequence
+from contextlib import ExitStack
+from contextvars import ContextVar, Token
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import advisory, intake
-from .datasheet import DatasheetExtraction, PageExtraction, PdfWord, page_tables, page_words
+from . import advisory, datasheet
+from .datasheet import (
+    DatasheetError,
+    DatasheetExtraction,
+    PageExtraction,
+    PdfWord,
+)
 
 _NUMBER = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)")
 _SYMBOL_PREFIX = re.compile(r"^([□⌀ØR])\s*")
 _TOKEN_SPLIT = re.compile(r"[\s,]+")
 _PIN1_CORNER = re.compile(r"\b(?P<corner>(?:top|bottom)[\s_-]+(?:left|right))\b", re.IGNORECASE)
+_DRAWING_PHRASES = (
+    "PACKAGE OUTLINE",
+    "PACKAGE DRAWING",
+    "MECHANICAL DATA",
+    "LAND PATTERN",
+    "BOARD LAYOUT",
+    "SOLDER MASK",
+    "STENCIL",
+)
 PinCorner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
+DimensionKind = Literal["limit", "bilateral", "basic", "reference", "typical"]
+CellKey = Literal["min", "nom", "max"]
 _MIRRORED_CORNERS: dict[PinCorner, PinCorner] = {
     "top_left": "top_right",
     "top_right": "top_left",
@@ -30,20 +50,30 @@ _MIRRORED_CORNERS: dict[PinCorner, PinCorner] = {
 }
 
 
+class CellRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    table: int = Field(ge=0)
+    row: int = Field(ge=0)
+    col: int = Field(ge=0)
+
+
 class Reading(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     page: int = Field(ge=1)
     bbox: tuple[float, float, float, float] | None = None
+    cells: dict[CellKey, CellRef] | None = None
     mechanical: str | None = None
     vision: str = Field(min_length=1)
     vision_record: str = Field(min_length=1)
-    user_confirmed: str | None = Field(default=None, pattern=r"^R[0-9]+$")
 
 
 class Dimension(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    label: str | None = None
+    kind: DimensionKind = "limit"
     min: float | None = None
     nom: float | None = None
     max: float | None = None
@@ -54,6 +84,8 @@ class Dimension(BaseModel):
     def validate_values(self) -> Dimension:
         if self.min is None and self.nom is None and self.max is None:
             raise ValueError("at least one of min, nom, or max is required")
+        if self.reading.bbox is None:
+            raise ValueError("dimension reading requires a bounding box")
         values = [value for value in (self.min, self.nom, self.max) if value is not None]
         if values != sorted(values):
             raise ValueError("dimension values must satisfy min <= nom <= max")
@@ -88,7 +120,8 @@ class PackageSpec(BaseModel):
         "through_hole_inline",
         "custom",
     ]
-    code: str
+    drawing_id: str
+    drawing_revision: str | None = None
     pin_count: int = Field(gt=0)
     pitch: Dimension | None = None
     body_length: Dimension
@@ -106,11 +139,15 @@ class PackageSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_pins_per_side_family(self) -> PackageSpec:
+        if self.pin1_reading.bbox is None:
+            raise ValueError("pin-1 reading requires a bounding box")
         if self.pins_per_side is not None and self.family not in (
             "no_lead_quad",
             "gullwing_quad",
         ):
             raise ValueError("pins_per_side is only valid for quad package families")
+        if self.pins_per_side is not None and any(count <= 0 for count in self.pins_per_side):
+            raise ValueError("pins_per_side counts must be positive")
         return self
 
 
@@ -168,8 +205,21 @@ class OrderableVariant(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mpn: str
-    package_code: str
+    package_designator: str
+    pin_count: int = Field(gt=0)
+    row: CellRef
     reading: Reading
+
+
+class PinTable(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    page: int = Field(ge=1)
+    table: int = Field(ge=0)
+    number_col: int = Field(ge=0)
+    name_col: int = Field(ge=0)
+    header_rows: int = Field(default=1, ge=0)
+    column_designator: str | None = None
 
 
 class DatasheetRef(BaseModel):
@@ -188,10 +238,10 @@ class PartSpec(BaseModel):
     mpn: str
     manufacturer: str
     datasheet: DatasheetRef
-    intake_path: str | None = None
     package: PackageSpec
     land_pattern: LandPattern | None = None
     pins: list[PinSpec] = Field(min_length=1)
+    pin_table: PinTable
     orderable: list[OrderableVariant] = Field(min_length=1)
 
 
@@ -202,6 +252,7 @@ class ParsedDimension(BaseModel):
     nom: float | None = None
     max: float | None = None
     reference: bool = False
+    kind: DimensionKind
     count: int | None = None
     symbols: list[str]
     numbers: list[str]
@@ -261,6 +312,12 @@ def parse_dimension_text(text: str) -> ParsedDimension:
         symbols.append(symbol_match.group(1))
         remaining = remaining[symbol_match.end() :].strip()
 
+    kind: DimensionKind = "limit"
+    suffix = re.search(r"\s+(BSC|TYP)\s*$", remaining, re.IGNORECASE)
+    if suffix is not None:
+        kind = "basic" if suffix.group(1).upper() == "BSC" else "typical"
+        remaining = remaining[: suffix.start()].strip()
+
     value_min: float | None = None
     value_nom: float | None = None
     value_max: float | None = None
@@ -269,11 +326,13 @@ def parse_dimension_text(text: str) -> ParsedDimension:
     if match := re.fullmatch(rf"\(\s*({literal})\s*\)", remaining):
         value_nom = float(match.group(1))
         reference = True
+        kind = "reference"
     elif match := re.fullmatch(rf"({literal})\s*±\s*({literal})", remaining):
         value_nom = float(match.group(1))
         tolerance = float(match.group(2))
         value_min = round(value_nom - tolerance, 6)
         value_max = round(value_nom + tolerance, 6)
+        kind = "bilateral"
     elif match := re.fullmatch(rf"({literal})\s+(MAX|MIN)", remaining, re.IGNORECASE):
         bound = float(match.group(1))
         if match.group(2).upper() == "MAX":
@@ -298,6 +357,7 @@ def parse_dimension_text(text: str) -> ParsedDimension:
         nom=value_nom,
         max=value_max,
         reference=reference,
+        kind=kind,
         count=count,
         symbols=symbols,
         numbers=numbers,
@@ -364,18 +424,23 @@ def _resolved(base: Path, value: str) -> Path:
     return path if path.is_absolute() else base / path
 
 
-def _user_requirements(spec: PartSpec, spec_dir: Path) -> set[str]:
-    if spec.intake_path is None or not any(
-        reading.user_confirmed is not None for _, reading, _ in _all_readings(spec)
-    ):
-        return set()
-    try:
-        intake_record = intake.load_intake(_resolved(spec_dir, spec.intake_path))
-    except (OSError, ValueError):
-        return set()
-    return {
-        requirement.id for requirement in intake_record.requirements if requirement.source == "user"
-    }
+_RE_DERIVATION_STACK: ContextVar[ExitStack | None] = ContextVar(
+    "partspec_rederivation_stack",
+    default=None,
+)
+
+
+def rederive_pages(
+    pdf_path: Path, pages: Sequence[int], dpi: int
+) -> tuple[DatasheetExtraction, Path]:
+    stack = _RE_DERIVATION_STACK.get()
+    if stack is None:
+        raise DatasheetError("rederive_pages must run within a PartSpec check")
+    output_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="circuit-partspec-")))
+    return (
+        datasheet.extract_datasheet(pdf_path, output_dir, pages=pages, dpi=dpi),
+        output_dir,
+    )
 
 
 def _read_page_words(path: Path) -> bool:
@@ -545,27 +610,123 @@ def _read_vision(
 
 def _inside_bbox(word_x: float, word_y: float, bbox: tuple[float, float, float, float]) -> bool:
     x0, top, x1, bottom = bbox
-    return x0 - 2 <= word_x <= x1 + 2 and top - 2 <= word_y <= bottom + 2
+    return x0 <= word_x <= x1 and top <= word_y <= bottom
 
 
-def _mechanical_words(
+def _lane_words(
     extraction: DatasheetExtraction,
     extraction_dir: Path,
     page_number: int,
+    lane_name: Literal["poppler", "pdfplumber"],
+) -> list[PdfWord]:
+    page = next((item for item in extraction.pages if item.page == page_number), None)
+    lane = (
+        None
+        if page is None
+        else next((item for item in page.lanes if item.lane == lane_name), None)
+    )
+    if lane is None or lane.status != "ok" or lane.words_path is None:
+        return []
+    try:
+        value: object = json.loads(
+            _resolved(extraction_dir, lane.words_path).read_text(encoding="utf-8")
+        )
+        if not isinstance(value, list):
+            return []
+        return [PdfWord.model_validate(item) for item in cast(list[object], value)]
+    except (OSError, json.JSONDecodeError, ValueError):
+        return []
+
+
+def _visible_words(
+    words: list[PdfWord],
+    page: PageExtraction,
+    extraction_dir: Path,
+) -> tuple[list[PdfWord], list[PdfWord]]:
+    image_path = _resolved(extraction_dir, page.png_path)
+    return datasheet.words_by_ink(
+        image_path,
+        words,
+        dpi=page.dpi,
+        width_pt=page.width_pt,
+        height_pt=page.height_pt,
+    )
+
+
+def _words_in_bbox(
+    words: list[PdfWord], bbox: tuple[float, float, float, float] | None
+) -> list[PdfWord]:
+    if bbox is None:
+        return []
+    return [
+        word
+        for word in words
+        if _inside_bbox((word.x0 + word.x1) / 2, (word.top + word.bottom) / 2, bbox)
+    ]
+
+
+def _numbers_in_bbox(
+    words: list[PdfWord],
+    bbox: tuple[float, float, float, float] | None,
+    count: int | None,
+) -> Counter[str]:
+    selected = _words_in_bbox(words, bbox)
+    selected.sort(key=lambda word: (word.x0, word.top))
+    numbers = [number for word in selected for number in _numeric_tokens(word.text)]
+    count_token = _decimal_string(str(count)) if count is not None else None
+    if count_token is not None and numbers and numbers[0] == count_token:
+        numbers.pop(0)
+    return Counter(numbers)
+
+
+def _bbox_findings(
     reading: Reading,
-) -> list[str]:
-    words = page_words(extraction, extraction_dir, page_number)
-    if reading.bbox is not None:
-        words = [
-            word
-            for word in words
-            if _inside_bbox(
-                (word.x0 + word.x1) / 2,
-                (word.top + word.bottom) / 2,
-                reading.bbox,
+    page: PageExtraction | None,
+    field: str,
+    findings: list[SpecFinding],
+) -> None:
+    if reading.bbox is None:
+        findings.append(
+            SpecFinding(
+                code="bbox_missing",
+                severity="error",
+                field=field,
+                message="reading requires a bounded evidence region",
+                page=reading.page,
             )
-        ]
-    return [word.text for word in words]
+        )
+        return
+    if page is None:
+        return
+    x0, top, x1, bottom = reading.bbox
+    if (
+        x0 < 0
+        or top < 0
+        or x1 > page.width_pt
+        or bottom > page.height_pt
+        or x1 <= x0
+        or bottom <= top
+    ):
+        findings.append(
+            SpecFinding(
+                code="bbox_outside_page",
+                severity="error",
+                field=field,
+                message="reading bounding box must be a non-empty region inside the page",
+                page=reading.page,
+            )
+        )
+        return
+    if (x1 - x0) * (bottom - top) > page.width_pt * page.height_pt * 0.02:
+        findings.append(
+            SpecFinding(
+                code="bbox_too_large",
+                severity="error",
+                field=field,
+                message="reading bounding box occupies more than two percent of the page",
+                page=reading.page,
+            )
+        )
 
 
 def _tokens(text: str) -> list[str]:
@@ -586,24 +747,15 @@ def _dimension_checks(
     spec_dimension: Dimension,
     reading: Reading,
     field: str,
-    page: PageExtraction | None,
+    stored_page: PageExtraction | None,
+    mechanical_page: PageExtraction | None,
     spec_dir: Path,
     extraction: DatasheetExtraction,
     extraction_dir: Path,
-    confirmation_verified: bool,
     findings: list[SpecFinding],
 ) -> None:
-    _read_vision(reading, spec_dir, page, field, findings)
-    if page is not None and page.drawing_page and reading.bbox is None:
-        findings.append(
-            SpecFinding(
-                code="bbox_missing",
-                severity="warning",
-                field=field,
-                message="dimension reading on a drawing page has no bounded region",
-                page=reading.page,
-            )
-        )
+    _read_vision(reading, spec_dir, stored_page, field, findings)
+    _bbox_findings(reading, mechanical_page, field, findings)
     try:
         parsed = parse_dimension_text(reading.vision)
     except ValueError as exc:
@@ -628,42 +780,192 @@ def _dimension_checks(
                     page=reading.page,
                 )
             )
-    words = _mechanical_words(extraction, extraction_dir, reading.page, reading)
-    mechanical_numbers = [number for word in words for number in _numeric_tokens(word)]
-    vision_numbers = parsed.numbers.copy()
-    if parsed.count is not None and vision_numbers:
-        vision_numbers.pop(0)
-    if any(number not in mechanical_numbers for number in vision_numbers):
+    if spec_dimension.kind != parsed.kind:
         findings.append(
             SpecFinding(
-                code=(
-                    "mechanical_unconfirmed_user_confirmed"
-                    if confirmation_verified
-                    else "mechanical_mismatch"
-                ),
-                severity="warning" if confirmation_verified else "error",
+                code="kind_mismatch",
+                severity="error",
                 field=field,
-                message="mechanical lane does not support every vision number",
+                message=f"spec kind {spec_dimension.kind} differs from parsed {parsed.kind}",
                 page=reading.page,
             )
         )
-    if reading.mechanical is not None and Counter(_numeric_tokens(reading.mechanical)) != Counter(
-        parsed.numbers
+
+    if mechanical_page is None:
+        return
+    lane_words = {
+        lane: _lane_words(extraction, extraction_dir, reading.page, lane)
+        for lane in ("poppler", "pdfplumber")
+    }
+    visible_by_lane: dict[str, list[PdfWord]] = {}
+    invisible_by_lane: dict[str, list[PdfWord]] = {}
+    for lane, words in lane_words.items():
+        visible, invisible = _visible_words(words, mechanical_page, extraction_dir)
+        visible_by_lane[lane] = _words_in_bbox(visible, reading.bbox)
+        invisible_by_lane[lane] = _words_in_bbox(invisible, reading.bbox)
+
+    expected_numbers = parsed.numbers.copy()
+    if parsed.count is not None and expected_numbers:
+        expected_numbers.pop(0)
+    expected = Counter(expected_numbers)
+    raw_matches = {
+        lane: _numbers_in_bbox(words, reading.bbox, parsed.count) == expected
+        for lane, words in lane_words.items()
+    }
+    visible_matches = {
+        lane: _numbers_in_bbox(visible_by_lane[lane], reading.bbox, parsed.count) == expected
+        for lane in ("poppler", "pdfplumber")
+    }
+    visible_counters = {
+        lane: _numbers_in_bbox(visible_by_lane[lane], reading.bbox, parsed.count)
+        for lane in ("poppler", "pdfplumber")
+    }
+    lane_only_support = any(
+        (visible_counters["poppler"][number] > 0) != (visible_counters["pdfplumber"][number] > 0)
+        for number in expected
+    )
+    if not mechanical_page.text_layer or lane_only_support or sum(visible_matches.values()) == 1:
+        findings.append(
+            SpecFinding(
+                code="mechanical_single_lane",
+                severity="error",
+                field=field,
+                message="mechanical support must agree in Poppler and pdfplumber lanes",
+                page=reading.page,
+            )
+        )
+    elif not all(visible_matches.values()):
+        if any(
+            raw_matches[lane] and not visible_matches[lane] for lane in ("poppler", "pdfplumber")
+        ):
+            findings.append(
+                SpecFinding(
+                    code="invisible_text",
+                    severity="error",
+                    field=field,
+                    message="mechanical numeric support is present only in invisible text",
+                    page=reading.page,
+                )
+            )
+        else:
+            findings.append(
+                SpecFinding(
+                    code="mechanical_mismatch",
+                    severity="error",
+                    field=field,
+                    message=(
+                        "visible numeric tokens in each lane must exactly match the vision reading"
+                    ),
+                    page=reading.page,
+                )
+            )
+
+    stacked_order_wrong = False
+    for lane in ("poppler", "pdfplumber"):
+        numeric_words = [
+            (word, _numeric_tokens(word.text))
+            for word in visible_by_lane[lane]
+            if _numeric_tokens(word.text)
+        ]
+        numeric_words.sort(key=lambda item: (item[0].x0, item[0].top))
+        if parsed.count is not None:
+            count_token = _decimal_string(str(parsed.count))
+            for index, (word, numbers) in enumerate(numeric_words):
+                if numbers and numbers[0] == count_token:
+                    remaining_numbers = numbers[1:]
+                    if remaining_numbers:
+                        numeric_words[index] = (word, remaining_numbers)
+                    else:
+                        numeric_words.pop(index)
+                    break
+        if len(numeric_words) != 2:
+            continue
+        first, second = numeric_words[0][0], numeric_words[1][0]
+        narrower_width = min(first.x1 - first.x0, second.x1 - second.x0)
+        overlap = min(first.x1, second.x1) - max(first.x0, second.x0)
+        vertical_gap = max(0.0, max(first.top, second.top) - min(first.bottom, second.bottom))
+        taller_height = max(first.bottom - first.top, second.bottom - second.top)
+        if (
+            narrower_width <= 0
+            or overlap / narrower_width < 0.5
+            or vertical_gap > 1.5 * taller_height
+        ):
+            continue
+        ordered_words = sorted(numeric_words, key=lambda item: item[0].top)
+        upper_numbers = ordered_words[0][1]
+        lower_numbers = ordered_words[1][1]
+        expected_max = spec_dimension.max if spec_dimension.max is not None else spec_dimension.nom
+        expected_min = spec_dimension.min if spec_dimension.min is not None else spec_dimension.nom
+        stacked_order_wrong |= (
+            len(upper_numbers) != 1
+            or len(lower_numbers) != 1
+            or not _number_close(float(upper_numbers[0]), expected_max)
+            or not _number_close(float(lower_numbers[0]), expected_min)
+        )
+    if stacked_order_wrong:
+        findings.append(
+            SpecFinding(
+                code="stacked_limit_order",
+                severity="error",
+                field=field,
+                message="stacked drawing limits must place maximum above minimum",
+                page=reading.page,
+            )
+        )
+
+    glyphs = parsed.symbols
+    tolerance_symbol_missing = "±" in reading.vision and not any(
+        "±" in word.text for words in lane_words.values() for word in words
+    )
+    tolerance_pair_visible = False
+    if tolerance_symbol_missing:
+        base = parsed.numbers[0] if parsed.numbers else None
+        tolerance = parsed.numbers[1] if len(parsed.numbers) > 1 else None
+        if parsed.count is not None and base is not None:
+            base = parsed.numbers[1] if len(parsed.numbers) > 1 else None
+            tolerance = parsed.numbers[2] if len(parsed.numbers) > 2 else None
+        baseline_pair = (
+            base is not None
+            and tolerance is not None
+            and all(
+                any(
+                    _numeric_tokens(left.text) == [base]
+                    and _numeric_tokens(right.text) == [tolerance]
+                    and left.x0 < right.x0
+                    and abs((left.top + left.bottom) / 2 - (right.top + right.bottom) / 2)
+                    <= 0.5 * max(left.bottom - left.top, right.bottom - right.top)
+                    for left in visible_by_lane[lane]
+                    for right in visible_by_lane[lane]
+                )
+                for lane in ("poppler", "pdfplumber")
+            )
+        )
+        tolerance_pair_visible = baseline_pair
+        findings.append(
+            SpecFinding(
+                code="glyph_loss" if baseline_pair else "glyph_loss_ambiguous",
+                severity="warning" if baseline_pair else "error",
+                field=field,
+                message=(
+                    "vision tolerance symbol is absent from mechanical words"
+                    if baseline_pair
+                    else "lost tolerance symbol has no unambiguous base/tolerance word pair"
+                ),
+                page=reading.page,
+            )
+        )
+    if (
+        glyphs
+        and not all(
+            all(any(symbol in word.text for word in visible_by_lane[lane]) for symbol in glyphs)
+            for lane in ("poppler", "pdfplumber")
+        )
+        and not (tolerance_symbol_missing and tolerance_pair_visible)
     ):
         findings.append(
             SpecFinding(
-                code="lane_disagreement",
-                severity="error",
-                field=field,
-                message="mechanical and vision readings contain different numbers",
-                page=reading.page,
-            )
-        )
-    if parsed.symbols and not any(symbol in word for symbol in parsed.symbols for word in words):
-        findings.append(
-            SpecFinding(
                 code="glyph_loss",
-                severity="info",
+                severity="warning",
                 field=field,
                 message="vision symbols are not present in mechanical words",
                 page=reading.page,
@@ -673,20 +975,35 @@ def _dimension_checks(
 
 def _pin_checks(
     spec: PartSpec,
-    extraction: DatasheetExtraction,
-    extraction_dir: Path,
     spec_dir: Path,
     pin: PinSpec,
     index: int,
-    page: PageExtraction | None,
-    confirmation_verified: bool,
+    stored_page: PageExtraction | None,
     findings: list[SpecFinding],
 ) -> None:
     field = f"pins[{index}]"
     reading = pin.reading
-    _read_vision(reading, spec_dir, page, field, findings)
+    _read_vision(reading, spec_dir, stored_page, field, findings)
+    if reading.page != spec.pin_table.page:
+        findings.append(
+            SpecFinding(
+                code="pin_reading_page_mismatch",
+                severity="error",
+                field=field,
+                message="pin reading page must match the bound pin table page",
+                page=reading.page,
+            )
+        )
     vision_tokens = set(_tokens(reading.vision))
-    if pin.number not in vision_tokens or pin.name not in vision_tokens:
+    normalized_vision = _normalise_text(reading.vision).casefold()
+    normalized_name = _normalise_text(pin.name).casefold()
+    name_present = (
+        re.search(rf"(?<!\w){re.escape(normalized_name)}(?!\w)", normalized_vision) is not None
+    )
+    is_exposed_pad_pin = (
+        spec.package.exposed_pad is not None and pin.number == spec.package.exposed_pad.number
+    )
+    if (pin.number not in vision_tokens and not is_exposed_pad_pin) or not name_present:
         findings.append(
             SpecFinding(
                 code="vision_unparseable",
@@ -696,77 +1013,650 @@ def _pin_checks(
                 page=reading.page,
             )
         )
-    words = _mechanical_words(extraction, extraction_dir, reading.page, reading)
-    mechanical_tokens = {token for word in words for token in _tokens(word)}
-    if pin.number not in mechanical_tokens or pin.name not in mechanical_tokens:
+
+
+def _table_record(
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    page_number: int,
+    table_index: int,
+) -> dict[str, object] | None:
+    page = next((item for item in extraction.pages if item.page == page_number), None)
+    if page is None or page.tables_path is None:
+        return None
+    try:
+        value: object = json.loads(
+            _resolved(extraction_dir, page.tables_path).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    tables = cast(dict[str, object], value).get("tables")
+    if not isinstance(tables, list):
+        return None
+    table_values = cast(list[object], tables)
+    if not 0 <= table_index < len(table_values):
+        return None
+    table = table_values[table_index]
+    if not isinstance(table, dict):
+        return None
+    table_record = cast(dict[str, object], table)
+    rows = table_record.get("rows")
+    cells = table_record.get("cells")
+    bbox = table_record.get("bbox")
+    if not isinstance(rows, list) or _numeric_bbox(bbox) is None:
+        return None
+    if not isinstance(cells, list):
+        return None
+    return table_record
+
+
+def _numeric_bbox(value: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, list):
+        return None
+    coordinates: list[float] = []
+    for item in cast(list[object], value):
+        if not isinstance(item, (int, float)):
+            return None
+        coordinates.append(float(item))
+    if len(coordinates) != 4:
+        return None
+    return coordinates[0], coordinates[1], coordinates[2], coordinates[3]
+
+
+def _table_rows(table: dict[str, object]) -> list[list[str | None]] | None:
+    value = table.get("rows")
+    if not isinstance(value, list):
+        return None
+    rows: list[list[str | None]] = []
+    for row in cast(list[object], value):
+        if not isinstance(row, list):
+            return None
+        cells: list[str | None] = []
+        for cell in cast(list[object], row):
+            cells.append(cell if isinstance(cell, str) else None)
+        rows.append(cells)
+    return rows
+
+
+def _table_cell_bbox(
+    table: dict[str, object], row_index: int, col_index: int
+) -> tuple[float, float, float, float] | None:
+    value = table.get("cells")
+    if not isinstance(value, list):
+        return None
+    table_cells = cast(list[object], value)
+    if not 0 <= row_index < len(table_cells):
+        return None
+    row = table_cells[row_index]
+    if not isinstance(row, list):
+        return None
+    row_cells = cast(list[object], row)
+    if not 0 <= col_index < len(row_cells):
+        return None
+    return _numeric_bbox(row_cells[col_index])
+
+
+def _table_cell_text(rows: list[list[str | None]], row: int, col: int) -> str | None:
+    if not 0 <= row < len(rows) or not 0 <= col < len(rows[row]):
+        return None
+    return rows[row][col]
+
+
+def _poppler_cell_text(
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    page: PageExtraction,
+    cell_bbox: tuple[float, float, float, float] | None,
+) -> str | None:
+    if cell_bbox is None:
+        return None
+    words = _lane_words(extraction, extraction_dir, page.page, "poppler")
+    visible, _ = _visible_words(words, page, extraction_dir)
+    selected = _words_in_bbox(visible, cell_bbox)
+    selected.sort(key=lambda word: ((word.top + word.bottom) / 2, word.x0))
+    return " ".join(word.text for word in selected)
+
+
+def _cell_lane_texts(
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    page: PageExtraction,
+    table: dict[str, object],
+    rows: list[list[str | None]],
+    row_index: int,
+    col_index: int,
+    *,
+    field: str,
+    findings: list[SpecFinding],
+    missing_code: str = "table_lane_disagreement",
+) -> tuple[str | None, str | None]:
+    plumber_text = _table_cell_text(rows, row_index, col_index)
+    cell_bbox = _table_cell_bbox(table, row_index, col_index)
+    poppler_text = _poppler_cell_text(extraction, extraction_dir, page, cell_bbox)
+    if plumber_text is None or poppler_text is None:
         findings.append(
             SpecFinding(
-                code=(
-                    "mechanical_unconfirmed_user_confirmed"
-                    if confirmation_verified
-                    else "mechanical_mismatch"
-                ),
-                severity="warning" if confirmation_verified else "error",
+                code=missing_code,
+                severity="error",
                 field=field,
-                message="mechanical lane does not support the pin number and name",
-                page=reading.page,
+                message="table cell text or its visible Poppler cell region is unavailable",
+                page=page.page,
             )
         )
-    rows = page_tables(extraction, extraction_dir, reading.page)
-    if rows and not any(
-        any(pin.number in _tokens(cell or "") for cell in row)
-        and any((cell or "").strip() == pin.name for cell in row)
-        for table in rows
-        for row in table
-    ):
+        return plumber_text, poppler_text
+    if _normalise_text(plumber_text).casefold() != _normalise_text(poppler_text).casefold():
         findings.append(
             SpecFinding(
-                code="pin_table_unmatched",
-                severity="warning",
+                code="table_lane_disagreement",
+                severity="error",
                 field=field,
-                message="no pdfplumber pin-table row matches the pin number and name",
-                page=reading.page,
+                message="pdfplumber cell text differs from visible Poppler words in the cell",
+                page=page.page,
+            )
+        )
+    return plumber_text, poppler_text
+
+
+def _cell_numeric_value(text: str | None) -> float | None:
+    if text is None:
+        return None
+    numbers = _numeric_tokens(text)
+    if len(numbers) != 1:
+        return None
+    return float(numbers[0])
+
+
+def _header_rows(rows: list[list[str | None]]) -> int:
+    header_words = {
+        "DIMENSION",
+        "DIMENSIONS",
+        "SYMBOL",
+        "MIN",
+        "NOM",
+        "MAX",
+        "REF",
+        "REFERENCE",
+        "PARAMETER",
+        "MILLIMETERS",
+        "MILLIMETRES",
+        "INCHES",
+        "INCH",
+        "NOTE",
+        "NOTES",
+    }
+    for row_index, row in enumerate(rows):
+        first = next((cell.strip() for cell in row if cell and cell.strip()), "")
+        if first and first.upper().rstrip(":") not in header_words:
+            return row_index
+    return len(rows)
+
+
+def _dimension_cell_checks(
+    dimension: Dimension,
+    reading: Reading,
+    field: str,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    page: PageExtraction,
+    findings: list[SpecFinding],
+) -> None:
+    if reading.cells is None:
+        return
+    label = dimension.label
+    for key, cell_ref in reading.cells.items():
+        table = _table_record(extraction, extraction_dir, reading.page, cell_ref.table)
+        if table is None:
+            findings.append(
+                SpecFinding(
+                    code="cell_value_mismatch",
+                    severity="error",
+                    field=field,
+                    message=f"re-derived table {cell_ref.table} is unavailable",
+                    page=reading.page,
+                )
+            )
+            continue
+        rows = _table_rows(table)
+        if rows is None:
+            findings.append(
+                SpecFinding(
+                    code="cell_value_mismatch",
+                    severity="error",
+                    field=field,
+                    message="re-derived table rows are unreadable",
+                    page=reading.page,
+                )
+            )
+            continue
+        table_bbox = _numeric_bbox(table.get("bbox"))
+        if table_bbox is None:
+            findings.append(
+                SpecFinding(
+                    code="cell_value_mismatch",
+                    severity="error",
+                    field=field,
+                    message="re-derived table bounds are unreadable",
+                    page=reading.page,
+                )
+            )
+            continue
+        if reading.bbox is None or not (
+            reading.bbox[0] <= table_bbox[0]
+            and reading.bbox[1] <= table_bbox[1]
+            and reading.bbox[2] >= table_bbox[2]
+            and reading.bbox[3] >= table_bbox[3]
+        ):
+            findings.append(
+                SpecFinding(
+                    code="cell_value_mismatch",
+                    severity="error",
+                    field=field,
+                    message="reading bounding box does not cover the referenced table",
+                    page=reading.page,
+                )
+            )
+        plumber_text, poppler_text = _cell_lane_texts(
+            extraction,
+            extraction_dir,
+            page,
+            table,
+            rows,
+            cell_ref.row,
+            cell_ref.col,
+            field=field,
+            findings=findings,
+            missing_code="cell_value_mismatch",
+        )
+        expected = getattr(dimension, key)
+        if (
+            expected is None
+            or _cell_numeric_value(plumber_text) is None
+            or not _number_close(_cell_numeric_value(plumber_text), expected)
+            or _cell_numeric_value(poppler_text) is None
+            or not _number_close(_cell_numeric_value(poppler_text), expected)
+        ):
+            findings.append(
+                SpecFinding(
+                    code="cell_value_mismatch",
+                    severity="error",
+                    field=field,
+                    message=f"table {key} cell does not equal the PartSpec value",
+                    page=reading.page,
+                )
+            )
+
+        headers = _header_rows(rows)
+        header_text = " ".join(
+            cell or ""
+            for row in rows[:headers]
+            for index, cell in enumerate(row)
+            if index == cell_ref.col
+        )
+        if key.upper() not in header_text.upper():
+            findings.append(
+                SpecFinding(
+                    code="cell_header_mismatch",
+                    severity="error",
+                    field=field,
+                    message=f"column header does not contain {key.upper()}",
+                    page=reading.page,
+                )
+            )
+        if label is None or not 0 <= cell_ref.row < len(rows):
+            row_label = None
+        else:
+            row_label = next(
+                (cell.strip() for cell in rows[cell_ref.row] if cell is not None and cell.strip()),
+                None,
+            )
+        if label is None or row_label != label:
+            findings.append(
+                SpecFinding(
+                    code="cell_label_mismatch",
+                    severity="error",
+                    field=field,
+                    message="table row label does not equal Dimension.label",
+                    page=reading.page,
+                )
+            )
+        whole_header = " ".join(cell or "" for row in rows[:headers] for cell in row)
+        if re.search(
+            r"\b(?:inch(?:es)?|in\.?|mil(?:s)?)", whole_header, re.IGNORECASE
+        ) and not re.search(r"\b(?:mm|millimet)\w*\b", header_text, re.IGNORECASE):
+            findings.append(
+                SpecFinding(
+                    code="cell_unit_mismatch",
+                    severity="error",
+                    field=field,
+                    message="bound table column must identify millimeter units",
+                    page=reading.page,
+                )
+            )
+
+
+def _pin_tokens(text: str | None) -> list[str]:
+    if text is None:
+        return []
+    normalized = text.replace("\u2013", "-").replace("\u2014", "-")
+    result: list[str] = []
+    for token in _TOKEN_SPLIT.split(normalized.strip()):
+        if not token:
+            continue
+        if match := re.fullmatch(r"(\d+)-(\d+)", token):
+            start, end = int(match.group(1)), int(match.group(2))
+            if end < start or end - start > 500:
+                continue
+            result.extend(str(number) for number in range(start, end + 1))
+        elif re.fullmatch(r"(?:\d+|[A-Za-z]{1,2}\d+)", token):
+            result.append(token)
+    return result
+
+
+def _pin_table_checks(
+    spec: PartSpec,
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    page: PageExtraction | None,
+    findings: list[SpecFinding],
+) -> None:
+    field = "pin_table"
+    table_ref = spec.pin_table
+    table = _table_record(extraction, extraction_dir, table_ref.page, table_ref.table)
+    if page is None or table is None:
+        findings.append(
+            SpecFinding(
+                code="pin_table_missing",
+                severity="error",
+                field=field,
+                message="bound re-derived pin table is missing or unreadable",
+                page=table_ref.page,
+            )
+        )
+        return
+    rows = _table_rows(table)
+    if rows is None or not rows or table_ref.header_rows >= len(rows):
+        findings.append(
+            SpecFinding(
+                code="pin_table_missing",
+                severity="error",
+                field=field,
+                message="bound re-derived pin table has no readable body rows",
+                page=table_ref.page,
+            )
+        )
+        return
+
+    max_columns = max((len(row) for row in rows), default=0)
+    if max(table_ref.number_col, table_ref.name_col) >= max_columns:
+        findings.append(
+            SpecFinding(
+                code="pin_table_missing",
+                severity="error",
+                field=field,
+                message="pin table number/name column is outside the table",
+                page=table_ref.page,
+            )
+        )
+        return
+
+    body_rows = rows[table_ref.header_rows :]
+    number_like_columns: list[int] = []
+    for col in range(max_columns):
+        nonempty: list[str] = []
+        for row in body_rows:
+            if col >= len(row):
+                continue
+            value = row[col]
+            if value is not None and value.strip():
+                nonempty.append(value)
+        if nonempty and sum(bool(_pin_tokens(value)) for value in nonempty) / len(nonempty) >= 0.8:
+            number_like_columns.append(col)
+    if len(number_like_columns) > 1:
+        if table_ref.column_designator is None:
+            findings.append(
+                SpecFinding(
+                    code="pin_table_column_ambiguous",
+                    severity="error",
+                    field=field,
+                    message=f"multiple number-like columns exist: {number_like_columns}",
+                    page=table_ref.page,
+                )
+            )
+        else:
+            header_parts: list[str] = []
+            for index in range(min(table_ref.header_rows, len(rows))):
+                if table_ref.number_col >= len(rows[index]):
+                    continue
+                value = rows[index][table_ref.number_col]
+                if value is not None:
+                    header_parts.append(value)
+            header = " ".join(header_parts)
+            if table_ref.column_designator.casefold() not in header.casefold():
+                findings.append(
+                    SpecFinding(
+                        code="pin_table_column_mismatch",
+                        severity="error",
+                        field=field,
+                        message=(
+                            "column designator is absent from the selected number-column header"
+                        ),
+                        page=table_ref.page,
+                    )
+                )
+            if any(
+                variant.package_designator.casefold() != table_ref.column_designator.casefold()
+                for variant in spec.orderable
+            ):
+                findings.append(
+                    SpecFinding(
+                        code="pin_table_column_mismatch",
+                        severity="error",
+                        field=field,
+                        message="column designator differs from an orderable package designator",
+                        page=table_ref.page,
+                    )
+                )
+
+    table_pairs: Counter[tuple[str, str]] = Counter()
+    exposed_rows: list[str] = []
+    for row_index in range(table_ref.header_rows, len(rows)):
+        number_text, number_poppler = _cell_lane_texts(
+            extraction,
+            extraction_dir,
+            page,
+            table,
+            rows,
+            row_index,
+            table_ref.number_col,
+            field=field,
+            findings=findings,
+            missing_code="pin_table_missing",
+        )
+        name_text, name_poppler = _cell_lane_texts(
+            extraction,
+            extraction_dir,
+            page,
+            table,
+            rows,
+            row_index,
+            table_ref.name_col,
+            field=field,
+            findings=findings,
+            missing_code="pin_table_missing",
+        )
+        number_values = _pin_tokens(number_text)
+        number_poppler_values = _pin_tokens(number_poppler)
+        name_value = _normalise_text(name_text or "")
+        name_poppler_value = _normalise_text(name_poppler or "")
+        if number_values != number_poppler_values or name_value != name_poppler_value:
+            findings.append(
+                SpecFinding(
+                    code="table_lane_disagreement",
+                    severity="error",
+                    field=field,
+                    message="pin number or name differs between table lanes",
+                    page=table_ref.page,
+                )
+            )
+        if not number_values and re.search(
+            r"thermal pad|exposed pad|powerpad|\bEP\b", name_value, re.IGNORECASE
+        ):
+            exposed_rows.append(name_value)
+            if spec.package.exposed_pad is not None:
+                table_pairs[(spec.package.exposed_pad.number, name_value)] += 1
+            continue
+        if not number_values or not name_value:
+            continue
+        table_pairs.update((number, name_value) for number in number_values)
+
+    if bool(exposed_rows) != (spec.package.exposed_pad is not None):
+        findings.append(
+            SpecFinding(
+                code="exposed_pad_table_mismatch",
+                severity="error",
+                field=field,
+                message="exposed-pad table row presence differs from PackageSpec",
+                page=table_ref.page,
+            )
+        )
+    expected_pairs = Counter((pin.number, pin.name) for pin in spec.pins)
+    if table_pairs != expected_pairs:
+        missing = sorted((expected_pairs - table_pairs).elements())
+        extra = sorted((table_pairs - expected_pairs).elements())
+        findings.append(
+            SpecFinding(
+                code="pin_table_bijection",
+                severity="error",
+                field=field,
+                message=f"pin table differs from PartSpec; missing={missing}, extra={extra}",
+                page=table_ref.page,
+            )
+        )
+    signal_numbers = {
+        number
+        for number, _ in table_pairs
+        if number.isdigit()
+        and (spec.package.exposed_pad is None or number != spec.package.exposed_pad.number)
+    }
+    spec_signal_numbers = [
+        pin.number
+        for pin in spec.pins
+        if pin.number != (spec.package.exposed_pad.number if spec.package.exposed_pad else None)
+    ]
+    if all(number.isdigit() for number in spec_signal_numbers) and signal_numbers != {
+        str(number) for number in range(1, spec.package.pin_count + 1)
+    }:
+        findings.append(
+            SpecFinding(
+                code="pin_numbering_incomplete",
+                severity="error",
+                field=field,
+                message="numeric pin numbers do not cover 1 through package.pin_count",
+                page=table_ref.page,
             )
         )
 
 
-def _orderable_variant_checks(
+def _orderable_row_checks(
     spec: PartSpec,
     variant: OrderableVariant,
     index: int,
     extraction: DatasheetExtraction,
     extraction_dir: Path,
-    spec_dir: Path,
     page: PageExtraction | None,
-    confirmation_verified: bool,
     findings: list[SpecFinding],
 ) -> None:
     field = f"orderable[{index}]"
-    reading = variant.reading
-    _read_vision(reading, spec_dir, page, field, findings)
-    matches_spec = (
-        variant.mpn.casefold() == spec.mpn.casefold() and variant.package_code == spec.package.code
-    )
-    if not matches_spec:
+    if page is None:
+        findings.append(
+            SpecFinding(
+                code="orderable_mpn_mismatch",
+                severity="error",
+                field=field,
+                message="orderable table page is unavailable",
+                page=variant.reading.page,
+            )
+        )
         return
-    mechanical_text = " ".join(
-        _mechanical_words(extraction, extraction_dir, reading.page, reading)
-    ).casefold()
+    table = _table_record(extraction, extraction_dir, variant.reading.page, variant.row.table)
+    if table is None or (rows := _table_rows(table)) is None or variant.row.row >= len(rows):
+        findings.append(
+            SpecFinding(
+                code="orderable_mpn_mismatch",
+                severity="error",
+                field=field,
+                message="bound re-derived orderable row is missing or unreadable",
+                page=variant.reading.page,
+            )
+        )
+        return
+    plumber_cells = [cell or "" for cell in rows[variant.row.row]]
+    poppler_cells: list[str] = []
+    for col_index in range(len(plumber_cells)):
+        plumber_text, poppler_text = _cell_lane_texts(
+            extraction,
+            extraction_dir,
+            page,
+            table,
+            rows,
+            variant.row.row,
+            col_index,
+            field=field,
+            findings=findings,
+            missing_code="orderable_mpn_mismatch",
+        )
+        if plumber_text is not None:
+            plumber_cells[col_index] = plumber_text.strip()
+        poppler_cells.append((poppler_text or "").strip())
+    if variant.mpn not in plumber_cells or variant.mpn not in poppler_cells:
+        findings.append(
+            SpecFinding(
+                code="orderable_mpn_mismatch",
+                severity="error",
+                field=field,
+                message="exact orderable MPN is absent from the bound row",
+                page=variant.reading.page,
+            )
+        )
+    package_pin_cell = re.compile(
+        rf"\s*{re.escape(variant.package_designator)}\s*\|\s*{variant.pin_count}\s*"
+    )
     if (
-        spec.mpn.casefold() not in mechanical_text
-        or variant.package_code.casefold() not in mechanical_text
+        variant.package_designator not in plumber_cells
+        and not any(package_pin_cell.fullmatch(cell) for cell in plumber_cells)
+    ) or (
+        variant.package_designator not in poppler_cells
+        and not any(package_pin_cell.fullmatch(cell) for cell in poppler_cells)
     ):
         findings.append(
             SpecFinding(
-                code=(
-                    "mechanical_unconfirmed_user_confirmed"
-                    if confirmation_verified
-                    else "mechanical_mismatch"
-                ),
-                severity="warning" if confirmation_verified else "error",
+                code="orderable_designator_mismatch",
+                severity="error",
                 field=field,
-                message="mechanical lane does not support the orderable MPN and package code",
-                page=reading.page,
+                message="exact package designator is absent from the bound row",
+                page=variant.reading.page,
+            )
+        )
+    if (
+        (
+            str(variant.pin_count) not in plumber_cells
+            and not any(package_pin_cell.fullmatch(cell) for cell in plumber_cells)
+        )
+        or (
+            str(variant.pin_count) not in poppler_cells
+            and not any(package_pin_cell.fullmatch(cell) for cell in poppler_cells)
+        )
+        or variant.pin_count != spec.package.pin_count
+    ):
+        findings.append(
+            SpecFinding(
+                code="orderable_pin_count_mismatch",
+                severity="error",
+                field=field,
+                message="pin count is absent from the bound row or differs from PackageSpec",
+                page=variant.reading.page,
             )
         )
 
@@ -808,16 +1698,16 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
                 message="exposed pad number is not present in the pin list",
             )
         )
-    if not any(
-        variant.mpn.casefold() == spec.mpn.casefold() and variant.package_code == package.code
-        for variant in spec.orderable
-    ):
+    matching_mpn = [
+        variant for variant in spec.orderable if variant.mpn.casefold() == spec.mpn.casefold()
+    ]
+    if len(matching_mpn) != 1:
         findings.append(
             SpecFinding(
                 code="package_variant_unbound",
                 severity="error",
                 field="orderable",
-                message="no orderable variant binds the PartSpec MPN to the package code",
+                message="the PartSpec MPN must match exactly one orderable variant",
             )
         )
     quad_family = package.family in ("no_lead_quad", "gullwing_quad")
@@ -942,7 +1832,18 @@ def check_part_spec(
     extraction_dir = extraction_path.resolve().parent
     pdf_path = _resolved(spec_dir, spec.datasheet.path)
     actual_spec_sha = part_spec_sha256(spec_path)
-    actual_extraction_sha = hashlib.sha256(extraction_path.read_bytes()).hexdigest()
+    try:
+        actual_extraction_sha = hashlib.sha256(extraction_path.read_bytes()).hexdigest()
+    except OSError as exc:
+        actual_extraction_sha = ""
+        findings.append(
+            SpecFinding(
+                code="evidence_missing",
+                severity="error",
+                field="datasheet.extraction_path",
+                message=f"stored extraction is unavailable: {exc}",
+            )
+        )
     if spec.datasheet.sha256 != extraction.pdf_sha256:
         findings.append(
             SpecFinding(
@@ -952,6 +1853,7 @@ def check_part_spec(
                 message="PartSpec datasheet SHA-256 differs from the extraction",
             )
         )
+    pdf_sha256: str | None = None
     if not pdf_path.is_file():
         findings.append(
             SpecFinding(
@@ -961,26 +1863,49 @@ def check_part_spec(
                 message=f"datasheet file is missing: {pdf_path}",
             )
         )
-    elif hashlib.sha256(pdf_path.read_bytes()).hexdigest() != spec.datasheet.sha256:
-        findings.append(
-            SpecFinding(
-                code="datasheet_sha_mismatch",
-                severity="error",
-                field="datasheet.sha256",
-                message="PartSpec datasheet SHA-256 differs from the PDF file",
+    else:
+        try:
+            pdf_sha256 = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+        except OSError as exc:
+            findings.append(
+                SpecFinding(
+                    code="datasheet_missing",
+                    severity="error",
+                    field="datasheet.path",
+                    message=f"datasheet file cannot be read: {exc}",
+                )
             )
-        )
+        if pdf_sha256 is not None and pdf_sha256 != spec.datasheet.sha256:
+            findings.append(
+                SpecFinding(
+                    code="datasheet_sha_mismatch",
+                    severity="error",
+                    field="datasheet.sha256",
+                    message="PartSpec datasheet SHA-256 differs from the PDF file",
+                )
+            )
 
-    pages = {page.page: page for page in extraction.pages}
+    stored_pages = {page.page: page for page in extraction.pages}
     readings = _all_readings(spec)
     orderable_by_field = {
-        f"orderable[{index}]": variant for index, variant in enumerate(spec.orderable)
+        f"orderable[{index}]": (index, variant) for index, variant in enumerate(spec.orderable)
     }
-    user_requirements = _user_requirements(spec, spec_dir)
+    pin_by_field = {f"pins[{index}]": (index, pin) for index, pin in enumerate(spec.pins)}
     cited_pages = {reading.page for _, reading, _ in readings}
+    cited_pages.add(spec.pin_table.page)
     for page_number in cited_pages:
-        page = pages.get(page_number)
-        if page is not None:
+        page = stored_pages.get(page_number)
+        if page is None:
+            findings.append(
+                SpecFinding(
+                    code="page_not_extracted",
+                    severity="error",
+                    field=f"pages[{page_number}]",
+                    message="cited page is not present in the stored extraction",
+                    page=page_number,
+                )
+            )
+        else:
             findings.extend(_page_artifact_findings(page, extraction_dir))
 
     observation_log = _observation_log(spec_dir)
@@ -996,7 +1921,7 @@ def check_part_spec(
     else:
         observed_hashes = _observed_image_hashes(observation_log)
         for page_number in cited_pages:
-            page = pages.get(page_number)
+            page = stored_pages.get(page_number)
             if page is not None and page.png_sha256 not in observed_hashes:
                 findings.append(
                     SpecFinding(
@@ -1008,106 +1933,214 @@ def check_part_spec(
                     )
                 )
 
-    for field, reading, dimension in readings:
-        page = pages.get(reading.page)
-        confirmation_verified = (
-            reading.user_confirmed is not None and reading.user_confirmed in user_requirements
-        )
-        if reading.user_confirmed is not None and not confirmation_verified:
+    available_stored_pages = [
+        stored_pages[page_number]
+        for page_number in sorted(cited_pages)
+        if page_number in stored_pages
+    ]
+    derived_extraction: DatasheetExtraction | None = None
+    derived_dir = Path()
+    with ExitStack() as cleanup_stack:
+        token: Token[ExitStack | None] = _RE_DERIVATION_STACK.set(cleanup_stack)
+        try:
+            if not pdf_path.is_file() or not available_stored_pages:
+                raise DatasheetError("no readable PDF and stored page DPI are available")
+            dpis = {page.dpi for page in available_stored_pages}
+            if len(dpis) != 1:
+                raise DatasheetError("cited stored pages do not share a single DPI")
+            derived_extraction, derived_dir = rederive_pages(
+                pdf_path,
+                sorted(cited_pages & stored_pages.keys()),
+                next(iter(dpis)),
+            )
+        except Exception as exc:
             findings.append(
                 SpecFinding(
-                    code="user_confirmation_unverified",
+                    code="rederivation_failed",
                     severity="error",
-                    field=field,
-                    message=(f"{reading.user_confirmed} is not a user-sourced intake requirement"),
-                    page=reading.page,
+                    field="datasheet",
+                    message=f"could not re-derive cited PDF pages: {exc}",
                 )
             )
-        if page is None:
-            findings.append(
-                SpecFinding(
-                    code="page_not_extracted",
-                    severity="error",
-                    field=field,
-                    message=f"page {reading.page} is not present in the extraction",
-                    page=reading.page,
-                )
-            )
-        if dimension is not None:
-            _dimension_checks(
-                dimension,
-                reading,
-                field,
-                page,
-                spec_dir,
-                extraction,
-                extraction_dir,
-                confirmation_verified,
-                findings,
-            )
-        elif field == "package.pin1_reading":
-            _read_vision(reading, spec_dir, page, field, findings)
-            _pin1_corner_findings(spec.package, reading, field, findings)
-        elif field in orderable_by_field:
-            _orderable_variant_checks(
-                spec,
-                orderable_by_field[field],
-                int(field.removeprefix("orderable[").removesuffix("]")),
-                extraction,
-                extraction_dir,
-                spec_dir,
-                page,
-                confirmation_verified,
-                findings,
-            )
-    for index, pin in enumerate(spec.pins):
-        reading = pin.reading
-        confirmation_verified = (
-            reading.user_confirmed is not None and reading.user_confirmed in user_requirements
-        )
-        _pin_checks(
-            spec,
-            extraction,
-            extraction_dir,
-            spec_dir,
-            pin,
-            index,
-            pages.get(reading.page),
-            confirmation_verified,
-            findings,
-        )
+        finally:
+            _RE_DERIVATION_STACK.reset(token)
 
-    for page_number in cited_pages:
-        page = pages.get(page_number)
-        if page is None:
-            continue
-        if page.order_similarity is not None and page.order_similarity < 0.6:
-            findings.append(
-                SpecFinding(
-                    code="reading_order_divergence",
-                    severity="info",
-                    field="page",
-                    message="Poppler and pdfplumber word order differs substantially",
-                    page=page_number,
+        if derived_extraction is not None:
+            if pdf_sha256 is not None and derived_extraction.pdf_sha256 != pdf_sha256:
+                findings.append(
+                    SpecFinding(
+                        code="datasheet_sha_mismatch",
+                        severity="error",
+                        field="datasheet.sha256",
+                        message="re-derived PDF SHA-256 differs from the current PDF",
+                    )
                 )
+            derived_pages = {page.page: page for page in derived_extraction.pages}
+            for page_number in cited_pages:
+                stored_page = stored_pages.get(page_number)
+                derived_page = derived_pages.get(page_number)
+                if stored_page is not None and (
+                    derived_page is None or stored_page.png_sha256 != derived_page.png_sha256
+                ):
+                    findings.append(
+                        SpecFinding(
+                            code="extraction_stale",
+                            severity="error",
+                            field=f"pages[{page_number}].png_sha256",
+                            message="stored page image hash differs from fresh PDF derivation",
+                            page=page_number,
+                        )
+                    )
+                if derived_page is None:
+                    findings.append(
+                        SpecFinding(
+                            code="page_not_extracted",
+                            severity="error",
+                            field=f"pages[{page_number}]",
+                            message="cited page is absent from the re-derived extraction",
+                            page=page_number,
+                        )
+                    )
+
+            for field, reading, dimension in readings:
+                stored_page = stored_pages.get(reading.page)
+                derived_page = derived_pages.get(reading.page)
+                if dimension is not None:
+                    _dimension_checks(
+                        dimension,
+                        reading,
+                        field,
+                        stored_page,
+                        derived_page,
+                        spec_dir,
+                        derived_extraction,
+                        derived_dir,
+                        findings,
+                    )
+                    if derived_page is not None:
+                        _dimension_cell_checks(
+                            dimension,
+                            reading,
+                            field,
+                            derived_extraction,
+                            derived_dir,
+                            derived_page,
+                            findings,
+                        )
+                elif field == "package.pin1_reading":
+                    _read_vision(reading, spec_dir, stored_page, field, findings)
+                    _bbox_findings(reading, derived_page, field, findings)
+                    _pin1_corner_findings(spec.package, reading, field, findings)
+                elif field in orderable_by_field:
+                    index, variant = orderable_by_field[field]
+                    _read_vision(reading, spec_dir, stored_page, field, findings)
+                    _orderable_row_checks(
+                        spec,
+                        variant,
+                        index,
+                        derived_extraction,
+                        derived_dir,
+                        derived_page,
+                        findings,
+                    )
+                elif field in pin_by_field:
+                    index, pin = pin_by_field[field]
+                    _pin_checks(spec, spec_dir, pin, index, stored_page, findings)
+
+            _pin_table_checks(
+                spec,
+                derived_extraction,
+                derived_dir,
+                derived_pages.get(spec.pin_table.page),
+                findings,
             )
-        if not any(lane.status == "ok" for lane in page.lanes):
-            findings.append(
-                SpecFinding(
-                    code="mechanical_lane_unavailable",
-                    severity="error",
-                    field="page",
-                    message="all extraction lanes for this cited page are non-ok",
-                    page=page_number,
-                )
-            )
-    _consistency_checks(spec, findings)
-    return PartSpecReport(
-        artifact_kind="circuit_part_spec_check",
-        verdict="fail" if any(finding.severity == "error" for finding in findings) else "pass",
-        part_spec_sha256=actual_spec_sha,
-        extraction_sha256=actual_extraction_sha,
-        pdf_sha256=extraction.pdf_sha256,
-        checked_readings=len(readings),
-        findings=findings,
-    )
+
+            drawing_pages = {
+                dimension.reading.page
+                for field, dimension in _dimensions(spec)
+                if field.startswith("package.") or field.startswith("land_pattern.")
+            }
+            drawing_pages.add(spec.package.pin1_reading.page)
+            for page_number in sorted(drawing_pages):
+                page = derived_pages.get(page_number)
+                if page is None:
+                    continue
+                missing_lanes: list[str] = []
+                missing_revisions: list[str] = []
+                for lane in ("poppler", "pdfplumber"):
+                    words = _lane_words(derived_extraction, derived_dir, page_number, lane)
+                    visible, _ = _visible_words(words, page, derived_dir)
+                    tokens = {word.text.strip(".,;:()[]{}").casefold() for word in visible}
+                    if spec.package.drawing_id.casefold() not in tokens:
+                        missing_lanes.append(lane)
+                    if (
+                        spec.package.drawing_revision is not None
+                        and spec.package.drawing_revision.casefold() not in tokens
+                    ):
+                        missing_revisions.append(lane)
+                if missing_lanes:
+                    findings.append(
+                        SpecFinding(
+                            code="drawing_id_missing",
+                            severity="error",
+                            field=f"package.drawing_id.pages[{page_number}]",
+                            message=(
+                                f"visible drawing_id is missing from lanes: "
+                                f"{', '.join(missing_lanes)}"
+                            ),
+                            page=page_number,
+                        )
+                    )
+                if missing_revisions:
+                    findings.append(
+                        SpecFinding(
+                            code="drawing_revision_missing",
+                            severity="error",
+                            field=f"package.drawing_revision.pages[{page_number}]",
+                            message=(
+                                f"visible drawing revision is missing from lanes: "
+                                f"{', '.join(missing_revisions)}"
+                            ),
+                            page=page_number,
+                        )
+                    )
+            for page_number in sorted(cited_pages):
+                page = derived_pages.get(page_number)
+                if (
+                    page is not None
+                    and page.order_similarity is not None
+                    and page.order_similarity < 0.6
+                ):
+                    findings.append(
+                        SpecFinding(
+                            code="reading_order_divergence",
+                            severity="info",
+                            field="page",
+                            message="Poppler and pdfplumber word order differs substantially",
+                            page=page_number,
+                        )
+                    )
+        else:
+            for field, reading, dimension in readings:
+                stored_page = stored_pages.get(reading.page)
+                if dimension is not None:
+                    _read_vision(reading, spec_dir, stored_page, field, findings)
+                elif field == "package.pin1_reading":
+                    _read_vision(reading, spec_dir, stored_page, field, findings)
+                    _pin1_corner_findings(spec.package, reading, field, findings)
+                elif field in orderable_by_field:
+                    _read_vision(reading, spec_dir, stored_page, field, findings)
+                elif field in pin_by_field:
+                    index, pin = pin_by_field[field]
+                    _pin_checks(spec, spec_dir, pin, index, stored_page, findings)
+
+        _consistency_checks(spec, findings)
+        return PartSpecReport(
+            artifact_kind="circuit_part_spec_check",
+            verdict="fail" if any(finding.severity == "error" for finding in findings) else "pass",
+            part_spec_sha256=actual_spec_sha,
+            extraction_sha256=actual_extraction_sha,
+            pdf_sha256=spec.datasheet.sha256,
+            checked_readings=len(readings),
+            findings=findings,
+        )

@@ -588,7 +588,6 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
             "type": "object",
             "properties": {
                 "part_spec_path": {"type": "string"},
-                "part_spec_check_path": {"type": "string"},
                 "symbol_lib_path": {"type": "string"},
                 "symbol_name": {"type": "string"},
                 "footprint_path": {"type": "string"},
@@ -604,7 +603,6 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
             },
             "required": [
                 "part_spec_path",
-                "part_spec_check_path",
                 "symbol_lib_path",
                 "symbol_name",
                 "footprint_path",
@@ -1242,7 +1240,6 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             result = libverify.verify_library_part(
                 spec,
                 spec_path=spec_path,
-                spec_check_path=Path(str(args["part_spec_check_path"])),
                 symbol_lib=Path(str(args["symbol_lib_path"])),
                 symbol_name=str(args["symbol_name"]),
                 footprint_path=Path(str(args["footprint_path"])),

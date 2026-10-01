@@ -18,12 +18,14 @@ from circuit.libsource import ImportReport, SourceInfoInput
 from circuit.libverify import LibraryVerification, VerifiedFootprint, VerifiedSymbol
 from circuit.netlist import ConnectivityReport
 from circuit.partspec import (
+    CellRef,
     DatasheetRef,
     Dimension,
     OrderableVariant,
     PackageSpec,
     PartSpec,
     PinSpec,
+    PinTable,
     Reading,
 )
 from circuit.report import DesignReport
@@ -67,6 +69,12 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_sch_lint",
         "circuit_fit_sheet",
     }
+    verification_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_library_verify"
+    )
+    assert "part_spec_check_path" not in verification_schema["properties"]
 
 
 def test_output_path_defaults_to_report_directory(tmp_path: Path) -> None:
@@ -77,14 +85,14 @@ def test_output_path_defaults_to_report_directory(tmp_path: Path) -> None:
 
 
 def _library_tool_spec() -> PartSpec:
-    reading = Reading(page=1, vision="1", vision_record="vision.json")
+    reading = Reading(page=1, bbox=(0, 0, 1, 1), vision="1", vision_record="vision.json")
 
     def dimension(value: float) -> Dimension:
         return Dimension(nom=value, reading=reading)
 
     package = PackageSpec(
         family="gullwing_dual",
-        code="TEST",
+        drawing_id="TEST",
         pin_count=2,
         pitch=dimension(0.65),
         body_length=dimension(2.0),
@@ -95,7 +103,12 @@ def _library_tool_spec() -> PartSpec:
         lead_width=dimension(0.3),
         drawing_view="top",
         pin1_corner="top_left",
-        pin1_reading=Reading(page=1, vision="top-left", vision_record="vision.json"),
+        pin1_reading=Reading(
+            page=1,
+            bbox=(0, 0, 1, 1),
+            vision="top-left",
+            vision_record="vision.json",
+        ),
     )
     return PartSpec(
         artifact_kind="circuit_part_spec",
@@ -124,7 +137,9 @@ def _library_tool_spec() -> PartSpec:
         orderable=[
             OrderableVariant(
                 mpn="TEST-1",
-                package_code="TEST",
+                package_designator="TEST",
+                pin_count=2,
+                row=CellRef(table=0, row=1, col=0),
                 reading=Reading(
                     page=1,
                     vision="TEST-1 TEST",
@@ -132,6 +147,7 @@ def _library_tool_spec() -> PartSpec:
                 ),
             )
         ],
+        pin_table=PinTable(page=1, table=0, number_col=0, name_col=1),
     )
 
 
@@ -145,8 +161,6 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
     artifact_path.write_text("generated artifact", encoding="utf-8")
     source_path = tmp_path / "source.kicad_mod"
     source_path.write_text("fixture", encoding="utf-8")
-    check_path = tmp_path / "part-check.json"
-    check_path.write_text("{}", encoding="utf-8")
     symbol_path = tmp_path / "symbol.kicad_sym"
     symbol_path.write_text("{}", encoding="utf-8")
     footprint_path = tmp_path / "footprint.kicad_mod"
@@ -177,6 +191,15 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
             artifact_kind="circuit_library_verification",
             verdict="pass",
             part_spec_sha256="b" * 64,
+            inputs=mcp_server.libverify.VerificationInputs(
+                part_spec_path=Path("part.json"),
+                symbol_lib=Path("symbol.kicad_sym"),
+                symbol_name=cast(str, kwargs["symbol_name"]),
+                footprint_path=Path("footprint.kicad_mod"),
+                density="nominal",
+                tolerance_mm=0.02,
+                model_required=True,
+            ),
             symbol=VerifiedSymbol(
                 lib_path=cast(Path, kwargs["symbol_lib"]),
                 name=cast(str, kwargs["symbol_name"]),
@@ -272,7 +295,6 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 "circuit_library_verify",
                 {
                     "part_spec_path": str(spec_path),
-                    "part_spec_check_path": str(check_path),
                     "symbol_lib_path": str(symbol_path),
                     "symbol_name": "TEST-1",
                     "footprint_path": str(footprint_path),

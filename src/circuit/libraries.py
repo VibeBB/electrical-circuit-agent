@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -11,7 +12,10 @@ from pydantic import BaseModel, ConfigDict
 
 from . import sexpr
 from .brief import DesignBrief, brief_sha256
+from .landpattern import compute_land_pattern
 from .libitems import LibItemError, parse_footprint
+from .libverify import LibraryVerification, verify_library_part
+from .partspec import load_part_spec
 
 
 class LibraryRoots(BaseModel):
@@ -146,12 +150,12 @@ def _file_sha256(path: Path) -> str | None:
 def _project_verification_matches(
     verification_dir: Path,
     *,
+    project_library: Path,
+    project_dir: Path,
     symbol_path: Path,
     symbol_name: str,
     footprint_path: Path,
 ) -> bool:
-    from .libverify import LibraryVerification
-
     symbol_sha256 = _file_sha256(symbol_path)
     footprint_sha256 = _file_sha256(footprint_path)
     if symbol_sha256 is None or footprint_sha256 is None:
@@ -160,20 +164,52 @@ def _project_verification_matches(
         footprint_name = parse_footprint(footprint_path).name
     except (OSError, LibItemError):
         return False
+    project_root = project_dir.resolve()
+    library_root = project_library.resolve()
+
+    def input_path(value: Path) -> Path:
+        if value.is_absolute():
+            raise ValueError("verification inputs must be relative to the project library")
+        resolved = (library_root / value).resolve(strict=True)
+        resolved.relative_to(project_root)
+        return resolved
+
     for verification_path in sorted(verification_dir.glob("*.verification.json")):
         try:
             report = LibraryVerification.model_validate_json(
                 verification_path.read_text(encoding="utf-8")
             )
-        except (OSError, ValueError):
+            inputs = report.inputs
+            part_spec_path = input_path(inputs.part_spec_path)
+            input_symbol_path = input_path(inputs.symbol_lib)
+            input_footprint_path = input_path(inputs.footprint_path)
+            if (
+                input_symbol_path != symbol_path.resolve()
+                or input_footprint_path != footprint_path.resolve()
+                or inputs.symbol_name != symbol_name
+            ):
+                continue
+            spec = load_part_spec(part_spec_path)
+            with tempfile.TemporaryDirectory(prefix="circuit-library-gate-") as temporary:
+                fresh = verify_library_part(
+                    spec,
+                    spec_path=part_spec_path,
+                    symbol_lib=input_symbol_path,
+                    symbol_name=inputs.symbol_name,
+                    footprint_path=input_footprint_path,
+                    library_dir=library_root,
+                    reference=compute_land_pattern(spec, inputs.density),
+                    tolerance_mm=inputs.tolerance_mm,
+                    model_required=inputs.model_required,
+                    output_path=Path(temporary) / "fresh.verification.json",
+                )
+        except Exception:
             continue
-        if (
-            report.verdict == "pass"
-            and Path(report.symbol.lib_path).name == symbol_path.name
-            and report.symbol.name == symbol_name
-            and report.symbol.sha256 == symbol_sha256
-            and report.footprint.name == footprint_name
-            and report.footprint.sha256 == footprint_sha256
+        if fresh.verdict == "pass" and (
+            fresh.symbol.sha256 == symbol_sha256
+            and fresh.footprint.sha256 == footprint_sha256
+            and fresh.symbol.name == symbol_name
+            and fresh.footprint.name == footprint_name
         ):
             return True
     return False
@@ -295,6 +331,8 @@ def check_libraries(
             or footprint_path is None
             or not _project_verification_matches(
                 project_library / "verification",
+                project_library=project_library,
+                project_dir=brief_path.parent,
                 symbol_path=symbol_path,
                 symbol_name=symbol_name,
                 footprint_path=footprint_path,
