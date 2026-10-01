@@ -504,6 +504,7 @@ def check_docker_base(repo_root: Path, *, fetch_json: FetchJson = _default_json)
         if not dockerfile.is_file():
             continue
         for reference in _FROM.findall(dockerfile.read_text(encoding="utf-8")):
+            reference = reference.split("@", 1)[0]
             if ":" not in reference or "$" in reference:
                 continue
             image, _, tag = reference.rpartition(":")
