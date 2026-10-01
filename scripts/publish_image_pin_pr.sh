@@ -130,10 +130,10 @@ required_check_counts() {
   local checks_json=$1
   local failures pending count
   failures=$(jq '[.[] | select(.bucket == "fail" or
-    (.bucket == null and (.state | IN("FAILURE", "ERROR", "CANCELLED", "CANCELED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "STALE"))))] | length' \
+    (.bucket == null and (.state | IN("FAILURE", "ERROR", "CANCELLED", "CANCELED", "TIMED_OUT", "STARTUP_FAILURE", "STALE"))))] | length' \
     <<< "$checks_json")
   pending=$(jq '[.[] | select(.bucket == "pending" or
-    (.bucket == null and (.state | IN("PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"))))] | length' \
+    (.bucket == null and (.state | IN("ACTION_REQUIRED", "PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"))))] | length' \
     <<< "$checks_json")
   count=$(jq 'length' <<< "$checks_json")
   if [ "$count" -eq 0 ]; then

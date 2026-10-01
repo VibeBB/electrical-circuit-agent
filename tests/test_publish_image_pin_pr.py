@@ -35,6 +35,9 @@ case "$1 $2" in
       required-failure)
         printf '[{"name":"verify","state":"FAILURE","bucket":"fail"}]\\n'
         ;;
+      action-required)
+        printf '[{"name":"verify","state":"ACTION_REQUIRED","bucket":null}]\\n'
+        ;;
       pending-timeout)
         printf '[{"name":"verify","state":"PENDING","bucket":"pending"}]\\n'
         ;;
@@ -45,7 +48,7 @@ case "$1 $2" in
     ;;
   "pr merge")
     ;;
-  api)
+  api\ *)
     if [[ "$*" == *"-X POST"*"/approve"* ]]; then
       printf 'approval response noise\\n'
     else
@@ -94,6 +97,7 @@ def run_helper(script: Path, env: dict[str, str]) -> subprocess.CompletedProcess
     [
         ("merged", 0, "is merged; dispatching"),
         ("closed", 1, "was closed without being merged"),
+        ("action-required", 0, "auto-merge armed; required checks still running"),
         ("pending-timeout", 0, "auto-merge armed; required checks still running"),
         ("required-failure", 1, "A required check concluded non-success"),
     ],
@@ -125,10 +129,12 @@ def test_pin_pr_state_and_required_checks(
         assert f"--ref {BRANCH}" not in call_log
     if case == "closed":
         assert "workflow run" not in call_log
-    if case == "pending-timeout":
+    if case in ("action-required", "pending-timeout"):
         assert "--required --json name,state,bucket" in call_log
         assert "--auto --squash --delete-branch" in call_log
         assert "approval response noise" not in result.stdout + result.stderr
+    if case == "action-required":
+        assert "api -X POST repos/" in call_log
     if case == "required-failure":
         assert "--auto --squash --delete-branch" not in call_log
 

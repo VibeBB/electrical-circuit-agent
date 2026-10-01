@@ -284,68 +284,6 @@ jobs:
             done
             return 1
           }
-          dispatch_workflow() {
-            # GITHUB_TOKEN-driven push/pull_request events never produce a real gate:
-            # at most a stillborn pull_request run is recorded (cancelled before merge
-            # below), so CI for the lock branch and the checks after the merge is
-            # started explicitly.
-            local workflow="$1" ref="$2" started run_id=""
-            shift 2
-            # Reset per-call so a previous dispatch's conclusion cannot leak
-            # into the summary when this run is not observed.
-            DISPATCH_RUN_URL=""
-            DISPATCH_CONCLUSION=""
-            started=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            retry gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$ref" "$@"
-            for _ in $(seq 1 30); do
-              sleep 10
-              run_id=$(retry gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$ref" \
-                --event workflow_dispatch --created ">=$started" --json databaseId --jq '.[0].databaseId // empty' || true)
-              [ -n "$run_id" ] && break
-            done
-            if [ -z "$run_id" ]; then
-              echo "workflow_dispatch of $workflow for $ref was not observed" >&2
-              return 1
-            fi
-            DISPATCH_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-            echo "$workflow run for $ref: ${DISPATCH_RUN_URL}"
-            gh run watch --repo "$GITHUB_REPOSITORY" "$run_id" --interval 30 || true
-            # An empty conclusion is a transient API failure, not a run
-            # verdict: re-query until the API reports the conclusion.
-            DISPATCH_CONCLUSION=""
-            for _ in $(seq 1 6); do
-              DISPATCH_CONCLUSION=$(retry gh run view --repo "$GITHUB_REPOSITORY" "$run_id" \
-                --json conclusion --jq '.conclusion // empty' || true)
-              [ -n "$DISPATCH_CONCLUSION" ] && break
-              sleep 10
-            done
-            DISPATCH_CONCLUSION="${DISPATCH_CONCLUSION:-unknown}"
-            echo "$workflow conclusion for $ref: ${DISPATCH_CONCLUSION}"
-            [ "$DISPATCH_CONCLUSION" = "success" ]
-          }
-          dispatch_and_forget() {
-            # Post-merge checks are fire-and-forget: main-ci-failure-issue
-            # watches every completed main run and files the tracking
-            # issue, so this job only records the dispatched run URL and
-            # returns without waiting for the conclusion.
-            local workflow="$1" ref="$2" started run_id=""
-            shift 2
-            DISPATCH_RUN_URL=""
-            started=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            retry gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$ref" "$@"
-            for _ in $(seq 1 30); do
-              sleep 10
-              run_id=$(retry gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --branch "$ref" \
-                --event workflow_dispatch --created ">=$started" --json databaseId --jq '.[0].databaseId // empty' || true)
-              [ -n "$run_id" ] && break
-            done
-            if [ -z "$run_id" ]; then
-              echo "workflow_dispatch of $workflow for $ref was not observed" >&2
-              return 1
-            fi
-            DISPATCH_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-            echo "$workflow run for $ref: ${DISPATCH_RUN_URL}"
-          }
           published_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           workflow_run="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           # The lock branch starts from the current main tip, not from the published
