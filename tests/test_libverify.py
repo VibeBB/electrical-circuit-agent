@@ -32,6 +32,7 @@ from circuit.partspec import (
     Reading,
     part_spec_sha256,
 )
+from pinout_fixtures import QUAD16_NAMES, geometry_for_names, pinout_drawing
 
 PadTransform = Callable[[LandPad], tuple[str, float, float, float, float, float]]
 
@@ -52,7 +53,7 @@ def _fresh_part_spec_check(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     def check(
-        _spec: PartSpec,
+        spec: PartSpec,
         _extraction: DatasheetExtraction,
         *,
         spec_path: Path,
@@ -66,6 +67,16 @@ def _fresh_part_spec_check(monkeypatch: pytest.MonkeyPatch) -> None:
             pdf_sha256="b" * 64,
             checked_readings=1,
             findings=[],
+            pinout=(
+                geometry_for_names(
+                    spec.pinout.labels_vision,
+                    pin_count=spec.package.pin_count,
+                    topology="quad" if spec.package.family == "no_lead_quad" else "dual",
+                    page=spec.pinout.page,
+                )
+                if spec.pinout is not None
+                else None
+            ),
         )
 
     monkeypatch.setattr(libverify_module, "check_part_spec", check)
@@ -141,6 +152,7 @@ def _dual_spec() -> PartSpec:
             extraction_path="extraction.json",
         ),
         package=package,
+        pinout=pinout_drawing({str(number): f"PIN{number}" for number in range(1, 5)}),
         pins=[
             PinSpec(
                 number=str(number),
@@ -244,6 +256,7 @@ def _vqfn_spec(*, pitch: float = 0.5) -> PartSpec:
         pin1_corner="top_left",
         pin1_reading=_reading("pin one top left"),
     )
+    pin_names = {**QUAD16_NAMES, "17": "EP"}
     return PartSpec(
         artifact_kind="circuit_part_spec",
         mpn="TESTVQFN16",
@@ -255,6 +268,7 @@ def _vqfn_spec(*, pitch: float = 0.5) -> PartSpec:
             extraction_path="extraction.json",
         ),
         package=package,
+        pinout=pinout_drawing(QUAD16_NAMES),
         land_pattern=LandPattern(
             source="datasheet",
             dimensions={"pitch": _dimension(pitch)},
@@ -263,7 +277,7 @@ def _vqfn_spec(*, pitch: float = 0.5) -> PartSpec:
         pins=[
             PinSpec(
                 number=str(pin_number),
-                name=f"PIN{pin_number}",
+                name=pin_names[str(pin_number)],
                 electrical_type="passive",
                 reading=_reading(f"{pin_number} PIN{pin_number}"),
             )
@@ -535,6 +549,7 @@ def test_part_spec_must_pass_fresh_check(
         reference=case[1],
     )
     assert "part_spec_unchecked" in _codes(report)
+    assert "pinout_unverified" in _codes(report)
 
 
 def test_supplied_part_spec_check_is_bound_to_current_spec(
@@ -543,6 +558,7 @@ def test_supplied_part_spec_check_is_bound_to_current_spec(
 ) -> None:
     case = _write_case(tmp_path, monkeypatch)
     spec, reference, spec_path, check_path, symbol_path, footprint_path = case
+    assert spec.pinout is not None
     check = PartSpecReport(
         artifact_kind="circuit_part_spec_check",
         verdict="pass",
@@ -551,6 +567,12 @@ def test_supplied_part_spec_check_is_bound_to_current_spec(
         pdf_sha256="b" * 64,
         checked_readings=1,
         findings=[],
+        pinout=geometry_for_names(
+            spec.pinout.labels_vision,
+            pin_count=spec.package.pin_count,
+            topology="dual",
+            page=spec.pinout.page,
+        ),
     )
     check_path.write_text(check.model_dump_json(), encoding="utf-8")
 
@@ -886,10 +908,16 @@ def _vqfn_case(
     *,
     pitch: float = 0.5,
     mutation: str | None = None,
+    symbol_kwargs: dict[str, object] | None = None,
 ) -> tuple[LibraryVerification, PartSpec]:
     spec = _vqfn_spec(pitch=pitch)
     reference = compute_land_pattern(spec)
-    case = _write_case(tmp_path, monkeypatch, spec=spec)
+    case = _write_case(
+        tmp_path,
+        monkeypatch,
+        spec=spec,
+        symbol_kwargs=symbol_kwargs,
+    )
     part_spec, _, spec_path, _check_path, symbol_path, footprint_path = case
     footprint = parse_footprint(footprint_path)
     pads: list[PadDef] = list(footprint.pads)
@@ -916,6 +944,19 @@ def _vqfn_case(
         for pad in pads:
             if pad.number in {"1", "2", "3", "4"}:
                 pad.y = (int(pad.number) - 2.5) * 0.65
+    elif mutation == "mirror_x":
+        for pad in pads:
+            pad.x = -pad.x
+    elif mutation == "rotate_180":
+        for pad in pads:
+            pad.x, pad.y = -pad.x, -pad.y
+    elif mutation == "swap_order":
+        centers = {pad.number: (pad.x, pad.y) for pad in pads if pad.number in {"2", "3"}}
+        for pad in pads:
+            if pad.number == "2":
+                pad.x, pad.y = centers["3"]
+            elif pad.number == "3":
+                pad.x, pad.y = centers["2"]
     if mutation is not None:
         _rewrite_footprint(footprint_path, footprint, pads)
     report = verify_library_part(
@@ -956,6 +997,7 @@ def test_correct_vqfn_fixture_and_regression_mutations(
 
     pin1, _ = _vqfn_case(tmp_path / "pin1", monkeypatch, mutation="pin1_top_right")
     assert "pin1_location" in _codes(pin1)
+    assert "footprint_rotation_mismatch" in _codes(pin1)
 
     ep_number, _ = _vqfn_case(tmp_path / "ep", monkeypatch, mutation="ep_number")
     assert "pad_set" in _codes(ep_number)
@@ -965,3 +1007,61 @@ def test_correct_vqfn_fixture_and_regression_mutations(
 
     pitch, _ = _vqfn_case(tmp_path / "pitch", monkeypatch, mutation="pitch_065")
     assert "pad_geometry" in _codes(pitch)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("mirror_x", "footprint_chirality_mismatch"),
+        ("rotate_180", "footprint_rotation_mismatch"),
+        ("swap_order", "footprint_order_mismatch"),
+    ],
+)
+def test_vqfn_pinout_orientation_findings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    report, _ = _vqfn_case(
+        tmp_path / mutation,
+        monkeypatch,
+        mutation=mutation,
+    )
+    assert expected_code in _codes(report)
+
+
+def test_dual_pinout_mirrored_footprint_reports_chirality(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report, _ = _verify(
+        tmp_path,
+        monkeypatch,
+        pad_transform=lambda pad: (
+            pad.number,
+            -pad.x,
+            pad.y,
+            pad.width,
+            pad.height,
+            0.0,
+        ),
+    )
+
+    assert "footprint_chirality_mismatch" in _codes(report)
+
+
+def test_symbol_pinout_mismatch_includes_permutation_diagnosis(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _vqfn_spec()
+    shifted_names = {str(number): spec.pins[number % 16].name for number in range(1, 17)}
+    report, _ = _vqfn_case(
+        tmp_path / "symbol-shift",
+        monkeypatch,
+        symbol_kwargs={"name_overrides": shifted_names},
+    )
+
+    assert "symbol_pinout_name_mismatch" in _codes(report)
+    assert "symbol_permutation_diagnosis" in _codes(report)

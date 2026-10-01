@@ -16,6 +16,7 @@ from circuit.partspec import (
     PinTable,
     Reading,
 )
+from pinout_fixtures import pinout_drawing
 
 
 def _reading(text: str = "drawing") -> Reading:
@@ -54,6 +55,9 @@ def _spec() -> PartSpec:
             extraction_path="extraction.json",
         ),
         package=package,
+        pinout=pinout_drawing(
+            {str(number): name for number, name in enumerate(pin_names, start=1)}
+        ),
         pins=[
             PinSpec(
                 number=str(index + 1),

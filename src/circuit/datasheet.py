@@ -14,8 +14,9 @@ import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from statistics import median
 from typing import Any, Literal, cast
 
 import pdfplumber
@@ -286,9 +287,114 @@ def _poppler_words(pdf_path: Path, page_number: int) -> tuple[list[PdfWord], str
         return words, ""
 
 
+def _is_rotated_char(char: Mapping[str, Any]) -> bool:
+    matrix = cast(Sequence[Any] | None, char.get("matrix"))
+    if not isinstance(matrix, (tuple, list)) or len(matrix) < 6:
+        return False
+    a, b = matrix[0], matrix[1]
+    return (
+        isinstance(a, (int, float))
+        and isinstance(b, (int, float))
+        and abs(float(b)) > abs(float(a))
+    )
+
+
+def _rotated_char_words(chars: Sequence[Mapping[str, Any]]) -> list[PdfWord]:
+    columns: dict[str, list[dict[str, Any]]] = {"btt": [], "ttb": []}
+    for char in chars:
+        if not _is_rotated_char(char):
+            continue
+        matrix = cast(Sequence[float], char["matrix"])
+        direction = "btt" if matrix[1] > 0 else "ttb"
+        columns[direction].append(dict(char))
+
+    words: list[PdfWord] = []
+    for direction, rotated in columns.items():
+        ordered_chars = sorted(
+            rotated,
+            key=lambda char: (
+                (float(char["x0"]) + float(char["x1"])) / 2,
+                float(char["top"]),
+            ),
+        )
+        grouped_columns: list[list[dict[str, Any]]] = []
+        for char in ordered_chars:
+            center_x = (float(char["x0"]) + float(char["x1"])) / 2
+            size = float(char.get("size") or (float(char["bottom"]) - float(char["top"])))
+            matching = [
+                column
+                for column in grouped_columns
+                if abs(
+                    center_x
+                    - median((float(item["x0"]) + float(item["x1"])) / 2 for item in column)
+                )
+                <= 0.3
+                * min(
+                    size,
+                    median(
+                        float(item.get("size") or (float(item["bottom"]) - float(item["top"])))
+                        for item in column
+                    ),
+                )
+            ]
+            if matching:
+                min(
+                    matching,
+                    key=lambda column: abs(
+                        center_x
+                        - median((float(item["x0"]) + float(item["x1"])) / 2 for item in column)
+                    ),
+                ).append(char)
+            else:
+                grouped_columns.append([char])
+
+        for column in grouped_columns:
+            column.sort(key=lambda char: (float(char["top"]), float(char["x0"])))
+            groups: list[list[dict[str, Any]]] = []
+            current: list[dict[str, Any]] = []
+            for char in column:
+                text = str(char.get("text", ""))
+                if text.isspace():
+                    if current:
+                        groups.append(current)
+                        current = []
+                    continue
+                if current:
+                    previous = current[-1]
+                    previous_size = float(
+                        previous.get("size") or (float(previous["bottom"]) - float(previous["top"]))
+                    )
+                    size = float(char.get("size") or (float(char["bottom"]) - float(char["top"])))
+                    gap = float(char["top"]) - float(previous["bottom"])
+                    if gap > 0.5 * min(previous_size, size):
+                        groups.append(current)
+                        current = []
+                current.append(char)
+            if current:
+                groups.append(current)
+
+            for group in groups:
+                ordered = group if direction == "ttb" else list(reversed(group))
+                words.append(
+                    PdfWord(
+                        text="".join(str(char.get("text", "")) for char in ordered),
+                        x0=min(float(char["x0"]) for char in group),
+                        top=min(float(char["top"]) for char in group),
+                        x1=max(float(char["x1"]) for char in group),
+                        bottom=max(float(char["bottom"]) for char in group),
+                    )
+                )
+    return sorted(words, key=lambda word: (word.top, word.x0))
+
+
 def _pdfplumber_words(page: Any) -> list[PdfWord]:
     words: list[PdfWord] = []
-    for word in cast(list[dict[str, Any]], page.extract_words()):
+
+    def is_normal_char(char: Mapping[str, Any]) -> bool:
+        return not _is_rotated_char(char)
+
+    filtered_page = page.filter(is_normal_char)
+    for word in cast(list[dict[str, Any]], filtered_page.extract_words()):
         words.append(
             PdfWord(
                 text=str(word["text"]),
@@ -298,7 +404,8 @@ def _pdfplumber_words(page: Any) -> list[PdfWord]:
                 bottom=float(word["bottom"]),
             )
         )
-    return words
+    words.extend(_rotated_char_words(cast(Sequence[Mapping[str, Any]], page.chars)))
+    return sorted(words, key=lambda word: (word.top, word.x0))
 
 
 def _ocr_words(png_path: Path, dpi: int) -> tuple[list[PdfWord], str]:

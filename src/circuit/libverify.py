@@ -17,6 +17,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from . import kicad_cli
+from . import pinout as pinout_oracle
 from .datasheet import load_extraction
 from .landpattern import Density, LandPatternResult, Rect, lead_rects
 from .libitems import (
@@ -41,6 +42,7 @@ from .partspec import (
     check_part_spec,
     part_spec_sha256,
 )
+from .pinout import PinoutGeometry
 
 
 class VerifyFinding(BaseModel):
@@ -243,6 +245,98 @@ def _check_symbol(
                 "symbol.Footprint",
                 f"Footprint property should be {expected_footprint}",
             )
+
+
+def _check_pinout_geometry(
+    spec: PartSpec,
+    check: PartSpecReport | None,
+    symbol: SymbolDef | None,
+    footprint: FootprintDef | None,
+    findings: list[VerifyFinding],
+) -> None:
+    required = spec.package.family in {
+        "no_lead_quad",
+        "no_lead_dual",
+        "gullwing_quad",
+        "gullwing_dual",
+    }
+    geometry: PinoutGeometry | None = check.pinout if check is not None else None
+    if required and geometry is None:
+        _finding(
+            findings,
+            "pinout_unverified",
+            "error",
+            "pinout",
+            "required pinout geometry is missing from the fresh PartSpec check",
+        )
+    if geometry is None:
+        return
+
+    drawing_positions = {label.number: (label.x, label.y) for label in geometry.labels}
+    pin_numbers = {str(number) for number in range(1, spec.package.pin_count + 1)}
+    if footprint is not None:
+        pad_positions: dict[str, list[tuple[float, float]]] = {}
+        for pad in footprint.pads:
+            if pad.number in pin_numbers and pad.type != "np_thru_hole":
+                pad_positions.setdefault(pad.number, []).append((pad.x, pad.y))
+        pad_centers = {
+            number: (
+                sum(point[0] for point in points) / len(points),
+                sum(point[1] for point in points) / len(points),
+            )
+            for number, points in pad_positions.items()
+        }
+        for issue in pinout_oracle.compare_orientation(drawing_positions, pad_centers):
+            _finding(
+                findings,
+                f"footprint_{issue.code}",
+                "error",
+                "footprint",
+                issue.message,
+            )
+
+    if symbol is None:
+        return
+    symbol_names: dict[str, list[str]] = {}
+    for pin in symbol.pins:
+        if pin.number in pin_numbers:
+            symbol_names.setdefault(pin.number, []).append(pin.name)
+    drawing_names: dict[str, str] = {}
+    for label in geometry.labels:
+        if label.name is not None:
+            drawing_names[label.number] = label.name
+    actual_names: dict[str, str] = {
+        number: sorted(names)[0] if names else "" for number, names in symbol_names.items()
+    }
+    mismatches: list[str] = []
+    for number in sorted(drawing_names, key=lambda value: int(value)):
+        expected = drawing_names[number]
+        actual = symbol_names.get(number, [])
+        if not actual or any(not pinout_oracle.names_equal(expected, name) for name in actual):
+            mismatches.append(number)
+            _finding(
+                findings,
+                "symbol_pinout_name_mismatch",
+                "error",
+                "symbol",
+                (
+                    f"symbol pin {number} names {sorted(actual) or ['missing']} "
+                    f"differ from pinout name {expected}"
+                ),
+            )
+    if mismatches:
+        hypotheses = pinout_oracle.diagnose_permutation(
+            drawing_positions,
+            drawing_names,
+            actual_names,
+        )
+        _finding(
+            findings,
+            "symbol_permutation_diagnosis",
+            "info",
+            "symbol",
+            f"symbol pinout permutation hypotheses: {', '.join(hypotheses) or 'none'}",
+        )
 
 
 def _pad_polygon(pad: PadDef) -> list[tuple[float, float]]:
@@ -1075,6 +1169,7 @@ def verify_library_part(
         raise ValueError("tolerance_mm must be finite and non-negative")
     findings: list[VerifyFinding] = []
     spec_hash = part_spec_sha256(spec_path) if spec_path.is_file() else ""
+    check: PartSpecReport | None = None
     try:
         if spec_check_path is not None:
             check = PartSpecReport.model_validate_json(spec_check_path.read_text(encoding="utf-8"))
@@ -1113,6 +1208,7 @@ def verify_library_part(
         footprint = None
     footprint_name = footprint.name if footprint is not None else footprint_path.stem
     _check_symbol(spec, symbol, symbol_lib, footprint_name, library_dir, findings)
+    _check_pinout_geometry(spec, check, symbol, footprint, findings)
 
     if footprint is None:
         _finding(findings, "pad_set", "error", "footprint", "footprint could not be parsed")
