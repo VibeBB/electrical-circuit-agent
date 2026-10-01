@@ -25,7 +25,7 @@ when_to_use_examples:
   - Create a schematic and pass ERC
 hooks:
   pre_tool_use:
-    - matcher: file_editor|apply_patch|terminal
+    - matcher: "*"
       hooks:
         - type: command
           name: protect-libraries

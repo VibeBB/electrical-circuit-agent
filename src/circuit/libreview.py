@@ -11,7 +11,7 @@ import os
 import re
 import tempfile
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from contextlib import suppress
 from pathlib import Path
 from statistics import median
@@ -21,12 +21,13 @@ import pdfplumber
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
-from . import authoring, datasheet, kicad_cli, visionread
+from . import advisory, authoring, datasheet, kicad_cli, visionread
 from . import pinout as pinout_oracle
 from .datasheet import DatasheetExtraction, PageExtraction
 from .landpattern import Density, LandPatternResult, compute_land_pattern
 from .libitems import FootprintDef, PadDef, SymbolDef, parse_footprint, parse_symbol
 from .libverify import LibraryVerification, VerifiedModel, VerifyFinding, verify_library_part
+from .lineage import FootprintLineage, lineage_path_for
 from .partspec import (
     Dimension,
     PartSpec,
@@ -38,6 +39,7 @@ from .partspec import (
     part_spec_sha256,
 )
 from .pinout import PinoutGeometry
+from .ruleprofile import EffectiveRules, load_rules
 
 EVENTS_DIR_ENV = "CIRCUIT_AGENT_EVENTS_DIR"
 DEFAULT_EVENTS_ROOT = Path(".openhands/agent-canvas/dev_conversations")
@@ -184,6 +186,8 @@ def packet_id(
     tolerance_mm: float,
     model_required: bool,
     authoring_sha256s: Iterable[str] = (),
+    lineage_sha256: str | None = None,
+    rule_chain_sha256: str | None = None,
 ) -> str:
     value = {
         "format": 1,
@@ -196,6 +200,8 @@ def packet_id(
         "density": density,
         "tolerance_mm": tolerance_mm,
         "model_required": model_required,
+        "lineage_sha256": lineage_sha256,
+        "rule_chain_sha256": rule_chain_sha256,
     }
     authoring_hashes = sorted(authoring_sha256s)
     if authoring_hashes:
@@ -206,6 +212,44 @@ def packet_id(
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _optional_sha256(path: Path) -> str | None:
+    try:
+        return _sha256(path) if path.is_file() else None
+    except OSError:
+        return None
+
+
+def _load_lineage(footprint_path: Path) -> FootprintLineage | None:
+    path = lineage_path_for(footprint_path)
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        return FootprintLineage.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _review_rules(
+    lineage: FootprintLineage | None,
+    rules_dir: Path,
+) -> tuple[EffectiveRules, bool]:
+    expected_hash = lineage.base.rule_chain_sha256 if lineage is not None else None
+    if expected_hash is None:
+        return load_rules("builtin:ipc7351b", rules_dir), True
+
+    profile_ids = ["builtin:ipc7351b", "builtin:kicad-generator"]
+    with suppress(OSError):
+        profile_ids.extend(path.stem for path in rules_dir.glob("*.json"))
+    for profile_id in sorted(set(profile_ids)):
+        try:
+            rules = load_rules(profile_id, rules_dir)
+        except (OSError, ValueError):
+            continue
+        if rules.chain_sha256 == expected_hash:
+            return rules, True
+    return load_rules("builtin:ipc7351b", rules_dir), False
 
 
 def _relative_or_absolute(base: Path, value: str) -> Path:
@@ -296,6 +340,11 @@ def current_packet_id(
             raise ValueError("authoring run path escapes the PartSpec directory")
         comparison = authoring.compare_runs(run_dir)
         authoring_hashes = list(comparison.sealed.values())
+    lineage = _load_lineage(footprint_path)
+    rules, _ = _review_rules(
+        lineage,
+        (library_dir / "rules") if library_dir is not None else (spec_dir / "library" / "rules"),
+    )
     return packet_id(
         pdf_sha256=_sha256(pdf_path),
         part_spec_sha256=part_spec_sha256(spec_path),
@@ -307,6 +356,8 @@ def current_packet_id(
         tolerance_mm=tolerance_mm,
         model_required=model_required,
         authoring_sha256s=authoring_hashes,
+        lineage_sha256=_optional_sha256(lineage_path_for(footprint_path)),
+        rule_chain_sha256=rules.chain_sha256,
     )
 
 
@@ -402,6 +453,7 @@ def blind_questions(
     spec: PartSpec,
     packet_id: str,
     authoring_comparison: authoring.AuthoringComparison | None = None,
+    comparison_evidence: Sequence[visionread.VisionComparisonEvidence] = (),
 ) -> list[BlindQuestion]:
     if not PACKET_ID_RE.fullmatch(packet_id):
         raise ValueError("packet_id must be 16 lowercase hexadecimal characters")
@@ -518,7 +570,140 @@ def blind_questions(
                     evidence_field=evidence_field,
                 )
             )
+    for item in comparison_evidence:
+        comparison = item.normalized
+        if comparison is None:
+            continue
+        differences = comparison.get("differences")
+        matches = (
+            comparison.get("pin1_matches"),
+            comparison.get("arrangement_matches"),
+            comparison.get("numbering_direction_matches"),
+        )
+        if (
+            all(value is True for value in matches)
+            and isinstance(differences, list)
+            and not differences
+        ):
+            continue
+        artifact_kind = "footprint" if item.item.kind == "compare_footprint" else "symbol"
+        difference_text = ""
+        if isinstance(differences, list):
+            difference_text = "; ".join(differences)
+        if not difference_text:
+            difference_text = "one or more visual match checks returned false"
+        questions.append(
+            BlindQuestion(
+                question_id=f"vision.{item.item.kind}.{item.item.read_id}",
+                prompt=(
+                    "Does the library match the datasheet here? yes/no "
+                    f"Vision differences: {difference_text}. "
+                    f"AI impression: {item.impression or 'unavailable'}"
+                ),
+                page=item.item.page,
+                bbox=item.item.bbox,
+                expected="yes",
+                evidence_field=f"comparison.{artifact_kind}.{item.item.read_id}",
+            )
+        )
     return questions
+
+
+def _comparison_evidence(
+    spec: PartSpec,
+    *,
+    spec_path: Path,
+    symbol_lib: Path,
+    footprint_path: Path,
+) -> list[visionread.VisionComparisonEvidence]:
+    spec_hash = _sha256(spec_path) if spec_path.is_file() else ""
+    if not spec_hash:
+        return []
+    records: list[visionread.VisionComparisonEvidence] = []
+    comparisons: tuple[
+        tuple[
+            visionread.VisionKind,
+            Literal["footprint", "symbol"],
+            Path,
+        ],
+        ...,
+    ] = (
+        ("compare_footprint", "footprint", footprint_path),
+        ("compare_symbol", "symbol", symbol_lib),
+    )
+    for kind, artifact_kind, path in comparisons:
+        artifact_hash = _sha256(path) if path.is_file() else ""
+        if not artifact_hash:
+            continue
+        current, _stale = visionread.find_comparison_evidence(
+            spec_path.resolve().parent,
+            kind=kind,
+            spec_sha256=spec_hash,
+            artifact_sha256=artifact_hash,
+            artifact_kind=artifact_kind,
+        )
+        records.extend(current)
+    return records
+
+
+def _comparison_image_path(
+    evidence: visionread.VisionComparisonEvidence,
+    item: visionread.VisionReadItem,
+) -> Path:
+    batch_dir = evidence.batch_path.resolve().parent
+    path = (batch_dir / item.image_path).resolve()
+    if not path.is_relative_to(batch_dir):
+        raise ValueError("comparison image path escapes its batch directory")
+    return path
+
+
+def _vision_review_image(path: Path, kind: str) -> dict[str, str]:
+    resolved = path.resolve(strict=True)
+    return {
+        "kind": kind,
+        "path": str(resolved),
+        "sha256": _sha256(resolved),
+        "review_record_path": str(advisory.review_record_path(resolved).resolve()),
+    }
+
+
+def _comparison_review_images(
+    evidence: Sequence[visionread.VisionComparisonEvidence],
+) -> list[dict[str, str]]:
+    images: dict[str, dict[str, str]] = {}
+    for record in evidence:
+        artifact_kind = record.item.kind.removeprefix("compare_")
+        for item in record.batch.items:
+            path = _comparison_image_path(record, item)
+            image = _vision_review_image(path, artifact_kind)
+            if image["sha256"] != item.image_sha256:
+                continue
+            images[image["path"]] = image
+    return [images[path] for path in sorted(images)]
+
+
+def _copy_comparison_crop(
+    evidence: visionread.VisionComparisonEvidence,
+    item: visionread.VisionReadItem,
+    target_dir: Path,
+) -> _CropRecord:
+    source = _comparison_image_path(evidence, item)
+    if not source.is_file() or _sha256(source) != item.image_sha256:
+        raise ValueError("comparison image is missing or stale")
+    artifact_kind = item.kind.removeprefix("compare_")
+    target = target_dir / f"comparison-{artifact_kind}-{item.read_id}.png"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(source.read_bytes())
+    return _CropRecord(
+        field=f"comparison.{artifact_kind}.{item.read_id}",
+        page=item.page,
+        path=target.as_posix(),
+        sha256=_sha256(target),
+        source_png_sha256=item.image_sha256,
+        bbox=item.bbox,
+        crop_bbox=item.crop_bbox,
+        scale=1.0,
+    )
 
 
 def _fresh_authoring_comparison(
@@ -811,6 +996,64 @@ def _normalise_answer(question_id: str, value: str) -> str:
     return normalized
 
 
+def _packet_vision_precheck(
+    library_dir: Path,
+    packet: dict[str, object],
+    packet_id: str,
+) -> list[str]:
+    if (
+        packet.get("artifact_kind") != "circuit_library_review_packet"
+        or packet.get("packet_id") != packet_id
+        or not isinstance(packet.get("blind_questions"), list)
+    ):
+        return ["packet_vision_precheck_missing"]
+    images = packet.get("vision_review_images")
+    if not isinstance(images, list):
+        return ["packet_vision_precheck_missing"]
+    project_root = library_dir.resolve().parent
+    for item in cast(list[object], images):
+        if not isinstance(item, dict):
+            return ["packet_vision_precheck_missing"]
+        item = cast(dict[str, object], item)
+        path_value = item.get("path")
+        digest = item.get("sha256")
+        record_value = item.get("review_record_path")
+        kind = item.get("kind")
+        if (
+            not isinstance(path_value, str)
+            or not isinstance(digest, str)
+            or not isinstance(record_value, str)
+            or kind not in {"footprint", "symbol"}
+        ):
+            return ["packet_vision_precheck_missing"]
+        checklist: Literal["footprint", "symbol"] = cast(Literal["footprint", "symbol"], kind)
+        try:
+            image_path = Path(path_value).resolve(strict=True)
+            record_path = Path(record_value).resolve(strict=True)
+            if (
+                not image_path.is_relative_to(project_root)
+                or not record_path.is_relative_to(project_root)
+                or _sha256(image_path) != digest
+            ):
+                return ["packet_vision_precheck_missing"]
+            record = advisory.AdvisoryResult.model_validate(
+                json.loads(record_path.read_text(encoding="utf-8"))
+            )
+            detail = advisory.parse_visual_review(record)
+        except (OSError, json.JSONDecodeError, ValueError):
+            return ["packet_vision_precheck_missing"]
+        if (
+            record.stage != "review"
+            or record.status != "ok"
+            or detail is None
+            or detail.checklist != checklist
+            or detail.image_sha256 != digest
+            or Path(detail.image_path).resolve() != image_path
+        ):
+            return ["packet_vision_precheck_missing"]
+    return []
+
+
 def review_status(
     library_dir: Path,
     spec: PartSpec,
@@ -822,6 +1065,26 @@ def review_status(
     if authoring_comparison is None and spec_path is not None:
         authoring_comparison = _fresh_authoring_comparison(spec, spec_path.resolve().parent)
     questions = blind_questions(spec, packet_id, authoring_comparison)
+    packet_path = library_dir / "reviews" / _safe_field(spec.mpn) / packet_id / "review.json"
+    packet_document: dict[str, object] = {}
+    try:
+        loaded_packet = json.loads(packet_path.read_text(encoding="utf-8"))
+        if isinstance(loaded_packet, dict):
+            candidate_packet = cast(dict[str, object], loaded_packet)
+            raw_questions = candidate_packet.get("blind_questions", [])
+            vision_questions: list[BlindQuestion] = []
+            if isinstance(raw_questions, list):
+                for raw_item in cast(list[object], raw_questions):
+                    if not isinstance(raw_item, dict):
+                        continue
+                    item = cast(dict[str, object], raw_item)
+                    question_id = item.get("question_id")
+                    if isinstance(question_id, str) and question_id.startswith("vision.compare_"):
+                        vision_questions.append(BlindQuestion.model_validate(item))
+                packet_document = candidate_packet
+                questions.extend(vision_questions)
+    except (OSError, json.JSONDecodeError, ValueError):
+        packet_document = {}
     decisions = load_decisions(library_dir, packet_id)
     expected = {question.question_id: question.expected for question in questions}
     valid_approvals: list[ReviewDecision] = []
@@ -839,6 +1102,14 @@ def review_status(
         if decision.decision == "reject":
             valid_rejections.append(decision)
         elif decision.decision == "approve":
+            comparison_no = any(
+                question_id.startswith("vision.compare_")
+                and _normalise_answer(question_id, answer) == "no"
+                for question_id, answer in decision.answers.items()
+            )
+            if comparison_no:
+                valid_rejections.append(decision.model_copy(update={"decision": "reject"}))
+                continue
             if decision.corrections:
                 status_reasons.append("approval_must_not_include_corrections")
                 continue
@@ -853,6 +1124,9 @@ def review_status(
                 status_reasons.append("human_review_blind_mismatch")
                 continue
             valid_approvals.append(decision)
+
+    if valid_approvals:
+        status_reasons.extend(_packet_vision_precheck(library_dir, packet_document, packet_id))
 
     def order(item: ReviewDecision) -> tuple[int, str]:
         return item.event_mtime_ns, item.event_name
@@ -2189,6 +2463,15 @@ def _review_html(review: dict[str, Any]) -> str:
     def escape(value: Any) -> str:
         return html.escape(str(value))
 
+    def record_items(value: object) -> list[dict[str, object]]:
+        if not isinstance(value, list):
+            return []
+        return [
+            cast(dict[str, object], item)
+            for item in cast(list[object], value)
+            if isinstance(item, dict)
+        ]
+
     findings = review["findings"]
     findings_html = (
         "".join(
@@ -2298,6 +2581,90 @@ def _review_html(review: dict[str, Any]) -> str:
         + "</tr>"
         for row in review.get("pinout_comparisons", [])
     )
+    raw_rule_chain = review.get("rule_chain")
+    rule_chain_data = (
+        cast(dict[str, object], raw_rule_chain) if isinstance(raw_rule_chain, dict) else {}
+    )
+    profile_chain = record_items(rule_chain_data.get("profiles"))
+    rule_chain_rows = "".join(
+        "<tr>"
+        f"<td>{escape(item.get('profile_id', '—'))}</td>"
+        f"<td>{escape(item.get('layer', '—'))}</td>"
+        f"<td>{escape(item.get('sha256', '—'))}</td>"
+        "</tr>"
+        for item in profile_chain
+    )
+    tuning = review.get("footprint_tuning")
+    tuning_html = "<p>No footprint lineage sidecar.</p>"
+    if isinstance(tuning, dict):
+        tuning_data = cast(dict[str, Any], tuning)
+        base = tuning_data.get("base")
+        base_html = ""
+        if isinstance(base, dict):
+            base_data = cast(dict[str, Any], base)
+            base_link = base_data.get("link")
+            base_path = escape(base_data.get("path", "—"))
+            base_sha256 = escape(base_data.get("sha256", "—"))
+            base_html = (
+                f'<p>Base: <a href="{escape(base_link)}">{base_path}</a> '
+                f"(SHA-256 {base_sha256})</p>"
+                if isinstance(base_link, str)
+                else f"<p>Base: {base_path} (SHA-256 {base_sha256})</p>"
+            )
+        change_rows = "".join(
+            "<tr>"
+            f"<td>{escape(item.get('pad', '—'))}</td>"
+            f"<td>{escape(item.get('field', '—'))}</td>"
+            f"<td>{escape(json.dumps(item.get('before'), ensure_ascii=False))}</td>"
+            f"<td>{escape(json.dumps(item.get('after'), ensure_ascii=False))}</td>"
+            "</tr>"
+            for item in record_items(tuning_data.get("changes"))
+        )
+        evidence_rows = "".join(
+            "<li>"
+            + (
+                f'<a href="{escape(item["link"])}">{escape(item.get("path", "Evidence"))}</a>'
+                if isinstance(item.get("link"), str)
+                else escape(item.get("path", "Evidence"))
+            )
+            + f" — SHA-256 {escape(item.get('sha256', '—'))}"
+            + (f" — {escape(item['note'])}" if item.get("note") else "")
+            + "</li>"
+            for item in record_items(tuning_data.get("evidence"))
+        )
+        deviation_rows = "".join(
+            "<tr>"
+            f"<td>{escape(item.get('pad', '—'))}</td>"
+            f"<td>{escape(json.dumps(item.get('reference_delta_mm'), sort_keys=True))}</td>"
+            f"<td>{escape(json.dumps(item.get('base_delta_mm'), sort_keys=True))}</td>"
+            "</tr>"
+            for item in record_items(tuning_data.get("intentional_deviations"))
+        )
+        sidecar_link = tuning_data.get("lineage_link")
+        sidecar_path = escape(tuning_data.get("lineage_path", "—"))
+        sidecar_html = (
+            f'<a href="{escape(sidecar_link)}">{sidecar_path}</a>'
+            if isinstance(sidecar_link, str)
+            else sidecar_path
+        )
+        tuning_html = (
+            f"<p>Lineage: {sidecar_html} — SHA-256 "
+            f"{escape(tuning_data.get('lineage_sha256', '—'))}</p>"
+            f"<p>Layer: {escape(tuning_data.get('layer', '—'))}; "
+            f"reason: {escape(tuning_data.get('reason', '—'))}</p>"
+            + base_html
+            + "<h3>Base-to-current pad changes</h3><table><thead><tr>"
+            "<th>Pad</th><th>Field</th><th>Base value</th><th>Current value</th>"
+            "</tr></thead><tbody>"
+            + (change_rows or '<tr><td colspan="4">None.</td></tr>')
+            + "</tbody></table><h3>Lineage evidence</h3><ul>"
+            + (evidence_rows or "<li>None.</li>")
+            + "</ul><h3>Intentional deviations from standard</h3>"
+            "<table><thead><tr><th>Pad</th><th>Delta vs IPC/manufacturer reference (mm)</th>"
+            "<th>Delta from base (mm)</th></tr></thead><tbody>"
+            + (deviation_rows or '<tr><td colspan="3">None.</td></tr>')
+            + "</tbody></table>"
+        )
 
     def dimension_crop(row: dict[str, Any]) -> str:
         path = row.get("crop_path")
@@ -2355,6 +2722,19 @@ def _review_html(review: dict[str, Any]) -> str:
         )
     else:
         overlay_html = "<p>Land-pattern overlay or cited page crop is unavailable.</p>"
+    vision_review_images_html = (
+        "".join(
+            f'<figure><a href="{escape(item.get("display_path", item["path"]))}">'
+            f'<img src="{escape(item.get("display_path", item["path"]))}" '
+            f'alt="{escape(item.get("kind", "Vision review image"))}" '
+            'style="max-height:320px;width:auto"></a>'
+            f"<figcaption>{escape(item.get('kind', 'image'))} · SHA-256 "
+            f"{escape(item.get('sha256', ''))}<br>Review record: "
+            f"<code>{escape(item.get('review_record_path', ''))}</code></figcaption></figure>"
+            for item in review.get("vision_review_images", [])
+        )
+        or "<p>No overlay or comparison images are listed.</p>"
+    )
     crop_records = review.get("crops", [])
 
     def crop_figure(item: dict[str, Any], caption: str) -> str:
@@ -2462,6 +2842,16 @@ def _review_html(review: dict[str, Any]) -> str:
         + render_items
         + "<h2>Placement overlay</h2>"
         + overlay_html
+        + "<h2>Footprint tuning</h2>"
+        + tuning_html
+        + "<h2>Rule chain</h2><table><thead><tr><th>Profile</th><th>Layer</th>"
+        "<th>SHA-256</th></tr></thead><tbody>"
+        + (rule_chain_rows or '<tr><td colspan="3">None.</td></tr>')
+        + "</tbody></table><p>Chain SHA-256: "
+        + escape(rule_chain_data.get("chain_sha256", "—"))
+        + "</p>"
+        + "<h2>Images requiring vision review before approval</h2>"
+        + vision_review_images_html
         + "<h2>Artifact hashes</h2><ul>"
         + hashes_html
         + "</ul><h2>Unknowns</h2><ul>"
@@ -2548,6 +2938,10 @@ def build_review_packet(
     part_spec_hash = safe_hash(spec_path)
     symbol_lib_sha256 = safe_hash(symbol_lib)
     footprint_sha256 = safe_hash(footprint_path)
+    lineage_path = lineage_path_for(footprint_path)
+    lineage_sha256 = _optional_sha256(lineage_path)
+    lineage = _load_lineage(footprint_path)
+    rules, rule_chain_resolved = _review_rules(lineage, library_dir / "rules")
     input_hashes: dict[str, Any] = {
         "pdf_sha256": pdf_sha256,
         "part_spec_sha256": part_spec_hash,
@@ -2558,6 +2952,8 @@ def build_review_packet(
         "density": density,
         "tolerance_mm": tolerance_mm,
         "model_required": model_required,
+        "lineage_sha256": lineage_sha256,
+        "rule_chain_sha256": rules.chain_sha256,
         "authoring_sha256s": (
             sorted(authoring_comparison.sealed.values()) if authoring_comparison is not None else []
         ),
@@ -2575,6 +2971,8 @@ def build_review_packet(
         authoring_sha256s=(
             authoring_comparison.sealed.values() if authoring_comparison is not None else ()
         ),
+        lineage_sha256=lineage_sha256,
+        rule_chain_sha256=rules.chain_sha256,
     )
     packet_dir = out_dir / _safe_field(spec.mpn) / current_id
     packet_dir.mkdir(parents=True, exist_ok=True)
@@ -2589,6 +2987,15 @@ def build_review_packet(
                 severity="error",
                 field="authoring",
                 message=authoring_error,
+            )
+        )
+    if lineage is not None and not rule_chain_resolved:
+        findings.append(
+            ReviewFinding(
+                code="lineage_rule_chain_unresolved",
+                severity="error",
+                field="lineage.base.rule_chain_sha256",
+                message="no current rule profile chain matches the lineage base hash",
             )
         )
     extraction: DatasheetExtraction | None = None
@@ -2642,7 +3049,7 @@ def build_review_packet(
     reference: LandPatternResult | None = None
     verification: LibraryVerification | None = None
     try:
-        reference = compute_land_pattern(spec, density)
+        reference = compute_land_pattern(spec, density, rules=rules)
         verification = verify_library_part(
             spec,
             spec_path=spec_path,
@@ -2654,6 +3061,7 @@ def build_review_packet(
             reference=reference,
             tolerance_mm=tolerance_mm,
             model_required=model_required,
+            rules=rules,
             output_path=packet_dir / "verification.json",
         )
         findings.extend(_finding_from_verify(item) for item in verification.findings)
@@ -2726,6 +3134,28 @@ def build_review_packet(
         symbol_def = parse_symbol(symbol_lib, symbol_name)
     vision_reads = _vision_read_records(spec, spec_dir)
     vision_by_field = {str(item["field"]): item for item in vision_reads}
+    comparison_evidence = _comparison_evidence(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_lib,
+        footprint_path=footprint_path,
+    )
+    for evidence in comparison_evidence:
+        for image_item in evidence.batch.items:
+            try:
+                record = _copy_comparison_crop(evidence, image_item, crop_dir)
+                record.path = _relative_path(packet_dir, Path(record.path))
+                crops[record.field] = record
+            except (OSError, ValueError) as exc:
+                findings.append(
+                    ReviewFinding(
+                        code="comparison_image_unavailable",
+                        severity="warning",
+                        field=image_item.field,
+                        message=str(exc),
+                        page=image_item.page,
+                    )
+                )
     pin_rows = _pin_table_rows(spec, extraction, evidence_dir) if extraction is not None else []
     pin_rows = _augment_pin_rows(pin_rows, symbol_def, footprint_def)
     _attach_pin_vision(pin_rows, vision_by_field)
@@ -2865,7 +3295,12 @@ def build_review_packet(
     elif "overlay_scale_unknown" not in unknowns:
         unknowns.append("overlay_scale_unknown")
 
-    questions = blind_questions(spec, current_id, authoring_comparison)
+    questions = blind_questions(
+        spec,
+        current_id,
+        authoring_comparison,
+        comparison_evidence,
+    )
     dimensions = _dimension_records(spec, crops, vision_by_field)
     extracted_pages: list[dict[str, Any]] = (
         [
@@ -2899,6 +3334,95 @@ def build_review_packet(
     artifact_hashes.update({f"render:{item['kind']}": item["sha256"] for item in renders})
     if overlay_record is not None:
         artifact_hashes["overlay"] = str(overlay_record["sha256"])
+    vision_review_images: list[dict[str, str]] = []
+    if overlay_record is not None:
+        overlay_image = _vision_review_image(
+            packet_dir / str(overlay_record["path"]),
+            "footprint",
+        )
+        overlay_image["display_path"] = str(overlay_record["path"])
+        vision_review_images.append(overlay_image)
+    comparison_images = _comparison_review_images(comparison_evidence)
+    for image in comparison_images:
+        for evidence in comparison_evidence:
+            artifact_kind = evidence.item.kind.removeprefix("compare_")
+            for image_item in evidence.batch.items:
+                if _comparison_image_path(evidence, image_item).as_posix() == image["path"]:
+                    record = crops.get(f"comparison.{artifact_kind}.{image_item.read_id}")
+                    if record is not None:
+                        image["display_path"] = record.path
+                    break
+        image.setdefault("display_path", image["path"])
+    vision_review_images.extend(comparison_images)
+    vision_review_images.sort(key=lambda item: item["path"])
+    artifact_hashes.update(
+        {
+            f"vision_review_image:{index}": item["sha256"]
+            for index, item in enumerate(vision_review_images)
+        }
+    )
+
+    def project_asset_link(path: Path) -> str | None:
+        project_root = library_dir.parent.resolve()
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(project_root)
+        except (OSError, ValueError):
+            return None
+        return Path(os.path.relpath(resolved, packet_dir.resolve())).as_posix()
+
+    def lineage_asset_link(value: str) -> str | None:
+        relative = Path(value)
+        if relative.is_absolute():
+            return None
+        return project_asset_link(library_dir.parent / relative)
+
+    deviations: list[dict[str, Any]] = []
+    if verification is not None:
+        marker = "deltas against reference and base in mm: "
+        for item in verification.findings:
+            if item.code != "intentional_tuning" or marker not in item.message:
+                continue
+            try:
+                parsed = json.loads(item.message.split(marker, 1)[1])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, list):
+                deviations.extend(
+                    cast(dict[str, Any], row)
+                    for row in cast(list[object], parsed)
+                    if isinstance(row, dict)
+                )
+
+    footprint_tuning: dict[str, Any] | None = None
+    if lineage_sha256 is not None:
+        footprint_tuning = {
+            "lineage_path": str(lineage_path),
+            "lineage_link": project_asset_link(lineage_path),
+            "lineage_sha256": lineage_sha256,
+            "intentional_deviations": deviations,
+        }
+        if lineage is not None:
+            evidence = [
+                {
+                    **item.model_dump(mode="json"),
+                    "link": lineage_asset_link(item.path),
+                }
+                for item in lineage.evidence
+            ]
+            footprint_tuning.update(
+                {
+                    "layer": lineage.layer,
+                    "product": lineage.product,
+                    "reason": lineage.reason,
+                    "base": {
+                        **lineage.base.model_dump(mode="json"),
+                        "link": lineage_asset_link(lineage.base.path),
+                    },
+                    "changes": [item.model_dump(mode="json") for item in lineage.changes],
+                    "evidence": evidence,
+                }
+            )
 
     severity_order = {"error": 0, "warning": 1, "info": 2}
     findings.sort(key=lambda item: (severity_order[item.severity], item.code, item.field))
@@ -2936,6 +3460,7 @@ def build_review_packet(
             }
             for item in questions
         ],
+        "vision_review_images": vision_review_images,
         "pin_comparisons": pin_rows,
         "pinout_comparisons": pinout_rows,
         "vision_reads": vision_reads,
@@ -2949,6 +3474,12 @@ def build_review_packet(
         "crops": [item.model_dump(mode="json") for item in crops.values()],
         "renders": renders,
         "models": [item.model_dump(mode="json") for item in model_records],
+        "footprint_tuning": footprint_tuning,
+        "rule_chain": {
+            "chain": rules.chain,
+            "chain_sha256": rules.chain_sha256,
+            "profiles": [item.model_dump(mode="json") for item in rules.profile_chain],
+        },
         "overlay": overlay_record,
         "land_pattern_crop": (
             {

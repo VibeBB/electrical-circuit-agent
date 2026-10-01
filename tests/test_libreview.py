@@ -19,6 +19,14 @@ from circuit.libverify import (
     VerifiedFootprint,
     VerifiedModel,
     VerifiedSymbol,
+    VerifyFinding,
+)
+from circuit.lineage import (
+    EvidenceRef,
+    FootprintBase,
+    FootprintLineage,
+    PadChange,
+    lineage_path_for,
 )
 from circuit.partspec import (
     CellRef,
@@ -136,6 +144,21 @@ def _write_event(
     suffix: str = "1",
     pointer_packet: str | None = None,
 ) -> Path:
+    packet_dir = library_dir / "reviews" / _spec().mpn / packet
+    packet_dir.mkdir(parents=True, exist_ok=True)
+    packet_document = packet_dir / "review.json"
+    if not packet_document.exists():
+        packet_document.write_text(
+            json.dumps(
+                {
+                    "artifact_kind": "circuit_library_review_packet",
+                    "packet_id": packet,
+                    "blind_questions": [],
+                    "vision_review_images": [],
+                }
+            ),
+            encoding="utf-8",
+        )
     events = tmp_path / "events"
     events.mkdir(exist_ok=True)
     event_path = events / f"event-{suffix}.json"
@@ -177,6 +200,8 @@ def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
         "tolerance_mm": 0.02,
         "model_required": True,
         "authoring_sha256s": ["f" * 64, "e" * 64],
+        "lineage_sha256": None,
+        "rule_chain_sha256": "0" * 64,
     }
 
     def packet_for(fields: dict[str, Any]) -> str:
@@ -191,6 +216,8 @@ def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
             tolerance_mm=cast(float, fields["tolerance_mm"]),
             model_required=cast(bool, fields["model_required"]),
             authoring_sha256s=cast(list[str], fields["authoring_sha256s"]),
+            lineage_sha256=cast(str | None, fields["lineage_sha256"]),
+            rule_chain_sha256=cast(str | None, fields["rule_chain_sha256"]),
         )
 
     first = packet_for(values)
@@ -208,6 +235,8 @@ def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
         ("tolerance_mm", 0.03),
         ("model_required", False),
         ("authoring_sha256s", ["0" * 64]),
+        ("lineage_sha256", "1" * 64),
+        ("rule_chain_sha256", "2" * 64),
     ):
         assert packet_for({**values, field: changed}) != first
 
@@ -302,6 +331,115 @@ def test_blind_questions_skip_pins_without_a_numbered_row_and_include_disagreeme
     assert question.evidence_field == "package.pitch"
     assert spec.package.pitch is not None
     assert question.bbox == spec.package.pitch.reading.bbox
+
+
+def test_vision_comparison_mismatch_adds_mandatory_rejection_question(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vision = libreview.visionread
+    item = vision.VisionReadItem(
+        read_id="compare01",
+        field="library.footprint",
+        kind="compare_footprint",
+        page=2,
+        bbox=(10, 20, 30, 40),
+        crop_bbox=(8, 18, 32, 42),
+        dpi=300,
+        rasterizer="pdftoppm",
+        image_path="images/compare01.png",
+        image_sha256="a" * 64,
+        prompt=vision.prompt_for_kind("compare_footprint"),
+        prompt_sha256="b" * 64,
+        bindings={
+            "part_spec_sha256": "c" * 64,
+            "artifact_sha256": "d" * 64,
+            "artifact_kind": "footprint",
+        },
+    )
+    batch = vision.VisionBatch(
+        artifact_kind="circuit_vision_read_batch",
+        batch_id="batch01",
+        created_at="2026-01-01T00:00:00Z",
+        lane="main",
+        profile="profile",
+        model="model",
+        pdf_path="part.pdf",
+        pdf_sha256="e" * 64,
+        items=[item],
+        control_salt="salt",
+        control_answer_sha256="f" * 64,
+        control_read_sha256="1" * 64,
+    )
+    answers = vision.VisionAnswerRecord(
+        artifact_kind="circuit_vision_read_answers",
+        batch_id=batch.batch_id,
+        answered_at="2026-01-01T00:00:00Z",
+        answers={item.read_id: "{}"},
+        impressions={item.read_id: "A clear and useful view. Some details remain uncertain."},
+        normalized={
+            item.read_id: {
+                "pin1_matches": True,
+                "arrangement_matches": False,
+                "numbering_direction_matches": True,
+                "differences": ["pad order differs"],
+            }
+        },
+        status={item.read_id: "ok"},
+        control_passed=True,
+    )
+    evidence = vision.VisionComparisonEvidence(
+        batch_path=tmp_path / "batch.json",
+        batch=batch,
+        item=item,
+        answers=answers,
+        normalized={
+            "pin1_matches": True,
+            "arrangement_matches": False,
+            "numbering_direction_matches": True,
+            "differences": ["pad order differs"],
+        },
+        impression=answers.impressions[item.read_id],
+        impression_valid=True,
+    )
+    questions = libreview.blind_questions(
+        _spec(),
+        "b" * 16,
+        comparison_evidence=[evidence],
+    )
+    question = next(
+        item for item in questions if item.question_id == "vision.compare_footprint.compare01"
+    )
+    assert question.expected == "yes"
+    assert "pad order differs" in question.prompt
+    assert question.evidence_field == "comparison.footprint.compare01"
+
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
+    library = tmp_path / "library"
+    packet = "b" * 16
+    packet_json = library / "reviews" / _spec().mpn / packet / "review.json"
+    packet_json.parent.mkdir(parents=True, exist_ok=True)
+    packet_json.write_text(
+        json.dumps(
+            {
+                "artifact_kind": "circuit_library_review_packet",
+                "packet_id": packet,
+                "blind_questions": [question.model_dump(mode="json")],
+                "vision_review_images": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    answers_by_question = _expected_answers(_spec(), packet)
+    answers_by_question[question.question_id] = "no"
+    _write_event(
+        tmp_path,
+        library,
+        packet,
+        _message(packet, answers=answers_by_question),
+    )
+    status = libreview.review_status(library, _spec(), packet)
+    assert status.state == "rejected"
 
 
 def test_unlabelled_exposed_pad_row_maps_to_the_part_symbol_and_footprint_pin(
@@ -790,6 +928,89 @@ def test_review_status_keeps_tampered_event_as_blocker_after_valid_approval(
     assert any(not item.integrity_valid for item in status.decisions)
 
 
+def test_review_status_requires_hash_bound_vision_reviews_for_packet_images(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
+    spec = _spec()
+    library = tmp_path / "library"
+    packet = "a" * 16
+    image_path = tmp_path / "library" / "reviews" / "packet-overlay.svg"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_text("<svg></svg>", encoding="utf-8")
+    review_json = library / "reviews" / spec.mpn / packet / "review.json"
+    review_json.parent.mkdir(parents=True, exist_ok=True)
+    review_json.write_text(
+        json.dumps(
+            {
+                "artifact_kind": "circuit_library_review_packet",
+                "packet_id": packet,
+                "blind_questions": [],
+                "vision_review_images": [
+                    {
+                        "path": str(image_path),
+                        "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
+                        "kind": "footprint",
+                        "review_record_path": str(
+                            libreview.advisory.review_record_path(image_path)
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_event(
+        tmp_path,
+        library,
+        packet,
+        _message(packet, answers=_expected_answers(spec, packet)),
+    )
+
+    missing = libreview.review_status(library, spec, packet)
+    assert missing.state == "invalid"
+    assert "packet_vision_precheck_missing" in missing.reasons
+
+    record_path = libreview.advisory.write_review_record(
+        image_path,
+        model="review-model",
+        checklist="footprint",
+        impression=(
+            "The overlay is readable and its pad arrangement is clear, with the "
+            "datasheet drawing visible beneath the proposed footprint. The red pad "
+            "outlines can be compared against the rounded land pattern, and the "
+            "highlighted pin-one pad is easy to locate. Some fine labels are small, "
+            "and I cannot independently confirm dimensions from this image alone."
+        ),
+        findings=[],
+    )
+    assert record_path == libreview.advisory.review_record_path(image_path)
+    record_document = json.loads(record_path.read_text(encoding="utf-8"))
+    record_document["detail"]["impression"] = "Too short."
+    record_path.write_text(json.dumps(record_document), encoding="utf-8")
+    invalid = libreview.review_status(library, spec, packet)
+    assert invalid.state == "invalid"
+    assert "packet_vision_precheck_missing" in invalid.reasons
+
+    record_path.unlink()
+    libreview.advisory.write_review_record(
+        image_path,
+        model="review-model",
+        checklist="footprint",
+        impression=(
+            "The overlay is readable and its pad arrangement is clear, with the "
+            "datasheet drawing visible beneath the proposed footprint. The red pad "
+            "outlines can be compared against the rounded land pattern, and the "
+            "highlighted pin-one pad is easy to locate. Some fine labels are small, "
+            "and I cannot independently confirm dimensions from this image alone."
+        ),
+        findings=[],
+    )
+    approved = libreview.review_status(library, spec, packet)
+    assert approved.state == "approved"
+
+
 def test_review_status_detects_tampering_wrong_answers_and_corrections(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1119,6 +1340,36 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     spec_path.write_text(spec.model_dump_json(), encoding="utf-8")
     library_dir = tmp_path / "library"
     library_dir.mkdir()
+    footprint_path = library_dir / "Modern.kicad_mod"
+    footprint_source = Path(__file__).parent / "data" / "library" / "modern.kicad_mod"
+    footprint_path.write_bytes(footprint_source.read_bytes())
+    base_path = tmp_path / "base.kicad_mod"
+    base_path.write_bytes(footprint_path.read_bytes())
+    evidence_path = tmp_path / "prototype.txt"
+    evidence_path.write_text("prototype evidence", encoding="utf-8")
+    lineage_rules = libreview.load_rules("builtin:kicad-generator", library_dir / "rules")
+    lineage = FootprintLineage(
+        artifact_kind="circuit_footprint_lineage",
+        footprint_sha256=hashlib.sha256(footprint_path.read_bytes()).hexdigest(),
+        layer="organization",
+        base=FootprintBase(
+            kind="generated",
+            path="base.kicad_mod",
+            sha256=hashlib.sha256(base_path.read_bytes()).hexdigest(),
+            rule_chain_sha256=lineage_rules.chain_sha256,
+        ),
+        changes=[PadChange(pad="1", field="width", before=0.3, after=0.32)],
+        reason="<script>production tweak</script>",
+        evidence=[
+            EvidenceRef(
+                kind="prototype",
+                path="prototype.txt",
+                sha256=hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+                note="<script>reviewed</script>",
+            )
+        ],
+    )
+    lineage_path_for(footprint_path).write_text(lineage.model_dump_json(), encoding="utf-8")
     model_dir = tmp_path / "models"
     model_dir.mkdir()
     model_path = model_dir / "Test.step"
@@ -1126,7 +1377,6 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     monkeypatch.setenv("KICAD10_3DMODEL_DIR", str(model_dir))
     data_dir = Path(__file__).parent / "data" / "library"
     symbol_lib = data_dir / "symbols.kicad_sym"
-    footprint_path = data_dir / "modern.kicad_mod"
     extraction_holder: dict[str, DatasheetExtraction] = {}
     comparison = libreview.authoring.AuthoringComparison(
         artifact_kind="circuit_part_authoring_comparison",
@@ -1201,10 +1451,12 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
         reference: LandPatternResult,
         tolerance_mm: float,
         model_required: bool,
+        rules: Any,
         output_path: Path,
     ) -> LibraryVerification:
         assert json.loads(spec_check_path.read_text(encoding="utf-8"))["verdict"] == fresh_verdict
         assert reference.source == "datasheet"
+        assert reference.rule_chain == rules.chain == ["builtin:kicad-generator"]
         del library_dir, model_required
         return LibraryVerification(
             artifact_kind="circuit_library_verification",
@@ -1236,7 +1488,18 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
                     sha256=hashlib.sha256(model_path.read_bytes()).hexdigest(),
                 )
             ],
-            findings=[],
+            findings=[
+                VerifyFinding(
+                    code="intentional_tuning",
+                    severity="info",
+                    subject="footprint",
+                    message=(
+                        "recorded pad deviations; deltas against reference and base in mm: "
+                        '[{"pad":"1","reference_delta_mm":{"width":0.02},'
+                        '"base_delta_mm":{"width":0.02}}]'
+                    ),
+                )
+            ],
         )
 
     def missing_cli(*_args: Any, **_kwargs: Any) -> list[Path]:
@@ -1289,6 +1552,15 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     blind_html = (packet.packet_dir / "01-blind.html").read_text(encoding="utf-8")
     assert packet.approvable is (fresh_verdict == "pass" and not regressed)
     assert packet.packet_id == review["packet_id"]
+    assert (
+        review["inputs"]["lineage_sha256"]
+        == hashlib.sha256(lineage_path_for(footprint_path).read_bytes()).hexdigest()
+    )
+    assert review["inputs"]["rule_chain_sha256"] == lineage_rules.chain_sha256
+    assert review["rule_chain"]["profiles"][0]["profile_id"] == "builtin:kicad-generator"
+    assert review["footprint_tuning"]["reason"] == "<script>production tweak</script>"
+    assert review["footprint_tuning"]["evidence"][0]["sha256"] == lineage.evidence[0].sha256
+    assert review["footprint_tuning"]["intentional_deviations"][0]["pad"] == "1"
     assert review["inputs"]["authoring_sha256s"] == sorted(comparison.sealed.values())
     assert review["artifact_hashes"]["authoring:a"] == comparison.sealed["a"]
     if regressed:
@@ -1332,6 +1604,9 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert "base64," not in review_html.lower()
     assert "http://" not in review_html.lower()
     assert "&lt;script&gt;lane A&lt;/script&gt;" in review_html
+    assert "&lt;script&gt;production tweak&lt;/script&gt;" in review_html
+    assert "&lt;script&gt;reviewed&lt;/script&gt;" in review_html
+    assert "Intentional deviations from standard" in review_html
     assert "Legible &amp; clear." in review_html
     assert "Land-pattern drawing-view crop" not in review_html
     assert "Pinout name-at-position" in review_html
@@ -1343,6 +1618,16 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert "3D visual review not included yet" in review["unknowns"]
     assert "model:0" in review["artifact_hashes"]
     assert review["overlay"] is not None
+    assert len(review["vision_review_images"]) == 1
+    vision_image = review["vision_review_images"][0]
+    assert vision_image["kind"] == "footprint"
+    assert (
+        Path(vision_image["path"]).read_bytes()
+        == (packet.packet_dir / review["overlay"]["path"]).read_bytes()
+    )
+    assert vision_image["sha256"] == review["overlay"]["sha256"]
+    assert vision_image["review_record_path"].endswith("review-visual-overlay.advisory.json")
+    assert "Images requiring vision review before approval" in review_html
     assert review["land_pattern_crop"] is not None
     assert review["land_pattern_crop"]["path"] == "crops/land_pattern.drawing_view.png"
     crop_fields = {item["field"]: item for item in review["crops"]}

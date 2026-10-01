@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Literal
 
@@ -141,6 +143,37 @@ def test_compare_runs_seals_consensus_models_impressions_and_observations(
     assert not comparison.disagreements
     path = write_comparison(run_dir, comparison)
     assert json.loads(path.read_text(encoding="utf-8"))["impressions"] == comparison.impressions
+
+
+def test_compare_runs_loads_control_sidecars_in_a_fresh_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir, _commit_a, _commit_b = _complete_run(tmp_path, monkeypatch)
+    for lane in ("a", "b"):
+        spec = json.loads((run_dir / lane / "part.spec.json").read_text(encoding="utf-8"))
+        reference = spec["package"]["body_length"]["reading"]["vision_read"]
+        batch_reference, _read_id = reference.split("#", maxsplit=1)
+        batch_path = run_dir / lane / batch_reference
+        payload = json.loads(batch_path.read_text(encoding="utf-8"))
+        sidecar = (batch_path.parent / payload["control_state_path"]).resolve()
+        assert sidecar.parent == run_dir / ".vision-control"
+
+    code = (
+        "from pathlib import Path; import sys; "
+        "from circuit.authoring import compare_runs; "
+        "result=compare_runs(Path(sys.argv[1])); "
+        "assert result.model_diversity == 'distinct' and not result.issues"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(run_dir)],
+        text=True,
+        capture_output=True,
+        cwd=Path(__file__).parents[1],
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(

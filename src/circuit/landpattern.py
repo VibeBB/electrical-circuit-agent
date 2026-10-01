@@ -5,11 +5,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .partspec import Dimension, LandPad, PartSpec
+
+if TYPE_CHECKING:
+    from .ruleprofile import EffectiveRules
 
 Density = Literal["most", "nominal", "least"]
 Family = Literal[
@@ -45,6 +48,8 @@ class LandPatternResult(BaseModel):
     pads: list[LandPad]
     courtyard: tuple[float, float, float, float]
     konnect_pads: list[dict[str, object]]
+    rule_chain: list[str] = Field(default_factory=list)
+    rule_chain_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +166,21 @@ def _goals(spec: PartSpec, density: Density) -> _Goals:
             }
         toe, heel, side, courtyard = values[density]
     return _Goals(toe=toe, heel=heel, side=side, courtyard=courtyard)
+
+
+def _effective_goals(spec: PartSpec, density: Density, rules: EffectiveRules | None) -> _Goals:
+    goals = _goals(spec, density)
+    if rules is None:
+        return goals
+    override = rules.goal_overrides.get(_family(spec))
+    if override is None:
+        return goals
+    return _Goals(
+        toe=goals.toe if override.toe is None else override.toe,
+        heel=goals.heel if override.heel is None else override.heel,
+        side=goals.side if override.side is None else override.side,
+        courtyard=(goals.courtyard if override.courtyard is None else override.courtyard),
+    )
 
 
 def _pitch(spec: PartSpec) -> float:
@@ -356,10 +376,11 @@ def _datasheet_pattern(
     density: Density,
     fabrication_tolerance: float,
     placement_tolerance: float,
+    rules: EffectiveRules | None,
 ) -> LandPatternResult:
     if spec.land_pattern is None:
         raise LandPatternError("datasheet land-pattern is absent")
-    goals = _goals(spec, density)
+    goals = _effective_goals(spec, density, rules)
     pads = list(spec.land_pattern.pads)
     return LandPatternResult(
         family=_family(spec),
@@ -376,18 +397,34 @@ def _datasheet_pattern(
         pads=pads,
         courtyard=_courtyard(spec, pads, goals.courtyard),
         konnect_pads=_konnect_pads(pads, set()),
+        rule_chain=[] if rules is None else rules.chain,
+        rule_chain_sha256=None if rules is None else rules.chain_sha256,
     )
 
 
 def compute_land_pattern(
     spec: PartSpec,
-    density: Density = "nominal",
+    density: Density | None = None,
     *,
-    fabrication_tolerance: float = 0.05,
-    placement_tolerance: float = 0.025,
+    rules: EffectiveRules | None = None,
+    fabrication_tolerance: float | None = None,
+    placement_tolerance: float | None = None,
 ) -> LandPatternResult:
     """Compute supported IPC-7351B pads in KiCad top-view coordinates."""
 
+    density = (
+        density if density is not None else (rules.density if rules is not None else "nominal")
+    )
+    fabrication_tolerance = (
+        fabrication_tolerance
+        if fabrication_tolerance is not None
+        else (rules.fabrication_tolerance if rules is not None else 0.05)
+    )
+    placement_tolerance = (
+        placement_tolerance
+        if placement_tolerance is not None
+        else (rules.placement_tolerance if rules is not None else 0.025)
+    )
     if density not in ("most", "nominal", "least"):
         raise LandPatternError(f"unsupported density level: {density}")
     if (
@@ -399,9 +436,15 @@ def compute_land_pattern(
         raise LandPatternError("tolerances must be finite and non-negative")
     family = _family(spec)
     if spec.land_pattern is not None and spec.land_pattern.source == "datasheet":
-        return _datasheet_pattern(spec, density, fabrication_tolerance, placement_tolerance)
+        return _datasheet_pattern(
+            spec,
+            density,
+            fabrication_tolerance,
+            placement_tolerance,
+            rules,
+        )
 
-    goals = _goals(spec, density)
+    goals = _effective_goals(spec, density, rules)
     placements = _placements(spec)
     terminal_length = _bounds(_required_dimension(spec, "lead_length"), field="package.lead_length")
     if family == "chip":
@@ -505,6 +548,8 @@ def compute_land_pattern(
         pads=pads,
         courtyard=_courtyard(spec, pads, goals.courtyard),
         konnect_pads=_konnect_pads(pads, vertical),
+        rule_chain=[] if rules is None else rules.chain,
+        rule_chain_sha256=None if rules is None else rules.chain_sha256,
     )
 
 

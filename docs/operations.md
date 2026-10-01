@@ -62,6 +62,11 @@ impression for every image, including the control image; failed submissions
 write no answers. The fixed table prompt returns normalized rows of cell
 strings, which PartSpec checks compare with the cited pin and orderable cells.
 Pinout labels are also checked against freshly derived geometry when available.
+Control identity is stored in exclusive, hash-bound `.vision-control/` sidecars
+outside batches and authoring lanes, so later processes can re-derive reads.
+Agent pre-tool guards deny references to those sidecars as context isolation,
+not as a security boundary; see
+[ADR-0028](adr/ADR-0028-tool-managed-vision-and-blind-authoring.md).
 Image reads and author commits are recorded by their post-tool hooks when
 observation logging is enabled. Configure
 `vibebb-part-author-a` and `vibebb-part-author-b` independently for model
@@ -72,6 +77,38 @@ impressions, and are compared only after both commits. Library verification
 requires a valid authoring comparison; review packets bind sealed hashes and
 show per-image and author impressions as human context, not as scores. See
 [ADR-0028](adr/ADR-0028-tool-managed-vision-and-blind-authoring.md).
+
+Land-pattern and library-verification MCP calls accept an optional
+`rule_profile`, resolved from `<library_dir>/rules/<profile_id>.json`; for
+land-pattern calls without an explicit library directory, the default is
+`<part-spec directory>/library`. The Python API accepts an already-resolved
+`EffectiveRules`. Built-in profiles are `builtin:ipc7351b` and
+`builtin:kicad-generator`. User profiles form a parent-hash-bound chain and
+must keep evidence paths project-relative. Organization and product profiles
+need both a non-empty rationale and hash-verified evidence. Change a profile
+by writing a new profile file with the parent's current SHA-256 rather than
+editing an existing parent in place.
+
+A tuned footprint uses a sibling
+`<footprint>.kicad_mod.lineage.json` file. Bind the current footprint and base
+hashes, name each changed pad field, give a reason, and include project-relative
+evidence references with SHA-256 values. The verifier recomputes the changes
+and keeps pinout, pin-1, lead-containment, clearance, courtyard, and silk
+checks active. Review packets show lineage evidence and intentional deviations;
+editing the lineage or effective rule chain invalidates the packet.
+
+Library verification can run the pinned KLC checker as a GPL subprocess and
+the KiCad test-board oracles. KLC findings are read from JUnit XML only;
+functional groups are errors and naming/metadata findings are warnings.
+Unavailable tools or unusable reports fail closed. Test-board DRC filters only
+the expected `unconnected_items` finding; assembly and geometry oracles remain
+authoritative. Footprint and symbol vision comparison results are advisory,
+but mismatches require a blind human yes/no answer. Every packet-listed overlay
+or comparison image must have a current hash-bound `vision_review` record with
+a valid impression before approval. These review records are stored next to
+their images at the `review_record_path` listed in `review.json`.
+The image fetches KLC with a depth-one Git fetch of the pinned commit, verifies
+the checked-out `HEAD` against that commit, and removes the checkout metadata.
 
 Every project-library part also requires a human review bound to the current
 PDF, PartSpec, symbol, footprint, 3D-model hashes, and verification settings.

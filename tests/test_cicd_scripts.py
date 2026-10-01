@@ -16,6 +16,7 @@ from scripts.check_dependency_updates import (
     check_apt_packages,
     check_docker_args,
     check_docker_base,
+    check_git_commit_pins,
     check_kicad_ppa,
     check_pypi_lock,
     check_python_versions,
@@ -263,6 +264,65 @@ def test_check_docker_args_reads_release_tags(tmp_path: Path) -> None:
     ]
     assert [status.latest for status in statuses] == ["0.13.0", "2.4.1", "27.0.1.0"]
     assert [status.outdated for status in statuses] == [True, False, True]
+
+
+def test_check_git_commit_pins_tracks_klc_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    docker = tmp_path / "docker"
+    docker.mkdir()
+    (docker / "circuit-tools.Dockerfile").write_text(
+        "ARG KICAD_LIBRARY_UTILS_COMMIT=90b0af91eaffcd91552027c3bfd166896f78c7de\n",
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> SimpleNamespace:
+        calls.append(args)
+        return SimpleNamespace(stdout=f"{'b' * 40}\tHEAD\n")
+
+    monkeypatch.setattr(dependency_updates_module.subprocess, "run", fake_run)
+
+    statuses = check_git_commit_pins(tmp_path)
+
+    assert calls == [
+        [
+            "git",
+            "ls-remote",
+            "https://gitlab.com/kicad/libraries/kicad-library-utils.git",
+            "HEAD",
+        ]
+    ]
+    assert statuses == [
+        Status(
+            "KiCad Library Utils",
+            "90b0af91eaffcd91552027c3bfd166896f78c7de",
+            "b" * 40,
+            "GitLab HEAD",
+            True,
+        )
+    ]
+
+
+def test_klc_docker_acquisition_uses_verified_git_commit() -> None:
+    dockerfile = Path("docker/circuit-tools.Dockerfile").read_text(encoding="utf-8")
+    dockerfile = " ".join(dockerfile.replace("\\", " ").split())
+
+    assert "ARG KICAD_LIBRARY_UTILS_COMMIT=90b0af91eaffcd91552027c3bfd166896f78c7de" in dockerfile
+    assert "KICAD_LIBRARY_UTILS_SHA256" not in dockerfile
+    assert "git -C /opt/kicad-library-utils init" in dockerfile
+    assert (
+        "git -C /opt/kicad-library-utils fetch --depth 1 "
+        "https://gitlab.com/kicad/libraries/kicad-library-utils.git" in dockerfile
+    )
+    assert "git -C /opt/kicad-library-utils checkout FETCH_HEAD" in dockerfile
+    assert (
+        'git -C /opt/kicad-library-utils rev-parse HEAD)" '
+        '= "${KICAD_LIBRARY_UTILS_COMMIT}"' in dockerfile
+    )
+    assert "rm -rf /opt/kicad-library-utils/.git" in dockerfile
+    assert "kicad-library-utils-${KICAD_LIBRARY_UTILS_COMMIT}.tar.gz" not in dockerfile
 
 
 def test_check_apt_packages_are_unpinned_rows() -> None:

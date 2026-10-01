@@ -1,5 +1,7 @@
 import hashlib
+import json
 import math
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -22,6 +24,14 @@ from circuit.partspec import (
     PinSpec,
     PinTable,
     Reading,
+)
+from circuit.ruleprofile import (
+    EvidenceRef,
+    GoalOverride,
+    PasteRule,
+    RuleProfile,
+    load_rules,
+    profile_sha256,
 )
 from pinout_fixtures import pinout_drawing
 
@@ -377,3 +387,91 @@ def test_invalid_tolerance_and_quad_side_counts_are_rejected() -> None:
         compute_land_pattern(spec)
     with pytest.raises(LandPatternError, match="tolerances"):
         compute_land_pattern(spec, fabrication_tolerance=math.nan)
+
+
+def test_effective_rules_and_explicit_overrides_preserve_default_behavior(
+    tmp_path: Path,
+) -> None:
+    spec = _spec(
+        family="gullwing_dual",
+        pin_count=4,
+        body_length=_dimension(3.0),
+        body_width=_dimension(2.0),
+        pitch=_dimension(1.27),
+        lead_span=_dimension(4.0),
+        lead_length=_dimension(0.5),
+        lead_width=_dimension(0.4),
+    )
+    default = compute_land_pattern(spec)
+    builtin = load_rules("builtin:ipc7351b", tmp_path / "library" / "rules")
+    selected = compute_land_pattern(spec, rules=builtin)
+
+    assert selected.params == default.params
+    assert selected.pads == default.pads
+    assert selected.courtyard == default.courtyard
+    assert selected.rule_chain == ["builtin:ipc7351b"]
+    assert selected.rule_chain_sha256 == builtin.chain_sha256
+
+    rules_dir = tmp_path / "library" / "rules"
+    child = RuleProfile(
+        artifact_kind="circuit_rule_profile",
+        profile_id="product.custom",
+        layer="product",
+        parent="builtin:ipc7351b",
+        parent_sha256=profile_sha256(
+            RuleProfile(
+                artifact_kind="circuit_rule_profile",
+                profile_id="builtin:ipc7351b",
+                layer="standard",
+                parent=None,
+                standard="ipc7351b",
+                density="nominal",
+                fabrication_tolerance=0.05,
+                placement_tolerance=0.025,
+                min_pad_clearance_mm=0.15,
+                min_ep_to_pad_clearance_mm=0.2,
+                min_mask_web_mm=0.1,
+                paste=PasteRule(
+                    coverage_min=0.5,
+                    coverage_max=1.0,
+                    ep_coverage_min=0.5,
+                    ep_coverage_max=0.8,
+                ),
+            )
+        ),
+        rationale="prototype measured",
+        evidence=[
+            EvidenceRef(
+                kind="prototype",
+                path="prototype.txt",
+                sha256=hashlib.sha256(b"prototype").hexdigest(),
+            )
+        ],
+        goal_overrides={"gullwing_dual": GoalOverride(toe=0.45)},
+        fabrication_tolerance=0.08,
+        placement_tolerance=0.04,
+    )
+    rules_dir.mkdir(parents=True)
+    (tmp_path / "prototype.txt").write_text("prototype", encoding="utf-8")
+    (rules_dir / "product.custom.json").write_text(
+        json.dumps(child.model_dump(mode="json")), encoding="utf-8"
+    )
+    product = load_rules("product.custom", rules_dir)
+
+    overridden = compute_land_pattern(
+        spec,
+        "most",
+        rules=product,
+        fabrication_tolerance=0.09,
+        placement_tolerance=0.03,
+    )
+    assert overridden.params["F"] == 0.09
+    assert overridden.params["P"] == 0.03
+    assert overridden.params["toe"] == 0.45
+    assert overridden.rule_chain == ["builtin:ipc7351b", "product.custom"]
+    assert overridden.rule_chain_sha256 == product.chain_sha256
+
+    from_profile = compute_land_pattern(spec, rules=product)
+    assert from_profile.params["F"] == 0.08
+    assert from_profile.params["P"] == 0.04
+    assert from_profile.params["toe"] == 0.45

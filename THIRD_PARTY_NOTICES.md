@@ -40,6 +40,28 @@ legal advice.
   - symbols `202609271717+716edc43f~12~ubuntu26.04.1`
   - footprints `202609270717+b5e7a752f~14~ubuntu26.04.1`
 
+## KiCad Library Convention checker
+
+- License: GPL-3.0
+- Source: <https://gitlab.com/kicad/libraries/kicad-library-utils>
+- Commit: `90b0af91eaffcd91552027c3bfd166896f78c7de`
+- Acquisition: depth-one Git fetch of the pinned commit; checkout `HEAD` is
+  verified against the commit before `.git` is removed from the image.
+- Redistribution: the pinned source is used only as an unmodified subprocess;
+  no checker code is imported or copied into the Python runtime.
+- In-image LICENSE and source record:
+  `/usr/share/doc/kicad-library-utils/LICENSE` and `SOURCE`
+
+## KiCad footprint generator numeric references
+
+- License: GPL-3.0
+- Source: <https://gitlab.com/kicad/libraries/kicad-footprint-generator>
+- Commit: `eaee2837c34188adbf652ce7e5b2374541108cd1`
+- Numeric facts referenced by the built-in `builtin:kicad-generator` profile:
+  fabrication tolerance `0.1 mm`, placement tolerance `0.05 mm`, and minimum
+  exposed-pad-to-pad clearance `0.2 mm`.
+- No source code from this project is copied into this repository.
+
 ## CERN KiCad libraries
 
 - License: CERN-OHL-P-2.0

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,7 +22,11 @@ from circuit.visionread import (
     VisionReadRequest,
     _render_pdfium,  # pyright: ignore[reportPrivateUsage]
     _render_pdftoppm,  # pyright: ignore[reportPrivateUsage]
+    _write_batch,  # pyright: ignore[reportPrivateUsage]
+    create_comparison_batch,
     create_read_batch,
+    find_comparison_evidence,
+    load_vision_read,
     record_answers,
 )
 from vision_fixtures import FIXTURE_CONTROL, FIXTURE_IMPRESSION
@@ -242,6 +249,166 @@ def _batch(
     return batch_dir / "batch.json", batch
 
 
+def _assert_control_hidden(batch_path: Path) -> None:
+    payload = json.loads(batch_path.read_text(encoding="utf-8"))
+    items = payload["items"]
+    assert len({frozenset(item) for item in items}) == 1
+    allowed_control_values = {
+        "read_id",
+        "image_path",
+        "image_sha256",
+        "bbox",
+        "crop_bbox",
+        "page",
+    }
+    assert all(
+        value != "control" or key in allowed_control_values
+        for item in items
+        for key, value in item.items()
+    )
+    assert "control_salt" not in payload
+    assert "control_read_sha256" not in payload
+    assert "control_answer_sha256" not in payload
+    assert isinstance(payload["control_state_sha256"], str)
+    assert len(payload["field_bindings"]) == len(items)
+    sidecar_path = (batch_path.parent / payload["control_state_path"]).resolve()
+    assert hashlib.sha256(sidecar_path.read_bytes()).hexdigest() == payload["control_state_sha256"]
+    assert sidecar_path.parent.name == ".vision-control"
+    assert not sidecar_path.is_relative_to(batch_path.parent.resolve())
+    assert set(json.loads(sidecar_path.read_text(encoding="utf-8"))) == {
+        "batch_id",
+        "control_salt",
+        "control_read_sha256",
+        "control_answer_sha256",
+    }
+
+
+def test_read_batch_blinds_persisted_items_and_restores_field_bindings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    _assert_control_hidden(batch_path)
+    item = next(entry for entry in batch.items if not entry.control)
+    answers: dict[str, dict[str, object]] = {
+        entry.read_id: {
+            "answer": FIXTURE_CONTROL if entry.control else '[["1", "SW"]]',
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for entry in batch.items
+    }
+    record_answers(batch_path, answers)
+
+    loaded_batch, loaded_item, answer_record = load_vision_read(
+        tmp_path, f"vision-batch/batch.json#{item.read_id}"
+    )
+
+    assert loaded_batch.field_bindings == batch.field_bindings
+    assert loaded_item.field == "pin_table"
+    assert not loaded_item.control
+    assert answer_record.batch_id == batch.batch_id
+
+
+def test_answer_write_and_load_work_after_a_fresh_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    item = next(entry for entry in batch.items if not entry.control)
+    answers = {
+        entry.read_id: {
+            "answer": FIXTURE_CONTROL if entry.control else '[["1", "SW"]]',
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for entry in batch.items
+    }
+    code = (
+        "import json,sys; from pathlib import Path; "
+        "from circuit.visionread import record_answers,load_vision_read; "
+        "p=json.load(sys.stdin); record_answers(Path(p['batch_path']),p['answers']); "
+        "_,item,record=load_vision_read(Path(p['spec_dir']),p['reference']); "
+        "assert item.field=='pin_table' and record.control_passed"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        input=json.dumps(
+            {
+                "batch_path": str(batch_path),
+                "spec_dir": str(tmp_path),
+                "reference": f"vision-batch/batch.json#{item.read_id}",
+                "answers": answers,
+            }
+        ),
+        text=True,
+        capture_output=True,
+        cwd=Path(__file__).parents[1],
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    loaded_batch, loaded_item, answer_record = load_vision_read(
+        tmp_path, f"vision-batch/batch.json#{item.read_id}"
+    )
+    assert loaded_batch.batch_id == batch.batch_id
+    assert loaded_item.field == "pin_table"
+    assert answer_record.control_passed
+
+
+@pytest.mark.parametrize("failure", ["missing", "tampered"])
+def test_control_state_sidecar_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    payload = json.loads(batch_path.read_text(encoding="utf-8"))
+    sidecar_path = (batch_path.parent / payload["control_state_path"]).resolve()
+    if failure == "missing":
+        sidecar_path.unlink()
+        message = "control state sidecar is missing or unreadable"
+    else:
+        sidecar_path.write_text(sidecar_path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+        message = "control state sidecar SHA-256 mismatch"
+
+    with pytest.raises(VisionReadError, match=message):
+        record_answers(
+            batch_path,
+            {
+                entry.read_id: {
+                    "answer": FIXTURE_CONTROL if entry.control else '[["1", "SW"]]',
+                    "impression": FIXTURE_IMPRESSION,
+                }
+                for entry in batch.items
+            },
+        )
+
+
+def test_control_state_sidecar_is_created_exclusively(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _batch(tmp_path, monkeypatch)
+    original = batch_path.read_bytes()
+
+    with pytest.raises(VisionReadError, match="vision control state already exists"):
+        _write_batch(batch_path.parent, batch)
+
+    assert batch_path.read_bytes() == original
+
+
+def test_legacy_batch_without_field_bindings_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, _batch_value = _batch(tmp_path, monkeypatch)
+    payload = json.loads(batch_path.read_text(encoding="utf-8"))
+    del payload["field_bindings"]
+    batch_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(VisionReadError, match="legacy vision batch"):
+        record_answers(batch_path, {})
+
+
 def test_table_prompt_and_normalization_are_fixed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -359,6 +526,108 @@ def test_table_answer_with_wrong_shape_is_unparseable(
     record = record_answers(batch_path, answers)
 
     assert record.status[item.read_id] == "unparseable"
+
+
+def test_comparison_batch_binds_hashes_and_requires_mirrored_control(
+    tmp_path: Path,
+) -> None:
+    extraction_path = _extraction(tmp_path)
+    composite_path = tmp_path / "comparison.png"
+    Image.new("RGB", (120, 60), "white").save(composite_path, format="PNG")
+    artifact_hash = "b" * 64
+    spec_hash = "a" * 64
+    batch = create_comparison_batch(
+        extraction_path,
+        composite_path,
+        kind="compare_footprint",
+        page=1,
+        bbox=(10.0, 10.0, 90.0, 90.0),
+        crop_bbox=(8.0, 8.0, 92.0, 92.0),
+        dpi=300,
+        rasterizer="pdftoppm",
+        split_x=60,
+        spec_sha256=spec_hash,
+        artifact_sha256=artifact_hash,
+        artifact_kind="footprint",
+    )
+    batch_path = tmp_path / "vision-reads" / batch.batch_id / "batch.json"
+    _assert_control_hidden(batch_path)
+    answers: dict[str, dict[str, object]] = {
+        item.read_id: {
+            "answer": (
+                '{"pin1_matches":true,"arrangement_matches":false,'
+                '"numbering_direction_matches":true,"differences":[]}'
+                if item.control
+                else '{"pin1_matches":true,"arrangement_matches":true,'
+                '"numbering_direction_matches":true,"differences":[]}'
+            ),
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for item in batch.items
+    }
+    record = record_answers(batch_path, answers)
+
+    current, stale = find_comparison_evidence(
+        tmp_path,
+        kind="compare_footprint",
+        spec_sha256=spec_hash,
+        artifact_sha256=artifact_hash,
+        artifact_kind="footprint",
+    )
+    wrong_hash, has_stale = find_comparison_evidence(
+        tmp_path,
+        kind="compare_footprint",
+        spec_sha256=spec_hash,
+        artifact_sha256="c" * 64,
+        artifact_kind="footprint",
+    )
+
+    assert record.control_passed
+    assert not stale
+    assert len(current) == 1
+    assert current[0].normalized is not None
+    assert current[0].impression_valid
+    assert current[0].item.field == "library.footprint"
+    assert not current[0].item.control
+    assert wrong_hash == []
+    assert has_stale
+
+
+def test_comparison_control_fails_when_mirror_is_not_detected(
+    tmp_path: Path,
+) -> None:
+    extraction_path = _extraction(tmp_path)
+    composite_path = tmp_path / "comparison.png"
+    Image.new("RGB", (120, 60), "white").save(composite_path, format="PNG")
+    batch = create_comparison_batch(
+        extraction_path,
+        composite_path,
+        kind="compare_symbol",
+        page=1,
+        bbox=(10.0, 10.0, 90.0, 90.0),
+        crop_bbox=(8.0, 8.0, 92.0, 92.0),
+        dpi=300,
+        rasterizer="pdftoppm",
+        split_x=60,
+        spec_sha256="a" * 64,
+        artifact_sha256="b" * 64,
+        artifact_kind="symbol",
+    )
+    batch_path = tmp_path / "vision-reads" / batch.batch_id / "batch.json"
+    answers: dict[str, dict[str, object]] = {
+        item.read_id: {
+            "answer": (
+                '{"pin1_matches":true,"arrangement_matches":true,'
+                '"numbering_direction_matches":true,"differences":[]}'
+            ),
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for item in batch.items
+    }
+
+    record = record_answers(batch_path, answers)
+
+    assert not record.control_passed
 
 
 def test_successful_answer_write_is_answer_once(

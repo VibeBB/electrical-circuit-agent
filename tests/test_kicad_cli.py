@@ -522,6 +522,7 @@ def test_reports_equivalent_ignores_only_date(tmp_path: Path) -> None:
         ("pcb_pdf", "board.kicad_pcb"),
         ("pcb_svg", "board.kicad_pcb"),
         ("dxf", "board.kicad_pcb"),
+        ("ipcd356", "board.kicad_pcb"),
         ("ipc2581", "board.kicad_pcb"),
         ("odb", "board.kicad_pcb"),
         ("gencad", "board.kicad_pcb"),
@@ -553,6 +554,9 @@ def test_new_export_kinds_build_expected_argv(
     elif kind in {"pcb_svg", "dxf"}:
         assert output_arg == tmp_path / "out"
         assert "F.Cu,B.Cu,Edge.Cuts" in calls[0]
+    elif kind == "ipcd356":
+        assert calls[0][0:3] == ["pcb", "export", "ipcd356"]
+        assert output_arg == tmp_path / "out" / "board.ipcd356"
     elif kind == "pcb_pdf":
         assert output_arg == tmp_path / "out" / "board.pdf"
         assert "F.Cu,B.Cu,Edge.Cuts" in calls[0]

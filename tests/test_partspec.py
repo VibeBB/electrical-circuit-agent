@@ -1,6 +1,8 @@
 import hashlib
 import json
 import math
+import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
@@ -577,6 +579,46 @@ def test_load_part_spec_hash_and_happy_path(tmp_path: Path) -> None:
     assert report.checked_readings == 6
     assert report.extraction_sha256 == hashlib.sha256(extraction_path.read_bytes()).hexdigest()
     assert any(finding.code == "reading_order_divergence" for finding in report.findings)
+
+
+def test_partspec_gate_loads_vision_sidecars_in_a_fresh_process(tmp_path: Path) -> None:
+    _spec, _extraction, spec_path, extraction_path = _fixture(tmp_path)
+    derived, derived_dir = _REDERIVED_BY_PDF[(tmp_path / "parts.pdf").resolve()]
+    derived_path = tmp_path / "rederived-extraction.json"
+    derived_path.write_text(derived.model_dump_json(), encoding="utf-8")
+    code = (
+        "import json,sys; from pathlib import Path; "
+        "from circuit.datasheet import DatasheetExtraction; "
+        "from circuit.partspec import check_part_spec,load_part_spec; "
+        "import circuit.partspec as partspec; "
+        "p=json.load(sys.stdin); "
+        "derived=DatasheetExtraction.model_validate_json("
+        "Path(p['derived']).read_text(encoding='utf-8')); "
+        "partspec.rederive_pages=lambda *_args,**_kwargs:(derived,Path(p['derived_dir'])); "
+        "spec_path=Path(p['spec']); extraction_path=Path(p['extraction']); "
+        "extraction=DatasheetExtraction.model_validate_json("
+        "extraction_path.read_text(encoding='utf-8')); "
+        "report=check_part_spec(load_part_spec(spec_path),extraction,"
+        "spec_path=spec_path,extraction_path=extraction_path); "
+        "assert report.verdict == 'pass', report.model_dump_json()"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        input=json.dumps(
+            {
+                "derived": str(derived_path),
+                "derived_dir": str(derived_dir),
+                "spec": str(spec_path),
+                "extraction": str(extraction_path),
+            }
+        ),
+        text=True,
+        capture_output=True,
+        cwd=Path(__file__).parents[1],
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_datasheet_sha_mismatch_and_missing_file(tmp_path: Path) -> None:

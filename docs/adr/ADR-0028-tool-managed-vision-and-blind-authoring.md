@@ -19,8 +19,17 @@ need to remain blind to each other's conclusions until both have committed.
   models and batches contain one to seven requested images plus a control
   image. Crops are padded by four points, clamped to the page, rasterized at
   300–1200 DPI, and rejected above the image-size limit rather than tiled.
-  Batch metadata and `batch.json` are written atomically. Lane B uses pdfium;
-  lane A and other lanes use Poppler, configurable through
+  The public `batch.json` is written atomically without per-item field or
+  control markers; salted field bindings are restored by the tool. Control
+  identity and validation secrets are written atomically and exclusively to a
+  hash-bound sidecar in `.vision-control/`, rooted at the extraction context
+  (or at the authoring run root above lane A/B). Every loader resolves the
+  relative sidecar reference and verifies its SHA-256 before restoring the
+  salted bindings. The sidecar is written before `batch.json`. Pre-tool guards
+  deny every agent tool argument, file read, or terminal command that
+  references `.vision-control/`; only the MCP server reads it during normal
+  operation. This is context isolation, not a security boundary. Lane B uses
+  pdfium; lane A and other lanes use Poppler, configurable through
   `CIRCUIT_PDFTOPPM`. The tool returns prompts, metadata, and image paths, not
   mechanical extraction text.
 - Each visual answer, including the batch control, includes an answer and a
@@ -61,6 +70,14 @@ need to remain blind to each other's conclusions until both have committed.
 - Review packets bind the A/B sealed hashes into packet identity, show each
   visual impression next to its answer, and render both author impressions
   verbatim with HTML escaping.
+- Footprint and symbol comparisons bind the PartSpec and current library
+  artifact hashes, and their mirrored-image control must be detected. A
+  mismatch remains a warning for deterministic verification and becomes a
+  mandatory blind yes/no question for the human reviewer.
+- Review packets list every overlay and comparison image with its SHA-256 and
+  expected `vision_review` record path. Approval requires a valid,
+  impression-bearing review record bound to every listed image; a missing,
+  stale, unreadable, or mismatched record blocks approval.
 - The lane guard prevents accidental cross-lane reads through the agent
   tools; it is a context-isolation policy, not a security boundary.
 
