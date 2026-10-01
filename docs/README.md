@@ -37,3 +37,7 @@
 | [0022](adr/ADR-0022-tscircuit-not-adopted.md) | tscircuit evaluated and not adopted |
 | [0023](adr/ADR-0023-firmware-pinmap-interchange.md) | Firmware pin map interchange with firmware-agent |
 | [0024](adr/ADR-0024-attest-published-tools-images.md) | Attest published tools images |
+
+## Research
+
+- [SDK v1.50.1 feature evaluation](research/sdk-v1.50.1-feature-evaluation.md) — OpenHands SDK/tools adoption decisions

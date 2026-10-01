@@ -51,7 +51,7 @@ JRE is extracted to `/opt/jre` and resolved via `JAVA_HOME`/`PATH`; the JAR is
 placed at `/opt/freerouting/freerouting.jar`, which Konnect v0.12.1 discovers
 via its built-in search roots (see ADR-0021). The CERN commit is recorded in
 `/opt/circuit/libraries/cern-kicad-libs.commit` and the OCI label
-`circuit.cern.commit`. Because the SDK v1.50.0 server image build requires
+`circuit.cern.commit`. Because the SDK v1.50.1 server image build requires
 root-privileged apt/useradd on the base image, the tools image's default user is
 root. For standalone runs specify `--user circuit`; in the server image use the
 `openhands` user created by the SDK. Docker itself does not guarantee
