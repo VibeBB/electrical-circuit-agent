@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from PIL import Image
 
+from circuit import authoring, visionread
 from circuit import libverify as libverify_module
 from circuit.datasheet import DatasheetExtraction
 from circuit.landpattern import LandPatternResult, compute_land_pattern
@@ -33,6 +35,7 @@ from circuit.partspec import (
     part_spec_sha256,
 )
 from pinout_fixtures import QUAD16_NAMES, geometry_for_names, pinout_drawing
+from vision_fixtures import FIXTURE_IMPRESSION
 
 PadTransform = Callable[[LandPad], tuple[str, float, float, float, float, float]]
 
@@ -412,6 +415,8 @@ def _write_case(
     footprint_kwargs: dict[str, object] | None = None,
 ) -> tuple[PartSpec, LandPatternResult, Path, Path, Path, Path]:
     spec = _dual_spec() if spec is None else spec
+    authoring_ref = Path("authoring") / "part" / "run-1"
+    spec = spec.model_copy(update={"authoring": authoring_ref.as_posix()})
     reference = compute_land_pattern(spec)
     symbol_dir = tmp_path / "library"
     symbol_dir.mkdir(parents=True, exist_ok=True)
@@ -439,8 +444,97 @@ def _write_case(
     )
     spec_path = tmp_path / "part-spec.json"
     spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    run_dir = tmp_path / authoring_ref
+    run_dir.mkdir(parents=True)
+    for lane, model in (("a", "model-a"), ("b", "model-b")):
+        lane_dir = run_dir / lane
+        lane_dir.mkdir()
+        lane_spec_path = lane_dir / "part-spec.json"
+        lane_spec = spec.model_copy(deep=True, update={"authoring": None})
+        _attach_authoring_read(lane_spec, lane_dir, lane)
+        lane_spec_path.write_text(
+            lane_spec.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CIRCUIT_AUTHORING_LANE", lane)
+        authoring.commit_lane(
+            run_dir,
+            lane_spec_path,
+            profile=f"profile-{lane}",
+            model=model,
+            impression=FIXTURE_IMPRESSION,
+        )
     report_path = tmp_path / "part-spec-check.json"
     return spec, reference, spec_path, report_path, symbol_path, footprint_path
+
+
+def _attach_authoring_read(spec: PartSpec, lane_dir: Path, lane: str) -> None:
+    batch_dir = lane_dir / "vision-reads" / f"fixture-{lane}"
+    batch_dir.mkdir(parents=True)
+    prompt = visionread.prompt_for_kind("transcribe")
+    rasterizer: visionread.Rasterizer = "pdftoppm" if lane == "a" else "pdfium"
+    control_id = f"control-{lane}"
+    read_id = f"read-{lane}"
+    control_answer = "ABC234"
+    timestamp = "2025-01-01T00:00:00+00:00"
+
+    def make_item(read_id: str, field: str, *, control: bool) -> visionread.VisionReadItem:
+        image_path = batch_dir / f"{read_id}.png"
+        Image.new("RGB", (1, 1), color="white").save(image_path, format="PNG")
+        return visionread.VisionReadItem(
+            read_id=read_id,
+            field=field,
+            kind="transcribe",
+            page=1,
+            bbox=(0, 0, 1, 1),
+            crop_bbox=(0, 0, 1, 1),
+            dpi=300,
+            rasterizer=rasterizer,
+            image_path=image_path.name,
+            image_sha256=hashlib.sha256(image_path.read_bytes()).hexdigest(),
+            prompt=prompt,
+            prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            control=control,
+        )
+
+    control_salt = f"fixture-salt-{lane}"
+    batch = visionread.VisionBatch(
+        artifact_kind="circuit_vision_read_batch",
+        batch_id=f"fixture-{lane}",
+        created_at=timestamp,
+        lane=lane,
+        profile=f"profile-{lane}",
+        model=f"model-{lane}",
+        pdf_path=spec.datasheet.path,
+        pdf_sha256=spec.datasheet.sha256,
+        items=[
+            make_item(control_id, "control", control=True),
+            make_item(read_id, "package.body_length", control=False),
+        ],
+        control_salt=control_salt,
+        control_answer_sha256=hashlib.sha256(
+            f"{control_salt}{control_answer.casefold()}".encode()
+        ).hexdigest(),
+        control_read_sha256=hashlib.sha256(f"{control_salt}{control_id}".encode()).hexdigest(),
+    )
+    answers = visionread.VisionAnswerRecord(
+        artifact_kind="circuit_vision_read_answers",
+        batch_id=batch.batch_id,
+        answered_at=timestamp,
+        answers={control_id: control_answer, read_id: "3.0"},
+        impressions={
+            control_id: FIXTURE_IMPRESSION,
+            read_id: FIXTURE_IMPRESSION,
+        },
+        normalized={control_id: control_answer, read_id: "3.0"},
+        status={control_id: "ok", read_id: "ok"},
+        control_passed=True,
+    )
+    (batch_dir / "batch.json").write_text(batch.model_dump_json(indent=2), encoding="utf-8")
+    (batch_dir / "answers.json").write_text(answers.model_dump_json(indent=2), encoding="utf-8")
+    spec.package.body_length.reading.vision_read = (
+        f"vision-reads/fixture-{lane}/batch.json#{read_id}"
+    )
 
 
 def _fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int = 0) -> None:
@@ -507,6 +601,39 @@ def test_valid_library_part_passes_and_writes_default_report(
     assert report.footprint.sha256 == hashlib.sha256(footprint_path.read_bytes()).hexdigest()
     assert report.models[0].resolved
     assert (footprint_path.parent / "verification" / "SOIC-4.verification.json").is_file()
+
+
+def test_library_verification_enforces_authoring_consensus_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _report, case = _verify(tmp_path, monkeypatch)
+    spec, reference, spec_path, _check_path, symbol_path, footprint_path = case
+    changed = spec.model_copy(update={"manufacturer": "Different"})
+    spec_path.write_text(changed.model_dump_json(indent=2), encoding="utf-8")
+
+    report = verify_library_part(
+        changed,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=changed.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+    )
+
+    assert "authoring_consensus_violated" in _codes(report)
+    missing = changed.model_copy(update={"authoring": None})
+    report = verify_library_part(
+        missing,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=missing.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+    )
+    assert "authoring_missing" in _codes(report)
 
 
 def test_part_spec_must_pass_fresh_check(

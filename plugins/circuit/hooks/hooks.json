@@ -17,6 +17,11 @@
           "type": "command",
           "name": "ensure-llm-profiles",
           "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/ensure_llm_profiles.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/ensure_llm_profiles.py\""
+        },
+        {
+          "type": "command",
+          "name": "ensure-part-author-profiles",
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/ensure_part_author_profiles.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/ensure_part_author_profiles.py\""
         }
       ]
     }
@@ -84,7 +89,7 @@
   ],
   "post_tool_use": [
     {
-      "matcher": "circuit_render|circuit_diff|circuit_rasterize|file_editor",
+      "matcher": "circuit_render|circuit_diff|circuit_rasterize|circuit_vision_read|file_editor",
       "hooks": [
         {
           "type": "command",
@@ -100,6 +105,16 @@
           "type": "command",
           "name": "record-vision-tool-event",
           "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_vision_tool_event.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_vision_tool_event.py\""
+        }
+      ]
+    },
+    {
+      "matcher": "circuit_part_author_commit",
+      "hooks": [
+        {
+          "type": "command",
+          "name": "record-authoring-commit",
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_authoring_commit.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_authoring_commit.py\""
         }
       ]
     }

@@ -21,7 +21,7 @@ import pdfplumber
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
-from . import datasheet, kicad_cli
+from . import authoring, datasheet, kicad_cli, visionread
 from . import pinout as pinout_oracle
 from .datasheet import DatasheetExtraction, PageExtraction
 from .landpattern import Density, LandPatternResult, compute_land_pattern
@@ -54,6 +54,7 @@ class BlindQuestion(BaseModel):
     page: int
     bbox: tuple[float, float, float, float] | None
     expected: str
+    evidence_field: str | None = None
 
 
 class ReviewFinding(BaseModel):
@@ -182,6 +183,7 @@ def packet_id(
     density: Density,
     tolerance_mm: float,
     model_required: bool,
+    authoring_sha256s: Iterable[str] = (),
 ) -> str:
     value = {
         "format": 1,
@@ -195,6 +197,9 @@ def packet_id(
         "tolerance_mm": tolerance_mm,
         "model_required": model_required,
     }
+    authoring_hashes = sorted(authoring_sha256s)
+    if authoring_hashes:
+        value["authoring_sha256s"] = authoring_hashes
     canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
@@ -284,6 +289,13 @@ def current_packet_id(
         library_dir=library_dir,
         project_dir=(library_dir.parent if library_dir is not None else spec_dir),
     )
+    authoring_hashes: list[str] = []
+    if spec.authoring is not None:
+        run_dir = (spec_dir / spec.authoring).resolve()
+        if not run_dir.is_relative_to(spec_dir):
+            raise ValueError("authoring run path escapes the PartSpec directory")
+        comparison = authoring.compare_runs(run_dir)
+        authoring_hashes = list(comparison.sealed.values())
     return packet_id(
         pdf_sha256=_sha256(pdf_path),
         part_spec_sha256=part_spec_sha256(spec_path),
@@ -294,6 +306,7 @@ def current_packet_id(
         density=density,
         tolerance_mm=tolerance_mm,
         model_required=model_required,
+        authoring_sha256s=authoring_hashes,
     )
 
 
@@ -333,7 +346,63 @@ def _readings(spec: PartSpec) -> list[tuple[str, Reading, Dimension | None]]:
     return values
 
 
-def blind_questions(spec: PartSpec, packet_id: str) -> list[BlindQuestion]:
+def _authoring_question_region(
+    spec: PartSpec,
+    pointer: str,
+) -> tuple[int, tuple[float, float, float, float] | None, str]:
+    tokens = [
+        token.replace("~1", "/").replace("~0", "~")
+        for token in pointer.removeprefix("/").split("/")
+    ]
+    reading: Reading | None = None
+    field = "pin_table"
+    page = spec.pin_table.page
+    if tokens[:1] == ["package"]:
+        package_field = tokens[1] if len(tokens) > 1 else ""
+        dimension = getattr(spec.package, package_field, None)
+        if isinstance(dimension, Dimension):
+            reading = dimension.reading
+            field = f"package.{package_field}"
+        elif package_field in {
+            "drawing_id",
+            "drawing_revision",
+            "drawing_view",
+            "pin1_corner",
+            "pin_count",
+        }:
+            reading = spec.package.pin1_reading
+            field = "package.drawing_view"
+    elif tokens[:1] == ["land_pattern"] and len(tokens) > 2:
+        if tokens[1] == "dimensions":
+            dimension = spec.land_pattern.dimensions.get(tokens[2]) if spec.land_pattern else None
+            if dimension is not None:
+                reading = dimension.reading
+                field = f"land_pattern.dimensions.{tokens[2]}"
+    elif tokens[:1] == ["pins"] and len(tokens) > 1:
+        pin = next((item for item in spec.pins if item.number == tokens[1]), None)
+        if pin is not None:
+            reading = pin.reading
+            field = f"pins.{pin.number}.reading"
+    elif tokens[:1] == ["orderable"] and len(tokens) > 1:
+        variant = next((item for item in spec.orderable if item.mpn == tokens[1]), None)
+        if variant is not None:
+            index = spec.orderable.index(variant)
+            reading = variant.reading
+            field = f"orderable.{index}.row"
+    elif tokens[:1] == ["pinout"] and spec.pinout is not None:
+        reading = spec.pinout.view_reading
+        field = "pinout"
+    if reading is not None:
+        page = reading.page
+        return page, reading.bbox, field
+    return page, None, field
+
+
+def blind_questions(
+    spec: PartSpec,
+    packet_id: str,
+    authoring_comparison: authoring.AuthoringComparison | None = None,
+) -> list[BlindQuestion]:
     if not PACKET_ID_RE.fullmatch(packet_id):
         raise ValueError("packet_id must be 16 lowercase hexadecimal characters")
     pin_reading = spec.package.pin1_reading
@@ -396,7 +465,11 @@ def blind_questions(spec: PartSpec, packet_id: str) -> list[BlindQuestion]:
     exposed_number = (
         spec.package.exposed_pad.number if spec.package.exposed_pad is not None else None
     )
-    pins = [pin for pin in spec.pins if pin.number != exposed_number]
+    pins = [
+        pin
+        for pin in spec.pins
+        if pin.number != exposed_number and pin.number in _pin_number_tokens(pin.reading.vision)
+    ]
 
     def number_key(value: str) -> tuple[int, int | str]:
         return (0, int(value)) if value.isdigit() else (1, value.casefold())
@@ -423,7 +496,95 @@ def blind_questions(spec: PartSpec, packet_id: str) -> list[BlindQuestion]:
                 expected=pin.name,
             )
         )
+    if authoring_comparison is not None:
+        for index, disagreement in enumerate(authoring_comparison.disagreements):
+            page, bbox, evidence_field = _authoring_question_region(spec, disagreement.pointer)
+            expected = disagreement.a if disagreement.a is not None else disagreement.b
+            expected_text = (
+                expected
+                if isinstance(expected, str)
+                else json.dumps(expected, ensure_ascii=False, sort_keys=True)
+            )
+            questions.append(
+                BlindQuestion(
+                    question_id=f"authoring.{index}",
+                    prompt=(
+                        f"Independent authors disagree about {disagreement.pointer}. "
+                        "What value is supported by the datasheet?"
+                    ),
+                    page=page,
+                    bbox=bbox,
+                    expected=expected_text,
+                    evidence_field=evidence_field,
+                )
+            )
     return questions
+
+
+def _fresh_authoring_comparison(
+    spec: PartSpec,
+    spec_dir: Path,
+) -> authoring.AuthoringComparison | None:
+    if spec.authoring is None:
+        return None
+    reference = Path(spec.authoring)
+    if reference.is_absolute():
+        raise ValueError("authoring run path must be relative to the PartSpec directory")
+    run_dir = (spec_dir / reference).resolve()
+    if not run_dir.is_relative_to(spec_dir.resolve()):
+        raise ValueError("authoring run path escapes the PartSpec directory")
+    return authoring.compare_runs(run_dir)
+
+
+def _vision_read_records(spec: PartSpec, spec_dir: Path) -> list[dict[str, Any]]:
+    references = [
+        (field, reading.vision_read)
+        for field, reading, _ in _readings(spec)
+        if reading.vision_read is not None
+    ]
+    references.extend(
+        (field, reference)
+        for field, reference in (
+            ("pin_table", spec.pin_table.vision_read),
+            ("orderable", spec.orderable_vision_read),
+            (
+                "pinout.labels_vision",
+                spec.pinout.labels_vision_read if spec.pinout is not None else None,
+            ),
+        )
+        if reference is not None
+    )
+    result: list[dict[str, Any]] = []
+    for field, reference in sorted(set(references)):
+        try:
+            _, item, answers = visionread.load_vision_read(spec_dir, reference)
+            normalized = answers.normalized.get(item.read_id)
+            result.append(
+                {
+                    "field": field,
+                    "read_id": item.read_id,
+                    "answer": answers.answers.get(item.read_id, ""),
+                    "normalized_answer": (
+                        normalized
+                        if isinstance(normalized, str)
+                        else json.dumps(normalized, ensure_ascii=False, sort_keys=True)
+                        if normalized is not None
+                        else ""
+                    ),
+                    "impression": answers.impressions.get(item.read_id, ""),
+                }
+            )
+        except (OSError, ValueError):
+            result.append(
+                {
+                    "field": field,
+                    "read_id": reference.rsplit("#", 1)[-1],
+                    "answer": "",
+                    "normalized_answer": "",
+                    "impression": "",
+                }
+            )
+    return result
 
 
 def _message_texts(value: Any, key: str = "") -> list[str]:
@@ -650,8 +811,17 @@ def _normalise_answer(question_id: str, value: str) -> str:
     return normalized
 
 
-def review_status(library_dir: Path, spec: PartSpec, packet_id: str) -> ReviewStatus:
-    questions = blind_questions(spec, packet_id)
+def review_status(
+    library_dir: Path,
+    spec: PartSpec,
+    packet_id: str,
+    *,
+    spec_path: Path | None = None,
+    authoring_comparison: authoring.AuthoringComparison | None = None,
+) -> ReviewStatus:
+    if authoring_comparison is None and spec_path is not None:
+        authoring_comparison = _fresh_authoring_comparison(spec, spec_path.resolve().parent)
+    questions = blind_questions(spec, packet_id, authoring_comparison)
     decisions = load_decisions(library_dir, packet_id)
     expected = {question.question_id: question.expected for question in questions}
     valid_approvals: list[ReviewDecision] = []
@@ -1244,12 +1414,17 @@ def _drawing_view_crops(
     return records
 
 
-def _dimension_records(spec: PartSpec, crops: dict[str, _CropRecord]) -> list[dict[str, Any]]:
+def _dimension_records(
+    spec: PartSpec,
+    crops: dict[str, _CropRecord],
+    vision_by_field: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for field, reading, dimension in _readings(spec):
         if dimension is None:
             continue
         crop = crops.get(field)
+        vision = vision_by_field.get(field, {})
         records.append(
             {
                 "field": field,
@@ -1261,6 +1436,8 @@ def _dimension_records(spec: PartSpec, crops: dict[str, _CropRecord]) -> list[di
                 "page": reading.page,
                 "crop_path": crop.path if crop is not None else None,
                 "crop_sha256": crop.sha256 if crop is not None else None,
+                "vision_answer": vision.get("normalized_answer", ""),
+                "vision_impression": vision.get("impression", ""),
             }
         )
     return records
@@ -1270,6 +1447,7 @@ def _pinout_comparison_rows(
     spec: PartSpec,
     geometry: PinoutGeometry | None,
     symbol: SymbolDef | None,
+    vision: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if geometry is None:
         return []
@@ -1313,6 +1491,8 @@ def _pinout_comparison_rows(
                 "number": label.number,
                 "drawing_name": drawing_name,
                 "vision_name": vision_name,
+                "vision_answer": vision_name or "—",
+                "vision_impression": (vision or {}).get("impression", ""),
                 "part_spec_name": partspec_name,
                 "symbol_name": symbol_name,
                 "mismatch_fields": mismatch_fields,
@@ -1475,6 +1655,17 @@ def _augment_pin_rows(
         row["mismatch_fields"] = sorted(mismatches)
         row["mismatch"] = bool(mismatches)
     return rows
+
+
+def _attach_pin_vision(
+    rows: list[dict[str, Any]],
+    vision_by_field: dict[str, dict[str, Any]],
+) -> None:
+    for row in rows:
+        number = row.get("pin_number")
+        vision = vision_by_field.get(f"pins.{number}.reading", {}) if number else {}
+        row["vision_answer"] = vision.get("normalized_answer", "")
+        row["vision_impression"] = vision.get("impression", "")
 
 
 def _format_dim(dimension: Dimension) -> float:
@@ -1914,7 +2105,13 @@ def _page_path(extraction_dir: Path, page: PageExtraction) -> Path:
     return extraction_dir / page.png_path
 
 
-def _question_crop_field(question_id: str, spec: PartSpec) -> str:
+def _question_crop_field(
+    question_id: str,
+    spec: PartSpec,
+    evidence_field: str | None = None,
+) -> str:
+    if evidence_field is not None:
+        return evidence_field
     if question_id in {"drawing_id", "drawing_view", "pin1_corner"}:
         return "package.drawing_view"
     if question_id == "pin_count":
@@ -1948,7 +2145,11 @@ def _blind_html(
     sections: list[str] = []
     pages: dict[int, str] = {}
     for question in questions:
-        crop_field = _question_crop_field(question.question_id, spec)
+        crop_field = _question_crop_field(
+            question.question_id,
+            spec,
+            question.evidence_field,
+        )
         crop = crops.get(crop_field)
         evidence = ""
         if crop is not None:
@@ -1998,6 +2199,38 @@ def _review_html(review: dict[str, Any]) -> str:
         )
         or "<li>None.</li>"
     )
+    vision_read_rows = "".join(
+        "<tr>"
+        f"<td>{escape(item.get('field', '—'))}</td>"
+        f"<td>{escape(item.get('read_id', '—'))}</td>"
+        f"<td>{escape(item.get('normalized_answer') or '—')}</td>"
+        f"<td>{escape(item.get('impression') or '—')}</td>"
+        "</tr>"
+        for item in review.get("vision_reads", [])
+    )
+    authoring_comparison = review.get("authoring_comparison")
+    author_impressions: dict[str, str] = {}
+    if isinstance(authoring_comparison, dict):
+        comparison_data = cast(dict[str, object], authoring_comparison)
+        raw_impressions = comparison_data.get("impressions")
+        if isinstance(raw_impressions, dict):
+            impression_values = cast(dict[object, object], raw_impressions)
+            author_impressions = {
+                lane: impression
+                for lane, impression in impression_values.items()
+                if isinstance(lane, str) and isinstance(impression, str)
+            }
+    author_impressions_html = (
+        "<h2>Author impressions</h2><table><thead><tr><th>Lane</th><th>Impression</th>"
+        "</tr></thead><tbody>"
+        + "".join(
+            f"<tr><td>{escape(lane.upper())}</td><td>{escape(impression)}</td></tr>"
+            for lane, impression in sorted(author_impressions.items())
+        )
+        + "</tbody></table>"
+        if author_impressions
+        else ""
+    )
     evidence_pages = {
         int(item["page"]): str(item["path"]) for item in review.get("evidence_pages", [])
     }
@@ -2022,6 +2255,8 @@ def _review_html(review: dict[str, Any]) -> str:
         "symbol_name",
         "symbol_type",
         "footprint_pad_present",
+        "vision_answer",
+        "vision_impression",
     )
 
     def pin_cell(row: dict[str, Any], key: str) -> str:
@@ -2046,6 +2281,8 @@ def _review_html(review: dict[str, Any]) -> str:
         "vision_name",
         "part_spec_name",
         "symbol_name",
+        "vision_answer",
+        "vision_impression",
     )
 
     def pinout_cell(row: dict[str, Any], key: str) -> str:
@@ -2081,6 +2318,8 @@ def _review_html(review: dict[str, Any]) -> str:
         )
         + f"<td>{full_page_link(row.get('page'))}</td>"
         + f"<td>{dimension_crop(row)}</td>"
+        + f"<td>{escape(row.get('vision_answer') or '—')}</td>"
+        + f"<td>{escape(row.get('vision_impression') or '—')}</td>"
         + f"<td>{escape(row.get('crop_sha256') or '—')}</td>"
         + "</tr>"
         for row in review["dimensions"]
@@ -2186,25 +2425,34 @@ def _review_html(review: dict[str, Any]) -> str:
         f"<h1>Review packet {html.escape(review['packet_id'])}</h1>"
         "<h2>Contradictions and deterministic findings</h2><ul>"
         + findings_html
-        + "</ul><h2>Pin comparisons</h2><table><thead><tr>"
+        + "</ul>"
+        + author_impressions_html
+        + "<h2>Tool-managed vision reads</h2><table><thead><tr>"
+        "<th>Field</th><th>Read ID</th><th>Vision answer</th><th>AI impression</th>"
+        "</tr></thead><tbody>"
+        + (vision_read_rows or '<tr><td colspan="4">None.</td></tr>')
+        + "</tbody></table><h2>Pin comparisons</h2><table><thead><tr>"
         "<th>Pin</th><th>PDFPlumber number</th><th>Poppler number</th>"
         "<th>PDFPlumber name</th><th>Poppler name</th><th>PartSpec name</th>"
         "<th>PartSpec type</th>"
         "<th>Symbol number</th><th>Symbol name</th><th>Symbol type</th><th>Footprint pad</th>"
+        "<th>Vision answer</th><th>Vision impression</th>"
         "<th>Mismatch</th>"
         "</tr></thead><tbody>"
         + pin_rows
         + "</tbody></table><h2>Pinout name-at-position</h2>"
         + pinout_crop_html
         + "<table><thead><tr><th>Number</th><th>Drawing name</th><th>Vision name</th>"
-        "<th>PartSpec name</th><th>Symbol name</th><th>Mismatch</th>"
+        "<th>PartSpec name</th><th>Symbol name</th><th>Vision answer</th>"
+        "<th>Vision impression</th><th>Mismatch</th>"
         "</tr></thead><tbody>"
         + pinout_rows_html
         + "</tbody></table><h3>Relevant pinout findings</h3><ul>"
         + pinout_findings_html
         + "</ul><h2>Dimensions</h2><table><thead><tr>"
         "<th>Field</th><th>Label</th><th>Kind</th><th>Min</th><th>Nom</th><th>Max</th>"
-        "<th>Page</th><th>Evidence crop</th><th>Crop SHA-256</th></tr></thead><tbody>"
+        "<th>Page</th><th>Evidence crop</th><th>Vision answer</th>"
+        "<th>Vision impression</th><th>Crop SHA-256</th></tr></thead><tbody>"
         + dimension_rows
         + "</tbody></table><h2>Pin-1 evidence</h2>"
         + pin1_html
@@ -2258,6 +2506,12 @@ def build_review_packet(
     """Build fresh deterministic and human-review evidence for a library part."""
     spec = load_part_spec(spec_path)
     spec_dir = spec_path.resolve().parent
+    authoring_comparison: authoring.AuthoringComparison | None = None
+    authoring_error: str | None = None
+    try:
+        authoring_comparison = _fresh_authoring_comparison(spec, spec_dir)
+    except (OSError, ValueError) as exc:
+        authoring_error = str(exc)
     pdf_path = _relative_or_absolute(spec_dir, spec.datasheet.path)
     extraction_path = _relative_or_absolute(spec_dir, spec.datasheet.extraction_path)
     try:
@@ -2304,6 +2558,9 @@ def build_review_packet(
         "density": density,
         "tolerance_mm": tolerance_mm,
         "model_required": model_required,
+        "authoring_sha256s": (
+            sorted(authoring_comparison.sealed.values()) if authoring_comparison is not None else []
+        ),
     }
     current_id = packet_id(
         pdf_sha256=pdf_sha256,
@@ -2315,6 +2572,9 @@ def build_review_packet(
         density=density,
         tolerance_mm=tolerance_mm,
         model_required=model_required,
+        authoring_sha256s=(
+            authoring_comparison.sealed.values() if authoring_comparison is not None else ()
+        ),
     )
     packet_dir = out_dir / _safe_field(spec.mpn) / current_id
     packet_dir.mkdir(parents=True, exist_ok=True)
@@ -2322,6 +2582,15 @@ def build_review_packet(
     crop_dir = packet_dir / "crops"
     findings: list[ReviewFinding] = []
     unknowns: list[str] = []
+    if authoring_error is not None:
+        findings.append(
+            ReviewFinding(
+                code="authoring_invalid",
+                severity="error",
+                field="authoring",
+                message=authoring_error,
+            )
+        )
     extraction: DatasheetExtraction | None = None
     fresh_extraction_path = evidence_dir / "extraction.json"
     try:
@@ -2455,9 +2724,17 @@ def build_review_packet(
     symbol_def: SymbolDef | None = None
     with suppress(OSError, ValueError):
         symbol_def = parse_symbol(symbol_lib, symbol_name)
+    vision_reads = _vision_read_records(spec, spec_dir)
+    vision_by_field = {str(item["field"]): item for item in vision_reads}
     pin_rows = _pin_table_rows(spec, extraction, evidence_dir) if extraction is not None else []
     pin_rows = _augment_pin_rows(pin_rows, symbol_def, footprint_def)
-    pinout_rows = _pinout_comparison_rows(spec, part_check.pinout, symbol_def)
+    _attach_pin_vision(pin_rows, vision_by_field)
+    pinout_rows = _pinout_comparison_rows(
+        spec,
+        part_check.pinout,
+        symbol_def,
+        vision_by_field.get("pinout.labels_vision"),
+    )
 
     renders: list[dict[str, str]] = []
     render_dir = packet_dir / "renders"
@@ -2588,8 +2865,8 @@ def build_review_packet(
     elif "overlay_scale_unknown" not in unknowns:
         unknowns.append("overlay_scale_unknown")
 
-    questions = blind_questions(spec, current_id)
-    dimensions = _dimension_records(spec, crops)
+    questions = blind_questions(spec, current_id, authoring_comparison)
+    dimensions = _dimension_records(spec, crops, vision_by_field)
     extracted_pages: list[dict[str, Any]] = (
         [
             {
@@ -2615,6 +2892,10 @@ def build_review_packet(
     artifact_hashes.update(
         {f"model:{index}": digest for index, digest in enumerate(sorted(model_hashes))}
     )
+    if authoring_comparison is not None:
+        artifact_hashes.update(
+            {f"authoring:{lane}": digest for lane, digest in authoring_comparison.sealed.items()}
+        )
     artifact_hashes.update({f"render:{item['kind']}": item["sha256"] for item in renders})
     if overlay_record is not None:
         artifact_hashes["overlay"] = str(overlay_record["sha256"])
@@ -2625,6 +2906,8 @@ def build_review_packet(
         part_check.verdict == "pass"
         and verification is not None
         and verification.verdict == "pass"
+        and authoring_comparison is not None
+        and not any(issue.severity == "error" for issue in authoring_comparison.issues)
         and not any(item.code == "correction_regressed" for item in findings)
     )
     message_template = _message_template(current_id, questions)
@@ -2649,11 +2932,18 @@ def build_review_packet(
                 "prompt": item.prompt,
                 "page": item.page,
                 "bbox": item.bbox,
+                "evidence_field": item.evidence_field,
             }
             for item in questions
         ],
         "pin_comparisons": pin_rows,
         "pinout_comparisons": pinout_rows,
+        "vision_reads": vision_reads,
+        "authoring_comparison": (
+            authoring_comparison.model_dump(mode="json")
+            if authoring_comparison is not None
+            else None
+        ),
         "dimensions": dimensions,
         "evidence_pages": extracted_pages,
         "crops": [item.model_dump(mode="json") for item in crops.values()],

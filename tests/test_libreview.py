@@ -176,6 +176,7 @@ def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
         "density": "nominal",
         "tolerance_mm": 0.02,
         "model_required": True,
+        "authoring_sha256s": ["f" * 64, "e" * 64],
     }
 
     def packet_for(fields: dict[str, Any]) -> str:
@@ -189,10 +190,12 @@ def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
             density=cast(Density, fields["density"]),
             tolerance_mm=cast(float, fields["tolerance_mm"]),
             model_required=cast(bool, fields["model_required"]),
+            authoring_sha256s=cast(list[str], fields["authoring_sha256s"]),
         )
 
     first = packet_for(values)
     assert first == packet_for({**values, "model_sha256s": ["e" * 64, "f" * 64]})
+    assert first == packet_for({**values, "authoring_sha256s": ["e" * 64, "f" * 64]})
     assert len(first) == 16
     for field, changed in (
         ("pdf_sha256", "0" * 64),
@@ -204,6 +207,7 @@ def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
         ("density", "least"),
         ("tolerance_mm", 0.03),
         ("model_required", False),
+        ("authoring_sha256s", ["0" * 64]),
     ):
         assert packet_for({**values, field: changed}) != first
 
@@ -258,6 +262,46 @@ def test_blind_questions_do_not_sample_the_exposed_pad_pin() -> None:
     private_api: Any = libreview
     assert private_api._question_crop_field("pin.2", spec) == "pin_table"
     assert private_api._question_crop_field("pinout.view", spec) == "pinout"
+
+
+def test_blind_questions_skip_pins_without_a_numbered_row_and_include_disagreements() -> None:
+    spec = _spec()
+    spec.pins.append(
+        PinSpec(
+            number="17",
+            name="Exposed Thermal Pad",
+            electrical_type="passive",
+            reading=_reading("Exposed Thermal Pad"),
+        )
+    )
+    comparison = libreview.authoring.AuthoringComparison(
+        artifact_kind="circuit_part_authoring_comparison",
+        run_dir="authoring/run",
+        sealed={"a": "a" * 64, "b": "b" * 64},
+        models={"a": "model-a", "b": "model-b"},
+        profiles={"a": "profile-a", "b": "profile-b"},
+        impressions={"a": "A impression", "b": "B impression"},
+        rasterizers={"a": ["pdftoppm"], "b": ["pdfium"]},
+        agreed=[],
+        disagreements=[
+            libreview.authoring.AuthoringDisagreement(
+                pointer="/package/pitch/nom",
+                a=0.5,
+                b=0.6,
+            )
+        ],
+        model_diversity="distinct",
+        issues=[],
+    )
+
+    questions = libreview.blind_questions(spec, "a" * 16, comparison)
+    question = next(item for item in questions if item.question_id == "authoring.0")
+    pin_questions = {item.question_id for item in questions if item.question_id.startswith("pin.")}
+
+    assert "pin.17" not in pin_questions
+    assert question.evidence_field == "package.pitch"
+    assert spec.package.pitch is not None
+    assert question.bbox == spec.package.pitch.reading.bbox
 
 
 def test_unlabelled_exposed_pad_row_maps_to_the_part_symbol_and_footprint_pin(
@@ -416,6 +460,20 @@ def test_review_html_renders_inline_evidence_renders_and_mismatch_cells() -> Non
         "artifact_hashes": {},
         "overlay": {"path": "overlay.svg", "scale_known": True},
         "land_pattern_crop": {"path": "crops/land-pattern.png", "page": 1},
+        "vision_reads": [
+            {
+                "field": "package.pitch",
+                "read_id": "pitch-read",
+                "normalized_answer": "<b>0.5</b>",
+                "impression": "<img src=x onerror=alert(1)>",
+            }
+        ],
+        "authoring_comparison": {
+            "impressions": {
+                "a": "<script>alert('A')</script>",
+                "b": "Clear & legible.",
+            }
+        },
         "message_template": "",
         "unknowns": [],
     }
@@ -430,6 +488,10 @@ def test_review_html_renders_inline_evidence_renders_and_mismatch_cells() -> Non
     assert '<img src="crops/orderable.png"' in rendered
     assert '<img src="renders/footprint.svg"' in rendered
     assert '<img src="renders/symbol.svg"' in rendered
+    assert "<h2>Author impressions</h2>" in rendered
+    assert "&lt;script&gt;alert(&#x27;A&#x27;)&lt;/script&gt;" in rendered
+    assert "&lt;img src=x onerror=alert(1)&gt;" in rendered
+    assert "<script>alert(" not in rendered
     assert '<td class="mismatch">passive</td>' in rendered
     assert "<th>Mismatch</th>" in rendered
     assert "Data-derived placement overlay" in rendered
@@ -1045,7 +1107,12 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
         label="pitch",
         reading=_reading("1.0", bbox=(70, 70, 90, 90)),
     )
-    spec = spec.model_copy(update={"package": spec.package.model_copy(update={"pitch": pitch})})
+    spec = spec.model_copy(
+        update={
+            "package": spec.package.model_copy(update={"pitch": pitch}),
+            "authoring": "authoring/run-1",
+        }
+    )
     pdf_path = tmp_path / "part.pdf"
     pdf_path.write_bytes(b"pdf")
     spec_path = tmp_path / "part-spec.json"
@@ -1061,6 +1128,28 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     symbol_lib = data_dir / "symbols.kicad_sym"
     footprint_path = data_dir / "modern.kicad_mod"
     extraction_holder: dict[str, DatasheetExtraction] = {}
+    comparison = libreview.authoring.AuthoringComparison(
+        artifact_kind="circuit_part_authoring_comparison",
+        run_dir="authoring/run-1",
+        sealed={"a": "a" * 64, "b": "b" * 64},
+        models={"a": "model-a", "b": "model-b"},
+        profiles={"a": "profile-a", "b": "profile-b"},
+        impressions={
+            "a": "<script>lane A</script>",
+            "b": "Legible & clear.",
+        },
+        rasterizers={"a": ["pdftoppm"], "b": ["pdfium"]},
+        agreed=[],
+        disagreements=[
+            libreview.authoring.AuthoringDisagreement(
+                pointer="/package/pitch/nom",
+                a=0.5,
+                b=0.6,
+            )
+        ],
+        model_diversity="distinct",
+        issues=[],
+    )
 
     def extract(
         path: Path,
@@ -1163,6 +1252,13 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     monkeypatch.setattr(libreview, "verify_library_part", verify)
     monkeypatch.setattr(libreview.kicad_cli, "export", missing_cli)
 
+    def fresh_comparison(
+        _spec: PartSpec, _spec_dir: Path
+    ) -> libreview.authoring.AuthoringComparison:
+        return comparison
+
+    monkeypatch.setattr(libreview, "_fresh_authoring_comparison", fresh_comparison)
+
     def regressions(_library_dir: Path, _spec: PartSpec) -> list[libreview.ReviewFinding]:
         return (
             [
@@ -1193,6 +1289,8 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     blind_html = (packet.packet_dir / "01-blind.html").read_text(encoding="utf-8")
     assert packet.approvable is (fresh_verdict == "pass" and not regressed)
     assert packet.packet_id == review["packet_id"]
+    assert review["inputs"]["authoring_sha256s"] == sorted(comparison.sealed.values())
+    assert review["artifact_hashes"]["authoring:a"] == comparison.sealed["a"]
     if regressed:
         assert any(item["code"] == "correction_regressed" for item in review["findings"])
     assert review["pin_comparisons"]
@@ -1222,7 +1320,7 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert review["message_template"].startswith(f"CIRCUIT-LIBRARY-REVIEW {packet.packet_id}\n")
     assert all(
         f"answer: {question.question_id} = " in review["message_template"]
-        for question in libreview.blind_questions(spec, packet.packet_id)
+        for question in libreview.blind_questions(spec, packet.packet_id, comparison)
     )
     assert "SIG1" not in blind_html
     assert "<script" not in blind_html.lower()
@@ -1233,6 +1331,8 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert "<script" not in review_html.lower()
     assert "base64," not in review_html.lower()
     assert "http://" not in review_html.lower()
+    assert "&lt;script&gt;lane A&lt;/script&gt;" in review_html
+    assert "Legible &amp; clear." in review_html
     assert "Land-pattern drawing-view crop" not in review_html
     assert "Pinout name-at-position" in review_html
     assert review["pinout_comparisons"]

@@ -56,6 +56,23 @@ is recorded without changing pin interpretation. Review packets show a
 pinout-view question and name-at-position comparison; see
 [ADR-0027](adr/ADR-0027-pinout-orientation-oracles.md).
 
+Datasheet visual reads must use `circuit_vision_read` crops tied to the source
+PDF hash, page, bbox, and rasterizer. Record an answer and a multi-sentence
+impression for every image, including the control image; failed submissions
+write no answers. The fixed table prompt returns normalized rows of cell
+strings, which PartSpec checks compare with the cited pin and orderable cells.
+Pinout labels are also checked against freshly derived geometry when available.
+Image reads and author commits are recorded by their post-tool hooks when
+observation logging is enabled. Configure
+`vibebb-part-author-a` and `vibebb-part-author-b` independently for model
+diversity; provisioning clones the active model profile, so identical models
+are reported as such rather than treated as independent. The lanes use
+Poppler and pdfium respectively, seal their PartSpecs with overall
+impressions, and are compared only after both commits. Library verification
+requires a valid authoring comparison; review packets bind sealed hashes and
+show per-image and author impressions as human context, not as scores. See
+[ADR-0028](adr/ADR-0028-tool-managed-vision-and-blind-authoring.md).
+
 Every project-library part also requires a human review bound to the current
 PDF, PartSpec, symbol, footprint, 3D-model hashes, and verification settings.
 Build a packet with `circuit_library_review_packet` or

@@ -20,10 +20,15 @@ IMPRESSION_MIN_LENGTH = 240
 _SENTENCE_MARKS = "。.!?"
 
 
-def _impression_is_prose(value: str) -> str:
+def impression_is_prose(value: str) -> str:
+    if len(value) < IMPRESSION_MIN_LENGTH:
+        raise ValueError(f"impression must contain at least {IMPRESSION_MIN_LENGTH} characters")
     if sum(value.count(mark) for mark in _SENTENCE_MARKS) < 2:
         raise ValueError("impression must be a multi-sentence reading")
     return value
+
+
+_impression_is_prose = impression_is_prose
 
 
 VisualChecklist = Literal[
@@ -99,7 +104,7 @@ class VisualReviewDetail(BaseModel):
     )
     findings: list[VisualFinding] = Field(default_factory=lambda: list[VisualFinding]())
 
-    _check_impression = field_validator("impression")(_impression_is_prose)
+    _check_impression = field_validator("impression")(impression_is_prose)
 
 
 def parse_visual_review(result: AdvisoryResult) -> VisualReviewDetail | None:

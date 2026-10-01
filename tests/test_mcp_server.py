@@ -10,9 +10,11 @@ import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import ImageContent, TextContent
+from PIL import Image
 
 from circuit import mcp_server
 from circuit.advisory import AdvisoryResult
+from circuit.datasheet import DatasheetExtraction, PageExtraction
 from circuit.kicad_cli import DiffReport, JobsetResult
 from circuit.landpattern import Density
 from circuit.libsource import ImportReport, SourceInfoInput
@@ -60,6 +62,10 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_stackup",
         "circuit_rasterize",
         "circuit_datasheet_extract",
+        "circuit_vision_read",
+        "circuit_vision_answer",
+        "circuit_part_author_commit",
+        "circuit_part_author_compare",
         "circuit_part_spec_check",
         "circuit_land_pattern",
         "circuit_library_candidates",
@@ -89,6 +95,106 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_library_review_status",
         "circuit_library_review_apply",
     }
+    vision_answer_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_vision_answer"
+    )
+    assert vision_answer_schema["properties"]["answers"]["additionalProperties"]["required"] == [
+        "answer",
+        "impression",
+    ]
+
+
+def test_vision_read_mcp_result_contains_only_paths_prompts_and_images(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv("CIRCUIT_AUTHORING_LANE", "b")
+    pdf_path = tmp_path / "part.pdf"
+    pdf_path.write_bytes(b"synthetic pdf")
+    page_png = tmp_path / "page.png"
+    Image.new("RGB", (100, 100), "white").save(page_png)
+    extraction_path = tmp_path / "extraction.json"
+    extraction = DatasheetExtraction(
+        artifact_kind="circuit_datasheet_extraction",
+        pdf_path=pdf_path.name,
+        pdf_sha256=hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
+        page_count=1,
+        pages=[
+            PageExtraction(
+                page=1,
+                width_pt=100,
+                height_pt=100,
+                png_path=page_png.name,
+                png_sha256=hashlib.sha256(page_png.read_bytes()).hexdigest(),
+                dpi=72,
+                text_layer=True,
+                lanes=[],
+                tables_path=None,
+                table_count=0,
+                vector_objects=0,
+                drawing_page=False,
+                order_similarity=1,
+            )
+        ],
+        tools={},
+    )
+    extraction_path.write_text(extraction.model_dump_json(), encoding="utf-8")
+
+    def render(
+        _pdf: Path,
+        output: Path,
+        _page: int,
+        bbox: tuple[float, float, float, float],
+        *_args: object,
+    ) -> None:
+        Image.new(
+            "RGB",
+            (max(1, round(bbox[2] - bbox[0])), max(1, round(bbox[3] - bbox[1]))),
+            "white",
+        ).save(output)
+
+    monkeypatch.setattr(mcp_server.visionread, "_render_pdfium", render)
+
+    def control_image(path: Path, size: tuple[int, int]) -> str:
+        Image.new("RGB", size, "white").save(path)
+        return "ABC234"
+
+    monkeypatch.setattr(
+        mcp_server.visionread,
+        "_control_image",
+        control_image,
+    )
+    requests = [
+        {
+            "field": f"table.{index}",
+            "page": 1,
+            "bbox": [float(index + 1), 1.0, float(index + 2), 2.0],
+            "kind": "table",
+        }
+        for index in range(7)
+    ]
+
+    result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_vision_read",
+            {
+                "extraction_path": str(extraction_path),
+                "out_dir": str(tmp_path / "vision"),
+                "requests": requests,
+            },
+        )
+    )
+
+    assert result.isError is False
+    text = next(block.text for block in result.content if isinstance(block, TextContent))
+    payload = json.loads(text)
+    assert len(payload["items"]) == 8
+    assert len([block for block in result.content if isinstance(block, ImageContent)]) == 8
+    assert all("answer" not in item for item in payload["items"])
+    assert all("image_path" in item and "prompt" in item for item in payload["items"])
 
 
 def test_output_path_defaults_to_report_directory(tmp_path: Path) -> None:
@@ -370,7 +476,10 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
             _library_dir: Path,
             _spec: PartSpec,
             _packet_id: str,
+            *,
+            spec_path: Path,
         ) -> mcp_server.libreview.ReviewStatus:
+            del spec_path
             return mcp_server.libreview.ReviewStatus(
                 artifact_kind="circuit_library_review_status",
                 packet_id="a" * 16,
@@ -540,7 +649,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 36
+            assert len(tools.tools) == 40
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

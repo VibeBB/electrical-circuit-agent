@@ -12,11 +12,11 @@ import tempfile
 from collections import Counter
 from itertools import pairwise
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from . import kicad_cli
+from . import authoring, kicad_cli
 from . import pinout as pinout_oracle
 from .datasheet import load_extraction
 from .landpattern import Density, LandPatternResult, Rect, lead_rects
@@ -131,6 +131,150 @@ def _finding(
     message: str,
 ) -> None:
     findings.append(VerifyFinding(code=code, severity=severity, subject=subject, message=message))
+
+
+def _correction_pointer_key(pointer: str, spec: PartSpec) -> str | None:
+    tokens = pointer.split("/")
+    if len(tokens) < 3 or tokens[0] != "" or tokens[1] != "pins":
+        return pointer
+    try:
+        index = int(tokens[2])
+    except ValueError:
+        return pointer
+    if not 0 <= index < len(spec.pins):
+        return None
+    number = spec.pins[index].number.replace("~", "~0").replace("/", "~1")
+    return "/" + "/".join(("pins", number, *tokens[3:]))
+
+
+def _human_correction_exists(
+    library_dir: Path | None,
+    spec: PartSpec,
+    pointer: str,
+    current_value: object,
+) -> bool:
+    if library_dir is None:
+        return False
+    corpus = library_dir / "reviews" / "corrections.jsonl"
+    try:
+        lines = corpus.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(record, dict):
+            return False
+        correction = cast(dict[str, object], record)
+        normalized_pointer = _correction_pointer_key(str(correction.get("pointer", "")), spec)
+        if (
+            normalized_pointer == pointer
+            and correction.get("mpn") == spec.mpn
+            and correction.get("pdf_sha256") == spec.datasheet.sha256
+            and isinstance(correction.get("event_sha256"), str)
+            and _authoring_value_equal(pointer, correction.get("new"), current_value)
+        ):
+            return True
+    return False
+
+
+def _authoring_value_equal(pointer: str, left: object, right: object) -> bool:
+    if pointer.endswith("/name") or "/labels_vision/" in pointer:
+        return (
+            isinstance(left, str)
+            and isinstance(right, str)
+            and pinout_oracle.names_equal(left, right)
+        )
+    return left == right
+
+
+def _check_authoring_consensus(
+    spec: PartSpec,
+    *,
+    spec_path: Path,
+    library_dir: Path | None,
+    findings: list[VerifyFinding],
+) -> None:
+    if spec.authoring is None:
+        _finding(
+            findings,
+            "authoring_missing",
+            "error",
+            "authoring",
+            "PartSpec has no blind authoring run reference",
+        )
+        return
+    reference = Path(spec.authoring)
+    if reference.is_absolute():
+        _finding(
+            findings,
+            "authoring_invalid",
+            "error",
+            "authoring",
+            "authoring run path must be relative to the PartSpec directory",
+        )
+        return
+    spec_root = spec_path.resolve().parent
+    run_dir = (spec_root / reference).resolve()
+    if not run_dir.is_relative_to(spec_root):
+        _finding(
+            findings,
+            "authoring_invalid",
+            "error",
+            "authoring",
+            "authoring run path escapes the PartSpec directory",
+        )
+        return
+    try:
+        comparison = authoring.compare_runs(run_dir)
+        sealed_a = PartSpec.model_validate_json(
+            (run_dir / "sealed" / "a.json").read_text(encoding="utf-8")
+        )
+        _sealed_b = PartSpec.model_validate_json(
+            (run_dir / "sealed" / "b.json").read_text(encoding="utf-8")
+        )
+    except (authoring.AuthoringError, OSError, ValueError) as exc:
+        _finding(findings, "authoring_invalid", "error", "authoring", str(exc))
+        return
+    for issue in comparison.issues:
+        _finding(findings, issue.code, issue.severity, "authoring", issue.message)
+    current = authoring.normalize(spec)
+    values_a = authoring.normalize(sealed_a)
+    for pointer in comparison.agreed:
+        agreed_value = values_a.get(pointer)
+        current_value = current.get(pointer)
+        same_value = pointer in current and _authoring_value_equal(
+            pointer, current_value, agreed_value
+        )
+        if same_value or _human_correction_exists(library_dir, spec, pointer, current_value):
+            continue
+        _finding(
+            findings,
+            "authoring_consensus_violated",
+            "error",
+            pointer,
+            "current PartSpec differs from independently agreed authoring value",
+        )
+    for disagreement in comparison.disagreements:
+        _finding(
+            findings,
+            "authoring_disagreement",
+            "warning",
+            disagreement.pointer,
+            "independent lane values differ: "
+            f"A={json.dumps(disagreement.a, ensure_ascii=False, sort_keys=True)}; "
+            f"B={json.dumps(disagreement.b, ensure_ascii=False, sort_keys=True)}",
+        )
+    if comparison.model_diversity != "distinct":
+        _finding(
+            findings,
+            "authoring_models_not_diverse",
+            "warning",
+            "authoring",
+            f"independent authors used {comparison.model_diversity} models",
+        )
 
 
 def _normalized_name(value: str) -> str:
@@ -1197,6 +1341,13 @@ def verify_library_part(
             "part_spec",
             check_detail or "PartSpec check is missing, failed, or stale",
         )
+
+    _check_authoring_consensus(
+        spec,
+        spec_path=spec_path,
+        library_dir=library_dir,
+        findings=findings,
+    )
 
     try:
         symbol = parse_symbol(symbol_lib, symbol_name)

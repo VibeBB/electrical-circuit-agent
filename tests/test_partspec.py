@@ -26,6 +26,7 @@ from circuit.partspec import (
     PinTable,
     Reading,
     SpecFinding,
+    _vision_transcription_matches,  # pyright: ignore[reportPrivateUsage]
     check_part_spec,
     load_part_spec,
     parse_dimension_text,
@@ -33,6 +34,7 @@ from circuit.partspec import (
 )
 from circuit.pinout import normalized
 from pinout_fixtures import QUAD16_NAMES, pinout_drawing, quad16_fixture
+from vision_fixtures import attach_vision_reads
 
 _IMPRESSION = (
     "The dimensional marks remain legible across the package drawing. "
@@ -41,6 +43,23 @@ _IMPRESSION = (
     "manufacturing recommendations or assumptions about a footprint."
 )
 _REDERIVED_BY_PDF: dict[Path, tuple[DatasheetExtraction, Path]] = {}
+
+
+@pytest.mark.parametrize(
+    ("expected", "actual", "matches"),
+    [
+        ("1", "16", False),
+        ("0.5", "10.5", False),
+        ("1.68", "□1.68±0.07", True),
+        ("", "1", False),
+    ],
+)
+def test_vision_transcription_matches_token_boundaries(
+    expected: str,
+    actual: str,
+    matches: bool,
+) -> None:
+    assert _vision_transcription_matches(expected, actual) is matches
 
 
 @pytest.fixture(autouse=True)
@@ -282,11 +301,40 @@ def _fixture(
     }
     spec_path = tmp_path / "part.spec.json"
     spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    attach_vision_reads(spec, spec_path, extraction_path)
     return spec, extraction, spec_path, extraction_path
 
 
 def _save_spec(spec: PartSpec, path: Path) -> None:
     path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+
+
+def _vision_answer_record_path(spec_dir: Path, reference: str) -> tuple[Path, str]:
+    batch_ref, read_id = reference.split("#", maxsplit=1)
+    return spec_dir / Path(batch_ref).parent / "answers.json", read_id
+
+
+def _replace_vision_answer(
+    spec_dir: Path,
+    reference: str,
+    *,
+    answer: str | None = None,
+    normalized: object | None = None,
+    impression: str | None = None,
+    clear_impression: bool = False,
+) -> None:
+    path, read_id = _vision_answer_record_path(spec_dir, reference)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if answer is not None:
+        record["answers"][read_id] = answer
+    if normalized is not None:
+        record["normalized"][read_id] = normalized
+        record["status"][read_id] = "ok"
+    if clear_impression:
+        record["impressions"].pop(read_id, None)
+    elif impression is not None:
+        record["impressions"][read_id] = impression
+    path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
 
 
 def _pinout_fixture(
@@ -339,6 +387,18 @@ def _pinout_fixture(
         )
         for number, name in names.items()
     ]
+    tables_path = tmp_path / "page-001.tables.json"
+    tables = json.loads(tables_path.read_text(encoding="utf-8"))
+    rows: list[list[str]] = [["Pin No.", "Function"]]
+    rows.extend([number, name] for number, name in names.items())
+    table_cells = [[[55, 0, 75, 2], [75, 0, 95, 2]]]
+    for index in range(1, len(rows)):
+        top = 2 + (index - 1) * 2
+        table_cells.append([[55, top, 75, top + 2], [75, top, 95, top + 2]])
+    tables["tables"][0]["rows"] = rows
+    tables["tables"][0]["cells"] = table_cells
+    tables["tables"][0]["bbox"] = [55, 0, 95, 34]
+    tables_path.write_text(json.dumps(tables), encoding="utf-8")
     spec.orderable[0].pin_count = 16
     spec.pinout = pinout_drawing(
         names,
@@ -350,6 +410,7 @@ def _pinout_fixture(
     if vision_mismatch:
         spec.pinout.labels_vision["1"] = "WRONG"
     _save_spec(spec, spec_path)
+    attach_vision_reads(spec, spec_path, extraction_path)
     return spec, extraction, spec_path, extraction_path
 
 
@@ -1413,6 +1474,190 @@ def test_orderable_variant_binding_and_vision_proof(tmp_path: Path) -> None:
         extraction_path=extraction_path,
     )
     assert "package_variant_unbound" not in {item.code for item in report.findings}
+
+
+@pytest.mark.parametrize(
+    ("vision_rows", "expected_column_shift", "expected_missing", "expected_extra"),
+    [
+        (
+            [["Pin No.", "Package", "Function"], ["1", "QFN", "SW"]],
+            True,
+            [("1", "SW")],
+            [("1", "QFN")],
+        ),
+        ([["Pin No.", "Function"]], False, [("1", "SW")], []),
+        (
+            [["Pin No.", "Function"], ["1", "SW"], ["1", "SW"]],
+            False,
+            [],
+            [("1", "SW")],
+        ),
+    ],
+)
+def test_pin_table_vision_reports_column_shift_missing_and_duplicate_rows(
+    tmp_path: Path,
+    vision_rows: list[list[str]],
+    expected_column_shift: bool,
+    expected_missing: list[tuple[str, str]],
+    expected_extra: list[tuple[str, str]],
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    assert spec.pin_table.vision_read is not None
+    _replace_vision_answer(
+        spec_path.parent,
+        spec.pin_table.vision_read,
+        answer=json.dumps(vision_rows),
+        normalized=vision_rows,
+    )
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    finding = next(
+        item
+        for item in report.findings
+        if item.code == "vision_table_mismatch" and item.field == "pin_table"
+    )
+    assert f"column_shift={expected_column_shift}" in finding.message
+    assert f"missing={expected_missing}" in finding.message
+    assert f"extra={expected_extra}" in finding.message
+
+
+def test_orderable_vision_requires_one_row_per_mpn_and_package_code(
+    tmp_path: Path,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    assert spec.orderable_vision_read is not None
+    for rows in (
+        [],
+        [["EXAMPLE-1", "X"], ["EXAMPLE-1", "X"]],
+        [["EXAMPLE-1", "Y"]],
+        [["EXAMPLE-10", "X"]],
+    ):
+        _replace_vision_answer(
+            spec_path.parent,
+            spec.orderable_vision_read,
+            answer=json.dumps(rows),
+            normalized=rows,
+        )
+        report = check_part_spec(
+            spec,
+            extraction,
+            spec_path=spec_path,
+            extraction_path=extraction_path,
+        )
+        assert any(
+            item.code == "vision_table_mismatch" and item.field == "orderable"
+            for item in report.findings
+        ), f"rows={rows!r}, findings={report.findings!r}"
+
+
+def test_missing_table_vision_refs_fail_closed(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.pin_table.vision_read = None
+    spec.orderable_vision_read = None
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    assert {
+        (item.code, item.field) for item in report.findings if item.code == "vision_read_missing"
+    } >= {("vision_read_missing", "pin_table"), ("vision_read_missing", "orderable")}
+
+
+@pytest.mark.parametrize(
+    ("impression", "clear_impression"),
+    [
+        ("", False),
+        ("This is too short. It remains too short.", False),
+        (
+            "The image is clear, the printed values are legible, the table has consistent "
+            "spacing, no characters appear clipped, and the surrounding marks provide enough "
+            "context to read each label without uncertainty or needing to infer an obscured value, "
+            "while the close crop still preserves the row boundaries, column alignment, header "
+            "position, punctuation, spacing, and the distinction between each symbol and number.",
+            False,
+        ),
+        (None, True),
+    ],
+)
+def test_partspec_rejects_missing_or_invalid_stored_vision_impressions(
+    tmp_path: Path,
+    impression: str | None,
+    clear_impression: bool,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    reading = spec.package.body_length.reading
+    assert reading.vision_read is not None
+    _replace_vision_answer(
+        spec_path.parent,
+        reading.vision_read,
+        impression=impression,
+        clear_impression=clear_impression,
+    )
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    assert any(
+        item.code == "vision_impression_missing" and item.field == "package.body_length"
+        for item in report.findings
+    )
+
+
+def test_pinout_vision_must_match_freshly_derived_geometry(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _pinout_fixture(tmp_path)
+    assert spec.pinout is not None
+    assert spec.pinout.labels_vision_read is not None
+    mismatched_labels = dict(spec.pinout.labels_vision)
+    mismatched_labels["1"] = "MISMATCH"
+    _replace_vision_answer(
+        spec_path.parent,
+        spec.pinout.labels_vision_read,
+        answer=json.dumps(mismatched_labels),
+        normalized=mismatched_labels,
+    )
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    assert "vision_pinout_mismatch" in {item.code for item in report.findings}
+    assert any(
+        item.code == "vision_read_mismatch" and item.field == "pinout.labels_vision"
+        for item in report.findings
+    )
+
+
+def test_pinout_vision_labels_match_geometry_on_happy_path(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _pinout_fixture(tmp_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    assert not any(
+        item.code in {"vision_pinout_mismatch", "vision_read_mismatch"}
+        and item.field in {"pinout", "pinout.labels_vision"}
+        for item in report.findings
+    )
 
 
 def test_orderable_combined_package_and_pin_cell_matches_both_lanes(

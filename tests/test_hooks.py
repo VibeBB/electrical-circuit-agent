@@ -45,6 +45,14 @@ LIBRARY_REVIEW_SCRIPT = (
     / "scripts"
     / "record_library_review.py"
 )
+PART_AUTHOR_PROFILES_SCRIPT = (
+    Path(__file__).parents[1]
+    / "plugins"
+    / "circuit"
+    / "hooks"
+    / "scripts"
+    / "ensure_part_author_profiles.py"
+)
 
 
 def _run_protect_hook(payload: dict[str, Any]) -> subprocess.CompletedProcess[str]:
@@ -129,6 +137,44 @@ def test_protect_allows_reading_agent_canvas_events() -> None:
         },
     }
     assert _run_protect_hook(payload).returncode == 0
+
+
+def test_part_author_profiles_use_first_distinct_model(tmp_path: Path) -> None:
+    profile_dir = tmp_path / ".openhands" / "profiles"
+    profile_dir.mkdir(parents=True)
+    (tmp_path / ".openhands" / "settings.json").write_text(
+        json.dumps({"active_profile": "active-model"}), encoding="utf-8"
+    )
+    for name, model in (
+        ("active-model", "model-active"),
+        ("aaa-model", "model-a"),
+        ("zzz-model", "model-z"),
+        ("vibebb-candidate", "model-ignored"),
+    ):
+        (profile_dir / f"{name}.json").write_text(
+            json.dumps({"model": model}),
+            encoding="utf-8",
+        )
+    (profile_dir / "000-unreadable.json").write_text("{", encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(PART_AUTHOR_PROFILES_SCRIPT)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+    assert output["templates"] == {
+        "vibebb-part-author-a": "active-model",
+        "vibebb-part-author-b": "aaa-model",
+    }
+    author_a = json.loads((profile_dir / "vibebb-part-author-a.json").read_text(encoding="utf-8"))
+    author_b = json.loads((profile_dir / "vibebb-part-author-b.json").read_text(encoding="utf-8"))
+    assert author_a["model"] == "model-active"
+    assert author_b["model"] == "model-a"
 
 
 def test_protect_denies_terminal_design_writes() -> None:
@@ -657,6 +703,33 @@ def test_record_image_observation_logs_render_paths(tmp_path: Path) -> None:
     assert records[0]["image_path"] == str(image)
     assert records[0]["image_sha256"] == hashlib.sha256(_PNG).hexdigest()
     assert records[0]["session_id"] == "s1"
+
+
+def test_record_image_observation_parses_vision_read_tool_result(tmp_path: Path) -> None:
+    image = tmp_path / "vision" / "read.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    payload = {
+        "working_dir": str(tmp_path),
+        "tool_name": "circuit_vision_read",
+        "tool_input": {"requests": [{"kind": "table"}]},
+        "tool_response": {
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps({"items": [{"image_path": str(image)}]}),
+                }
+            ]
+        },
+        "session_id": "vision-session",
+    }
+
+    assert _run_observe_hook(payload).returncode == 0
+    records = _observations(tmp_path)
+    assert len(records) == 1
+    assert records[0]["tool_name"] == "circuit_vision_read"
+    assert records[0]["image_path"] == str(image)
+    assert records[0]["image_sha256"] == hashlib.sha256(_PNG).hexdigest()
 
 
 def test_record_image_observation_logs_file_editor_view(tmp_path: Path) -> None:
