@@ -40,6 +40,7 @@
 | [0025](adr/ADR-0025-part-library-evidence-authority.md) | Part library evidence authority |
 | [0026](adr/ADR-0026-library-human-review-gate.md) | Human-reviewed library packets and hash-bound approval |
 | [0027](adr/ADR-0027-pinout-orientation-oracles.md) | Pinout orientation oracles |
+| [0028](adr/ADR-0028-tool-managed-vision-and-blind-authoring.md) | Tool-managed vision and blind PartSpec authoring |
 
 ## Research
 
