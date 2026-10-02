@@ -13,7 +13,7 @@ from mcp.client.stdio import stdio_client
 from mcp.types import ImageContent, TextContent
 from PIL import Image
 
-from circuit import mcp_server
+from circuit import humanrequest, mcp_server
 from circuit.advisory import AdvisoryResult
 from circuit.datasheet import DatasheetExtraction, PageExtraction
 from circuit.kicad_cli import DiffReport, JobsetResult
@@ -81,6 +81,8 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_library_review_packet",
         "circuit_library_review_status",
         "circuit_library_review_apply",
+        "circuit_human_request_create",
+        "circuit_human_request_status",
         "circuit_library_metrics",
         "circuit_mutation_report",
         "circuit_corpus_score",
@@ -207,6 +209,66 @@ def test_mcp_server_lists_expected_tools() -> None:
         "footprint_path",
         "model_path",
     }
+
+
+def test_human_request_mcp_create_and_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    request_fields = {
+        "kind": "library_review",
+        "subject": {"manufacturer": "Example", "mpn": "TEST-1"},
+        "reason": "Review the library artifacts against the current source evidence.",
+        "evidence": [
+            {
+                "kind": "note",
+                "ref": "verification",
+                "summary": "A fresh deterministic verification report.",
+            }
+        ],
+        "known": ["The request is bound to current artifact hashes."],
+        "unknown": [],
+        "agent_assessment": (
+            "This request presents source evidence and deterministic findings for review. "
+            "Compare each package and pin claim with the cited material before deciding. "
+            "Hash agreement does not prove that the underlying library content is correct."
+        ),
+        "recommendation": "Approve only after review.",
+        "recommendation_rationale": "Approval remains an independent human decision.",
+        "alternatives": [
+            {
+                "option": "Approve only after review.",
+                "risks": ["A source discrepancy could be overlooked."],
+            },
+            {
+                "option": "Request corrections.",
+                "risks": ["Release is delayed pending correction."],
+            },
+        ],
+        "recommended": 0,
+        "details": {"kind": "library_review", "packet_id": "a" * 16},
+    }
+
+    async def exercise() -> None:
+        created = await mcp_server.call_tool(
+            "circuit_human_request_create",
+            {"project_path": str(tmp_path), "request": request_fields},
+        )
+        assert created.isError is False
+        created_value = json.loads(cast(TextContent, created.content[0]).text)
+        assert len(created_value["request_id"]) == 16
+        assert (tmp_path / "library" / "requests" / f"{created_value['request_id']}.md").is_file()
+
+        status = await mcp_server.call_tool(
+            "circuit_human_request_status",
+            {"project_path": str(tmp_path), "request_id": created_value["request_id"]},
+        )
+        assert status.isError is False
+        status_value = json.loads(cast(TextContent, status.content[0]).text)
+        assert status_value["request"]["request_sha256"] == created_value["request_sha256"]
+        assert status_value["responses"] == []
+
+    asyncio.run(exercise())
 
 
 def test_corpus_score_mcp_dispatch_and_lane_refusal(
@@ -995,6 +1057,40 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 inputs={},
                 findings=[],
                 unknowns=[],
+                agent_request=humanrequest.build_request(
+                    kind="library_review",
+                    subject={"manufacturer": "Example", "mpn": "TEST-1"},
+                    reason="Review the library artifacts and their source evidence.",
+                    evidence=[
+                        {
+                            "kind": "note",
+                            "ref": "test",
+                            "summary": "Synthetic test evidence.",
+                        }
+                    ],
+                    known=["The packet is hash-bound."],
+                    unknown=[],
+                    agent_assessment=(
+                        "This packet presents deterministic checks and source evidence for "
+                        "review. Compare the pin map, package dimensions, and model against "
+                        "the cited material. Hash agreement does not establish content "
+                        "correctness, and this assessment does not grant approval."
+                    ),
+                    recommendation="Review before approval.",
+                    recommendation_rationale="Only a human can approve the evidence.",
+                    alternatives=[
+                        {
+                            "option": "Review before approval.",
+                            "risks": ["A mismatch could be missed."],
+                        },
+                        {
+                            "option": "Request changes.",
+                            "risks": ["Release is delayed."],
+                        },
+                    ],
+                    recommended=0,
+                    details={"kind": "library_review", "packet_id": "a" * 16},
+                ),
             )
 
         def current_packet(

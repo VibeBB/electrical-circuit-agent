@@ -42,7 +42,11 @@ EXPECTED_SESSION_START_HOOKS = {
     "ensure-part-author-profiles",
     "intake-attachments",
 }
-EXPECTED_USER_PROMPT_SUBMIT_HOOKS = {"intake-attachments", "record-library-review"}
+EXPECTED_USER_PROMPT_SUBMIT_HOOKS = {
+    "intake-attachments",
+    "record-library-review",
+    "record-human-response",
+}
 EXPECTED_PRE_TOOL_USE_HOOKS = {"protect-libraries", "safety-rail"}
 EXPECTED_STOP_HOOKS = {"report-design-status", "intake-attachments", "record-library-review"}
 EXPECTED_POST_TOOL_USE_HOOKS = {
@@ -54,6 +58,8 @@ EXPECTED_CIRCUIT_MCP_TOOLS = {
     "circuit_model_generate",
     "circuit_model_inspect",
     "circuit_model_compare",
+    "circuit_human_request_create",
+    "circuit_human_request_status",
 }
 
 

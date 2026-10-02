@@ -34,6 +34,7 @@ from . import (
     doctor,
     firmware,
     fit_sheet,
+    humanrequest,
     intake,
     kicad_cli,
     landpattern,
@@ -799,6 +800,30 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_human_request_create",
+        "Create an immutable, hash-bound HumanRequest and Markdown packet",
+        {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string"},
+                "request": {"type": "object"},
+            },
+            "required": ["project_path", "request"],
+        },
+    ),
+    (
+        "circuit_human_request_status",
+        "Load a HumanRequest and report its trusted user responses",
+        {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string"},
+                "request_id": {"type": "string", "pattern": "^[0-9a-f]{16}$"},
+            },
+            "required": ["project_path", "request_id"],
+        },
+    ),
+    (
         "circuit_library_review_packet",
         "Build a fresh, hash-bound human review packet for a library part",
         {
@@ -1010,6 +1035,8 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_library_record": _anno("Library provenance record", write=True),
     "circuit_library_verify": _anno("Library verification", write=True),
     "circuit_corpus_score": _anno("Golden corpus score", write=False),
+    "circuit_human_request_create": _anno("Create HumanRequest", write=True),
+    "circuit_human_request_status": _anno("HumanRequest status", write=False),
     "circuit_library_review_packet": _anno("Library review packet", write=True),
     "circuit_library_review_status": _anno("Library review status", write=True),
     "circuit_library_review_apply": _anno("Apply review corrections", write=True),
@@ -1884,6 +1911,37 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 str(args["symbol_name"]),
                 Path(str(args["model_path"])),
             )
+        elif name == "circuit_human_request_create":
+            request_fields = args.get("request")
+            if not isinstance(request_fields, dict):
+                raise ValueError("circuit_human_request_create requires request object")
+            request = humanrequest.build_request(**cast(dict[str, Any], request_fields))
+            json_path, markdown_path = humanrequest.write_request(
+                request,
+                Path(str(args["project_path"])),
+            )
+            result = {
+                "request_id": request.request_id,
+                "request_sha256": request.request_sha256,
+                "json_path": str(json_path),
+                "markdown_path": str(markdown_path),
+            }
+        elif name == "circuit_human_request_status":
+            project = Path(str(args["project_path"]))
+            request_id = str(args["request_id"])
+            if len(request_id) != 16 or any(
+                character not in "0123456789abcdef" for character in request_id
+            ):
+                raise ValueError("request_id must be 16 lowercase hexadecimal characters")
+            request_path = project / "library" / "requests" / f"{request_id}.json"
+            request = humanrequest.load_request(request_path)
+            result = {
+                "request": request.model_dump(mode="json"),
+                "responses": [
+                    response.model_dump(mode="json")
+                    for response in humanrequest.load_responses(project, request)
+                ],
+            }
         elif name == "circuit_library_review_packet":
             spec_path = Path(str(args["part_spec_path"]))
             library_dir = Path(str(args["library_dir"]))

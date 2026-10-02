@@ -21,7 +21,7 @@ import pdfplumber
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
-from . import advisory, authoring, datasheet, kicad_cli, pinsource, visionread
+from . import advisory, authoring, datasheet, humanrequest, kicad_cli, pinsource, visionread
 from . import pinout as pinout_oracle
 from .datasheet import DatasheetExtraction, PageExtraction
 from .landpattern import Density, LandPatternResult, compute_land_pattern
@@ -79,6 +79,7 @@ class ReviewPacket(BaseModel):
     inputs: dict[str, Any]
     findings: list[ReviewFinding]
     unknowns: list[str]
+    agent_request: humanrequest.HumanRequest
 
 
 class ReviewCorrection(BaseModel):
@@ -190,6 +191,7 @@ def packet_id(
     rule_chain_sha256: str | None = None,
     pin_source_sha256: str | None = None,
     pin_source_kind: str | None = None,
+    request_sha256: str | None = None,
 ) -> str:
     value = {
         "format": 1,
@@ -211,8 +213,156 @@ def packet_id(
     if pin_source_sha256 is not None:
         value["pin_source_sha256"] = pin_source_sha256
         value["pin_source_kind"] = pin_source_kind
+    if request_sha256 is not None:
+        value["request_sha256"] = request_sha256
     canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _matching_agent_request(
+    review_root: Path,
+    input_hashes: dict[str, Any],
+    base_packet_id: str,
+) -> humanrequest.HumanRequest | None:
+    for review_path in sorted(review_root.glob("*/review.json")):
+        try:
+            document = json.loads(review_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(document, dict):
+            continue
+        record = cast(dict[str, Any], document)
+        stored_inputs = record.get("inputs")
+        if not isinstance(stored_inputs, dict) or any(
+            cast(dict[str, Any], stored_inputs).get(name) != value
+            for name, value in input_hashes.items()
+        ):
+            continue
+        request_value = record.get("agent_request")
+        if not isinstance(request_value, dict):
+            continue
+        try:
+            request = humanrequest.HumanRequest.model_validate_json(
+                json.dumps(request_value, ensure_ascii=False)
+            )
+        except ValueError:
+            continue
+        if (
+            request.kind == "library_review"
+            and isinstance(request.details, humanrequest.LibraryReviewDetails)
+            and request.details.packet_id == base_packet_id
+        ):
+            return request
+    return None
+
+
+def _matching_project_request(
+    project_dir: Path,
+    spec: PartSpec,
+    input_hashes: dict[str, Any],
+    base_packet_id: str,
+) -> humanrequest.HumanRequest | None:
+    request_dir = project_dir / "library" / "requests"
+    expected_hashes = {
+        "datasheet": input_hashes.get("pdf_sha256"),
+        "part_spec": input_hashes.get("part_spec_sha256"),
+        "symbol": input_hashes.get("symbol_lib_sha256"),
+        "footprint": input_hashes.get("footprint_sha256"),
+    }
+    expected_hashes = {
+        key: value if isinstance(value, str) and SHA256_RE.fullmatch(value) else None
+        for key, value in expected_hashes.items()
+    }
+    matches: list[humanrequest.HumanRequest] = []
+    for request_path in sorted(request_dir.glob("*.json")):
+        try:
+            request = humanrequest.load_request(request_path)
+        except humanrequest.HumanRequestError:
+            continue
+        if (
+            request.kind != "library_review"
+            or not isinstance(request.details, humanrequest.LibraryReviewDetails)
+            or request.details.packet_id != base_packet_id
+            or request.subject.manufacturer != spec.manufacturer
+            or request.subject.mpn != spec.mpn
+        ):
+            continue
+        stored_hashes = {item.ref: item.sha256 for item in request.evidence}
+        if all(stored_hashes.get(key) == value for key, value in expected_hashes.items()):
+            matches.append(request)
+    return max(matches, key=lambda item: (item.created_at, item.request_id), default=None)
+
+
+def _build_agent_request(
+    spec: PartSpec,
+    *,
+    base_packet_id: str,
+    input_hashes: dict[str, Any],
+) -> humanrequest.HumanRequest:
+    evidence = [
+        humanrequest.RequestEvidence(
+            kind="hash",
+            ref=label,
+            sha256=value if isinstance(value, str) and SHA256_RE.fullmatch(value) else None,
+            summary=(
+                f"Current {label.replace('_', ' ')} input is bound to this review packet."
+                if isinstance(value, str) and SHA256_RE.fullmatch(value)
+                else f"No current hash is available for {label.replace('_', ' ')}."
+            ),
+        )
+        for label, value in (
+            ("datasheet", input_hashes.get("pdf_sha256")),
+            ("part_spec", input_hashes.get("part_spec_sha256")),
+            ("symbol", input_hashes.get("symbol_lib_sha256")),
+            ("footprint", input_hashes.get("footprint_sha256")),
+        )
+    ]
+    assessment = (
+        "The packet presents the current PartSpec, source datasheet, symbol, footprint, model, "
+        "and deterministic verification results for human review. These artifacts may still "
+        "contain authored mistakes even when hashes and seals agree. Compare each "
+        "evidence-backed pin and package claim with the source; this assessment is advisory "
+        "and grants no authority by itself."
+    )
+    return humanrequest.build_request(
+        kind="library_review",
+        subject={
+            "manufacturer": spec.manufacturer,
+            "mpn": spec.mpn,
+            "revision": spec.datasheet.revision or None,
+        },
+        reason="Review the evidence-bound library packet before accepting this part.",
+        evidence=evidence,
+        known=[
+            "The packet identity binds the current datasheet, PartSpec, symbol, and footprint.",
+            "Hash or seal agreement does not prove that the authored content matches the source.",
+        ],
+        unknown=[],
+        agent_assessment=assessment,
+        recommendation="Approve only after the evidence and deterministic findings are reviewed.",
+        recommendation_rationale=(
+            "Approval is a separate human decision. Reject or request corrections if any pin, "
+            "package, land-pattern, or model claim is unsupported or contradictory."
+        ),
+        alternatives=[
+            {
+                "option": (
+                    "Approve only after the evidence and deterministic findings are reviewed."
+                ),
+                "risks": ["An overlooked source mismatch could propagate into downstream designs."],
+            },
+            {
+                "option": "Request corrections or additional evidence.",
+                "risks": ["Library release is delayed until the discrepancy is resolved."],
+            },
+        ],
+        recommended=0,
+        details={
+            "kind": "library_review",
+            "packet_id": base_packet_id,
+            "finding_codes": [],
+        },
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -345,13 +495,34 @@ def current_packet_id(
         if not run_dir.is_relative_to(spec_dir):
             raise ValueError("authoring run path escapes the PartSpec directory")
         comparison = authoring.compare_runs(run_dir)
-        authoring_hashes = list(comparison.sealed.values())
+        authoring_hashes = sorted(comparison.sealed.values())
     lineage = _load_lineage(footprint_path)
     rules, _ = _review_rules(
         lineage,
         (library_dir / "rules") if library_dir is not None else (spec_dir / "library" / "rules"),
     )
-    return packet_id(
+    input_hashes: dict[str, Any] = {
+        "pdf_sha256": _sha256(pdf_path),
+        "part_spec_sha256": part_spec_sha256(spec_path),
+        "symbol_lib_sha256": _sha256(symbol_lib),
+        "symbol_name": symbol_name,
+        "footprint_sha256": _sha256(footprint_path),
+        "model_sha256s": sorted(model_hashes),
+        "density": density,
+        "tolerance_mm": tolerance_mm,
+        "model_required": model_required,
+        "lineage_sha256": _optional_sha256(lineage_path_for(footprint_path)),
+        "rule_chain_sha256": rules.chain_sha256,
+        "authoring_sha256s": authoring_hashes,
+        "pin_source_path": str(pin_source_path.resolve()) if pin_source_path is not None else None,
+        "pin_source_sha256": (
+            _optional_sha256(pin_source_path) if pin_source_path is not None else None
+        ),
+        "pin_source_kind": (
+            pin_source_path.suffix.casefold() if pin_source_path is not None else None
+        ),
+    }
+    base_packet_id = packet_id(
         pdf_sha256=_sha256(pdf_path),
         part_spec_sha256=part_spec_sha256(spec_path),
         symbol_lib_sha256=_sha256(symbol_lib),
@@ -370,6 +541,38 @@ def current_packet_id(
         pin_source_kind=(
             pin_source_path.suffix.casefold() if pin_source_path is not None else None
         ),
+    )
+    review_library_dir = library_dir if library_dir is not None else spec_dir / "library"
+    request = _matching_agent_request(
+        review_library_dir / "reviews" / _safe_field(spec.mpn),
+        input_hashes,
+        base_packet_id,
+    )
+    if request is None:
+        request = _matching_project_request(
+            review_library_dir.parent,
+            spec,
+            input_hashes,
+            base_packet_id,
+        )
+    if request is None:
+        return base_packet_id
+    return packet_id(
+        pdf_sha256=_sha256(pdf_path),
+        part_spec_sha256=part_spec_sha256(spec_path),
+        symbol_lib_sha256=_sha256(symbol_lib),
+        symbol_name=symbol_name,
+        footprint_sha256=_sha256(footprint_path),
+        model_sha256s=model_hashes,
+        density=density,
+        tolerance_mm=tolerance_mm,
+        model_required=model_required,
+        authoring_sha256s=authoring_hashes,
+        lineage_sha256=_optional_sha256(lineage_path_for(footprint_path)),
+        rule_chain_sha256=rules.chain_sha256,
+        pin_source_sha256=input_hashes["pin_source_sha256"],
+        pin_source_kind=input_hashes["pin_source_kind"],
+        request_sha256=request.request_sha256,
     )
 
 
@@ -2576,6 +2779,11 @@ def _review_html(review: dict[str, Any]) -> str:
             if isinstance(item, dict)
         ]
 
+    def string_items(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in cast(list[object], value)]
+
     findings = review["findings"]
     findings_html = (
         "".join(
@@ -2989,6 +3197,31 @@ def _review_html(review: dict[str, Any]) -> str:
     )
     message = html.escape(review["message_template"])
     unknowns = "".join(f"<li>{html.escape(item)}</li>" for item in review["unknowns"])
+    request_value = review.get("agent_request")
+    request_data = cast(dict[str, Any], request_value) if isinstance(request_value, dict) else {}
+    alternatives_value = request_data.get("alternatives")
+    alternatives_html = "".join(
+        "<li><strong>"
+        + escape(item.get("option", ""))
+        + (" (recommended)" if index == request_data.get("recommended") else "")
+        + "</strong><ul>"
+        + "".join(f"<li>{escape(risk)}</li>" for risk in string_items(item.get("risks")))
+        + "</ul></li>"
+        for index, item in enumerate(record_items(alternatives_value))
+    )
+    agent_request_html = (
+        "<h2>Agent assessment</h2><p>"
+        + escape(request_data.get("agent_assessment", ""))
+        + "</p><h2>Recommendation</h2><p><strong>"
+        + escape(request_data.get("recommendation", ""))
+        + "</strong></p><p>"
+        + escape(request_data.get("recommendation_rationale", ""))
+        + "</p><h2>Alternatives and risks</h2><ul>"
+        + (alternatives_html or "<li>None.</li>")
+        + "</ul>"
+        if request_data
+        else ""
+    )
     return (
         '<!doctype html><html><head><meta charset="utf-8"><title>Library review</title>'
         "<style>body{font:15px sans-serif;max-width:1200px;margin:2rem auto}"
@@ -3054,7 +3287,9 @@ def _review_html(review: dict[str, Any]) -> str:
         + hashes_html
         + "</ul><h2>Unknowns</h2><ul>"
         + unknowns
-        + "</ul><h2>Decision message template</h2><pre>"
+        + "</ul>"
+        + agent_request_html
+        + "<h2>Decision message template</h2><pre>"
         + message
         + "</pre></body></html>\n"
     )
@@ -3210,6 +3445,43 @@ def build_review_packet(
         "pin_source_sha256": pin_source_sha256,
         "pin_source_kind": pin_source_kind,
     }
+    base_packet_id = packet_id(
+        pdf_sha256=pdf_sha256,
+        part_spec_sha256=part_spec_hash,
+        symbol_lib_sha256=symbol_lib_sha256,
+        symbol_name=symbol_name,
+        footprint_sha256=footprint_sha256,
+        model_sha256s=model_hashes,
+        density=density,
+        tolerance_mm=tolerance_mm,
+        model_required=model_required,
+        authoring_sha256s=(
+            authoring_comparison.sealed.values() if authoring_comparison is not None else ()
+        ),
+        lineage_sha256=lineage_sha256,
+        rule_chain_sha256=rules.chain_sha256,
+        pin_source_sha256=pin_source_sha256,
+        pin_source_kind=pin_source_kind,
+    )
+    agent_request = _matching_agent_request(
+        out_dir / _safe_field(spec.mpn),
+        input_hashes,
+        base_packet_id,
+    )
+    if agent_request is None:
+        agent_request = _matching_project_request(
+            library_dir.parent,
+            spec,
+            input_hashes,
+            base_packet_id,
+        )
+    if agent_request is None:
+        agent_request = _build_agent_request(
+            spec,
+            base_packet_id=base_packet_id,
+            input_hashes=input_hashes,
+        )
+    humanrequest.write_request(agent_request, library_dir.parent)
     current_id = packet_id(
         pdf_sha256=pdf_sha256,
         part_spec_sha256=part_spec_hash,
@@ -3227,6 +3499,7 @@ def build_review_packet(
         rule_chain_sha256=rules.chain_sha256,
         pin_source_sha256=pin_source_sha256,
         pin_source_kind=pin_source_kind,
+        request_sha256=agent_request.request_sha256,
     )
     packet_dir = out_dir / _safe_field(spec.mpn) / current_id
     packet_dir.mkdir(parents=True, exist_ok=True)
@@ -3759,6 +4032,7 @@ def build_review_packet(
         "approvable": approvable,
         "unknowns": sorted(set(unknowns)),
         "message_template": message_template,
+        "agent_request": agent_request.model_dump(mode="json"),
     }
     (packet_dir / "review.json").write_text(
         json.dumps(review_document, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -3780,4 +4054,5 @@ def build_review_packet(
         inputs=review_document["inputs"],
         findings=findings,
         unknowns=review_document["unknowns"],
+        agent_request=agent_request,
     )
