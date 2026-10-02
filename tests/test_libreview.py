@@ -664,6 +664,12 @@ def test_review_html_surfaces_substitution_and_alternative_evidence_first() -> N
     review: dict[str, Any] = {
         "packet_id": "a" * 16,
         "findings": [],
+        "pin_comparisons": [],
+        "dimensions": [],
+        "renders": [],
+        "artifact_hashes": {},
+        "message_template": "CIRCUIT-LIBRARY-REVIEW",
+        "unknowns": [],
         "substitution": {
             "target_mpn": "TARGET-1",
             "substitute_mpn": "SUBSTITUTE-2",

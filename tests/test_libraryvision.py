@@ -31,7 +31,11 @@ def test_model_render_is_rescaled_to_physical_board_extent(tmp_path: Path) -> No
 
 
 def test_model_comparison_region_uses_the_package_pin1_drawing() -> None:
-    pin1_reading = SimpleNamespace(page=4, bbox=(200.0, 150.0, 220.0, 170.0))
+    pin1_reading = SimpleNamespace(
+        page=4,
+        bbox=(200.0, 150.0, 220.0, 170.0),
+        alternative_evidence=None,
+    )
     spec = cast(
         PartSpec,
         SimpleNamespace(

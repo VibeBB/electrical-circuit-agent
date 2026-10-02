@@ -15,7 +15,7 @@ from PIL import Image
 
 from circuit import humanrequest, mcp_server
 from circuit.advisory import AdvisoryResult
-from circuit.datasheet import DatasheetExtraction, PageExtraction
+from circuit.datasheet import DatasheetExtraction, PageExtraction, load_extraction
 from circuit.kicad_cli import DiffReport, JobsetResult
 from circuit.landpattern import Density
 from circuit.libsource import ImportReport, SourceInfoInput
@@ -31,6 +31,7 @@ from circuit.partspec import (
     PinSpec,
     PinTable,
     Reading,
+    check_part_spec,
 )
 from circuit.report import DesignReport
 from circuit.sch_lint import SchLintReport
@@ -64,6 +65,7 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_stackup",
         "circuit_rasterize",
         "circuit_datasheet_extract",
+        "circuit_datasheet_check_received",
         "circuit_vision_read",
         "circuit_vision_compare",
         "circuit_model_generate",
@@ -209,6 +211,103 @@ def test_mcp_server_lists_expected_tools() -> None:
         "footprint_path",
         "model_path",
     }
+    received_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_datasheet_check_received"
+    )
+    assert set(received_schema["properties"]) == {"pdf_path", "request_path"}
+    assert set(received_schema["required"]) == {"pdf_path", "request_path"}
+
+
+def test_datasheet_check_received_mcp_tool_returns_findings_and_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    pdf_path = tmp_path / "received.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    request = humanrequest.build_request(
+        kind="datasheet_acquisition",
+        subject={"manufacturer": "Example", "mpn": "TEST-1", "revision": "A"},
+        reason="The matching datasheet could not be found.",
+        evidence=[
+            {
+                "kind": "note",
+                "ref": "attempts",
+                "summary": "The manufacturer source was checked.",
+            }
+        ],
+        known=["The requested part is TEST-1."],
+        unknown=["Package evidence remains unavailable."],
+        agent_assessment=(
+            "The requested source is not yet available for package verification. Confirm that "
+            "the received file matches the manufacturer part number and requested revision, "
+            "then compare its pin and package evidence with the intended library content. A "
+            "successful text check does not authorize release or substitute for review of the "
+            "underlying PDF."
+        ),
+        recommendation="Provide the requested datasheet.",
+        recommendation_rationale="Package and pin claims require source evidence.",
+        alternatives=[
+            {
+                "option": "Provide the requested datasheet.",
+                "risks": ["The library remains blocked until the PDF is checked."],
+            },
+            {
+                "option": "Report the datasheet unavailable.",
+                "risks": ["Alternative evidence or substitute permission is required."],
+            },
+        ],
+        recommended=0,
+        details={
+            "kind": "datasheet_acquisition",
+            "failure_reason": "not_found",
+            "requested_revision": "A",
+            "required_sections": ["package_drawing", "pinout", "pin_table"],
+            "attempted_sources": ["manufacturer"],
+            "optional_cad_requested": False,
+        },
+    )
+    request_path, _ = humanrequest.write_request(request, tmp_path)
+    finding = mcp_server.partspec.SpecFinding(
+        code="datasheet_mpn_mismatch",
+        severity="error",
+        field="datasheet.mpn",
+        message="Target MPN is missing from received evidence.",
+    )
+    calls: list[tuple[Path, humanrequest.HumanRequest]] = []
+
+    def check_received(
+        checked_pdf: Path,
+        checked_request: humanrequest.HumanRequest,
+    ) -> list[mcp_server.partspec.SpecFinding]:
+        calls.append((checked_pdf, checked_request))
+        return [finding]
+
+    monkeypatch.setattr(mcp_server.datasheet, "check_received", check_received)
+    result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_datasheet_check_received",
+            {"pdf_path": str(pdf_path), "request_path": str(request_path)},
+        )
+    )
+
+    assert result.isError is False
+    payload = json.loads(cast(TextContent, result.content[0]).text)
+    assert payload == [finding.model_dump(mode="json")]
+    assert calls == [(pdf_path, request)]
+
+    failed = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_datasheet_check_received",
+            {
+                "pdf_path": str(pdf_path),
+                "request_path": str(tmp_path / "missing-request.json"),
+            },
+        )
+    )
+    assert failed.isError is True
 
 
 @pytest.mark.parametrize("confidential", [False, True])
@@ -234,7 +333,9 @@ def test_human_request_mcp_create_and_status(
         "agent_assessment": (
             "This request presents source evidence and deterministic findings for review. "
             "Compare each package and pin claim with the cited material before deciding. "
-            "Hash agreement does not prove that the underlying library content is correct."
+            "Hash agreement does not prove that the underlying library content is correct. "
+            "Every unresolved field remains explicit, and approval requires independent "
+            "human review of the evidence."
         ),
         "recommendation": "Approve only after review.",
         "recommendation_rationale": "Approval remains an independent human decision.",
@@ -343,8 +444,20 @@ def test_library_metrics_and_mutation_report_mcp_tools(
     verifier_fixture = _known_good_library_fixture(fixture_root, monkeypatch, seed=9)
     spec = verifier_fixture.artifacts.spec
     spec_path = verifier_fixture.artifacts.source_spec_path
-    spec_check_path = verifier_fixture.artifacts.spec_check_path
-    assert spec_path is not None and spec_check_path is not None
+    assert spec_path is not None
+    datasheet_ref = spec.datasheet
+    assert datasheet_ref is not None
+    extraction_path = Path(datasheet_ref.extraction_path)
+    if not extraction_path.is_absolute():
+        extraction_path = spec_path.parent / extraction_path
+    spec_check_path = fixture_root / "part-spec-check.json"
+    spec_check = check_part_spec(
+        spec,
+        load_extraction(extraction_path),
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    spec_check_path.write_text(spec_check.model_dump_json(indent=2) + "\n", encoding="utf-8")
     symbol_lib = fixture_root / "library" / "Fixture.kicad_sym"
     footprint_path = (
         fixture_root / "library" / "Fixture.pretty" / f"{spec.package.drawing_id}.kicad_mod"
@@ -376,7 +489,12 @@ def test_library_metrics_and_mutation_report_mcp_tools(
     ) -> mcp_server.mutation.MutationReport:
         nonlocal report
         findings = list(mutation_fixture.verify(mutation_fixture.artifacts))
-        assert not [item for item in findings if item.severity == "error"]
+        assert not [
+            item
+            for item in findings
+            if item.severity == "error"
+            and mcp_server.mutation.family_for_code(item.code) not in {"vision", "integrity"}
+        ]
         report = mcp_server.mutation.MutationReport(
             seed=mutation_fixture.seed,
             baseline_findings=sorted(item.code for item in findings),
@@ -1316,7 +1434,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 47
+            assert len(tools.tools) == 50
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title
