@@ -164,13 +164,13 @@ def _response_metadata(record: dict[str, Any]) -> tuple[str | None, bool]:
     if not lines:
         return None, False
     match = _REQUEST_LINE.fullmatch(lines[0].strip())
-    confidential = any(
+    local_only = any(
         key.strip().casefold() == "confidential" and value.strip().casefold() == "yes"
         for line in lines[1:]
         for key, separator, value in [line.partition(":")]
         if separator
     )
-    return (match.group(1) if match is not None else None), confidential
+    return (match.group(1) if match is not None else None), local_only
 
 
 def _scan_event_file(path: Path) -> list[dict[str, Any]]:
@@ -191,7 +191,7 @@ def _scan_event_file(path: Path) -> list[dict[str, Any]]:
             if isinstance(url, str):
                 urls.append(url)
     pdf_urls = [url for url in _pdf_attachment_values(record) if _decode_pdf(url) is not None]
-    request_id, confidential = _response_metadata(record)
+    request_id, local_only = _response_metadata(record)
     if not urls and not pdf_urls:
         return []
     return [
@@ -201,12 +201,12 @@ def _scan_event_file(path: Path) -> list[dict[str, Any]]:
             "image_urls": urls,
             "pdf_urls": pdf_urls,
             "request_id": request_id,
-            "confidential": confidential,
+            "local_only": local_only,
         }
     ]
 
 
-def _load_manifest(manifest: Path) -> set[tuple[str, bool]]:
+def _load_manifest(manifest: Path, *, local_only: bool) -> set[tuple[str, bool]]:
     seen: set[tuple[str, bool]] = set()
     try:
         for line in manifest.read_text(encoding="utf-8").splitlines():
@@ -217,13 +217,18 @@ def _load_manifest(manifest: Path) -> set[tuple[str, bool]]:
             if isinstance(record, dict):
                 record = cast(dict[str, Any], record)
                 if isinstance(record.get("sha256"), str):
-                    seen.add((record["sha256"], record.get("confidential") is True))
+                    seen.add(
+                        (
+                            record["sha256"],
+                            local_only or record.get("confidential") is True,
+                        )
+                    )
     except OSError:
         pass
     return seen
 
 
-def _confidential_attachments_dir(project: Path) -> Path:
+def _local_only_attachments_dir(project: Path) -> Path:
     root = project / ".confidential"
     root.mkdir(parents=True, exist_ok=True)
     gitignore = root / ".gitignore"
@@ -257,7 +262,11 @@ def main() -> int:
     with contextlib.suppress(OSError):
         processed = set(marker.read_text(encoding="utf-8").split())
     manifest = out_dir / "manifest.jsonl"
-    seen_sha = _load_manifest(manifest)
+    project = project_dir(payload)
+    local_manifest = project / ".confidential" / "intake" / "attachments" / "manifest.jsonl"
+    seen_sha = _load_manifest(manifest, local_only=False) | _load_manifest(
+        local_manifest, local_only=True
+    )
     pending = [
         entry
         for path in sorted(events_dir.glob("event-*.json"))
@@ -271,7 +280,7 @@ def main() -> int:
         return 0
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-        records: list[dict[str, Any]] = []
+        records: dict[Path, list[dict[str, Any]]] = {manifest: [], local_manifest: []}
         for entry in pending:
             attachments = [
                 ("image", index, url) for index, url in enumerate(entry["image_urls"])
@@ -286,7 +295,6 @@ def main() -> int:
                     "origin": "user_provided",
                     "event_sha256": entry["event_sha256"],
                     "request_id": entry["request_id"],
-                    "confidential": entry["confidential"],
                     "recorded_at": datetime.now(UTC).isoformat(),
                 }
                 if decoded_image is None and pdf_data is None:
@@ -309,11 +317,9 @@ def main() -> int:
                             "bytes": len(data),
                         }
                     )
-                    seen_key = (sha256, entry["confidential"])
+                    seen_key = (sha256, entry["local_only"])
                     target_dir = (
-                        _confidential_attachments_dir(project_dir(payload))
-                        if entry["confidential"]
-                        else out_dir
+                        _local_only_attachments_dir(project) if entry["local_only"] else out_dir
                     )
                     target_path = target_dir / f"{sha256[:12]}{ext}"
                     if seen_key in seen_sha and target_path.is_file():
@@ -326,11 +332,20 @@ def main() -> int:
                         if kind == "image":
                             record["image_path"] = str(target_path)
                         seen_sha.add(seen_key)
-                records.append(record)
-        with manifest.open("a", encoding="utf-8") as stream:
-            for record in records:
-                stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
-                stream.write("\n")
+                if entry["local_only"]:
+                    record.pop("attachment_path", None)
+                    record.pop("image_path", None)
+                    records[local_manifest].append(record)
+                else:
+                    records[manifest].append(record)
+        for output_manifest, output_records in records.items():
+            if not output_records:
+                continue
+            output_manifest.parent.mkdir(parents=True, exist_ok=True)
+            with output_manifest.open("a", encoding="utf-8") as stream:
+                for record in output_records:
+                    stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+                    stream.write("\n")
         with marker.open("a", encoding="utf-8") as stream:
             for name in scanned:
                 stream.write(name + "\n")
