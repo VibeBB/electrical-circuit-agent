@@ -97,12 +97,15 @@ def _model_load_failure(message: str) -> bool:
 def _expected_terminal_centers(
     shape: occt.Shape,
     rotation_deg: float,
+    placement_xy_mm: tuple[float, float],
 ) -> list[tuple[float, float]]:
     return [
         footprint_to_board_xy(
             (region.bbox_xy[0] + region.bbox_xy[2]) / 2,
             (region.bbox_xy[1] + region.bbox_xy[3]) / 2,
             rotation_deg=rotation_deg,
+            origin_x=placement_xy_mm[0],
+            origin_y=placement_xy_mm[1],
         )
         for region in occt.slab_regions(shape, 0.0, 0.02)
     ]
@@ -143,6 +146,7 @@ def verify_model_export(
     model_path: Path | None,
     rules: EffectiveRules,
     out_dir: Path,
+    placement_xy_mm: tuple[float, float] = (0.0, 0.0),
 ) -> ModelExportReport:
     """Compare KiCad's board STEP export with the referenced model placement."""
     findings: list[ModelExportFinding] = []
@@ -191,6 +195,7 @@ def verify_model_export(
                 footprint_path=footprint_path,
                 rules=rules,
                 rotation_deg=rotation_deg,
+                placement_xy_mm=placement_xy_mm,
                 model_reference_override=model_reference,
             )
             board_top_z_mm = _board_thickness_mm(board_path) - 0.005
@@ -280,7 +285,7 @@ def verify_model_export(
 
         exported_volume = sum(solid.volume for solid in exported_facts.solids)
         expected_centers = (
-            _expected_terminal_centers(source_shape, rotation_deg)
+            _expected_terminal_centers(source_shape, rotation_deg, placement_xy_mm)
             if source_shape is not None
             else []
         )
@@ -341,7 +346,16 @@ def verify_model_export(
     zero_run = next((run for run in runs if run.rotation_deg == 0.0), None)
     ninety_run = next((run for run in runs if run.rotation_deg == 90.0), None)
     if zero_run is not None and ninety_run is not None and zero_run.passed and ninety_run.passed:
-        rotated_zero_centers = [(-y, x) for x, y in zero_run.terminal_centers_xy]
+        rotated_zero_centers = [
+            footprint_to_board_xy(
+                x - placement_xy_mm[0],
+                y - placement_xy_mm[1],
+                rotation_deg=90.0,
+                origin_x=placement_xy_mm[0],
+                origin_y=placement_xy_mm[1],
+            )
+            for x, y in zero_run.terminal_centers_xy
+        ]
         if not _match_terminal_centers(rotated_zero_centers, ninety_run.terminal_centers_xy):
             findings.append(
                 ModelExportFinding(

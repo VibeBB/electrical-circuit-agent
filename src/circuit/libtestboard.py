@@ -299,6 +299,7 @@ def _board_footprint(
     net_ids: dict[str, int],
     number_to_name: dict[str, str],
     rotation_deg: float = 0.0,
+    placement_xy_mm: tuple[float, float] = (0.0, 0.0),
     model_reference_override: str | None = None,
 ) -> list[sexpr.SExpr]:
     root = sexpr.parse_text(footprint_path.read_text(encoding="utf-8"))
@@ -321,7 +322,12 @@ def _board_footprint(
         if not isinstance(child, list) or not child:
             continue
         if child[0] == "at":
-            child[:] = ["at", "0", "0", _format_number(rotation_deg)]
+            child[:] = [
+                "at",
+                _format_number(placement_xy_mm[0]),
+                _format_number(placement_xy_mm[1]),
+                _format_number(rotation_deg),
+            ]
             placement_found = True
         elif child[0] == "property" and len(child) >= 3:
             if child[1] == "Reference":
@@ -336,7 +342,15 @@ def _board_footprint(
             else:
                 _set_net(child, 0, "")
     if not placement_found:
-        root.insert(2, ["at", "0", "0", _format_number(rotation_deg)])
+        root.insert(
+            2,
+            [
+                "at",
+                _format_number(placement_xy_mm[0]),
+                _format_number(placement_xy_mm[1]),
+                _format_number(rotation_deg),
+            ],
+        )
     if _first(root, "uuid") is None:
         root.append(["uuid", sexpr.quoted(_uuid(f"{footprint_name}:board-footprint"))])
     if _first(root, "path") is None:
@@ -364,6 +378,7 @@ def _write_board(
     footprint: FootprintDef,
     rules: EffectiveRules,
     rotation_deg: float = 0.0,
+    placement_xy_mm: tuple[float, float] = (0.0, 0.0),
     board_thickness_mm: float = 1.6,
     model_reference_override: str | None = None,
 ) -> tuple[Path, dict[str, str]]:
@@ -383,6 +398,7 @@ def _write_board(
         net_ids=net_ids,
         number_to_name=number_to_name,
         rotation_deg=rotation_deg,
+        placement_xy_mm=placement_xy_mm,
         model_reference_override=model_reference_override,
     )
     courtyard = [
@@ -487,6 +503,7 @@ def write_model_export_board(
     footprint_path: Path,
     rules: EffectiveRules,
     rotation_deg: float,
+    placement_xy_mm: tuple[float, float] = (0.0, 0.0),
     model_reference_override: str,
     board_thickness_mm: float = 1.6,
 ) -> Path:
@@ -499,6 +516,7 @@ def write_model_export_board(
         footprint=footprint,
         rules=rules,
         rotation_deg=rotation_deg,
+        placement_xy_mm=placement_xy_mm,
         board_thickness_mm=board_thickness_mm,
         model_reference_override=model_reference_override,
     )

@@ -613,7 +613,10 @@ def _check_pinout_geometry(
     if geometry is None:
         return
 
-    drawing_positions = {label.number: (label.x, label.y) for label in geometry.labels}
+    drawing_positions = pinout_oracle.to_top_view(
+        {label.number: (label.x, label.y) for label in geometry.labels},
+        geometry.view,
+    )
     pin_numbers = {str(number) for number in range(1, spec.package.pin_count + 1)}
     if footprint is not None:
         pad_positions: dict[str, list[tuple[float, float]]] = {}

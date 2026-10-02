@@ -120,6 +120,15 @@ def normalized(points: dict[str, Point]) -> dict[str, Point]:
     }
 
 
+def to_top_view(
+    points: dict[str, Point],
+    view: Literal["top", "bottom"],
+) -> dict[str, Point]:
+    if view == "top":
+        return dict(points)
+    return {number: (-x, y) for number, (x, y) in points.items()}
+
+
 def winding(points: Sequence[Point]) -> Winding | None:
     if len(points) < 3:
         return None
