@@ -421,8 +421,7 @@ def main() -> int:
     )
     if confidential_target is not None:
         print(
-            f"confidential artifacts may not be staged, committed, or pushed: "
-            f"{confidential_target}",
+            "confidential artifacts may not be staged, committed, or pushed",
             file=sys.stderr,
         )
         return 2
