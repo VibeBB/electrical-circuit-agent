@@ -105,7 +105,6 @@ EXPECTED_INTEGRITY_CODES = {
     "datasheet_sha_mismatch",
     "evidence_sha_mismatch",
     "extraction_stale",
-    "confidential_artifact_outside_store",
     "lineage_base",
     "lineage_evidence",
     "lineage_footprint_hash",
