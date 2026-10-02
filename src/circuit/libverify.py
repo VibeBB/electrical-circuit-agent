@@ -2155,12 +2155,10 @@ def _verify_model_geometry(
     body_actual = (
         body_bbox.x_max - body_bbox.x_min,
         body_bbox.y_max - body_bbox.y_min,
-        body_bbox.z_max - body_bbox.z_min,
     )
     dimensions = (
         (spec.package.body_width, body_actual[0]),
         (spec.package.body_length, body_actual[1]),
-        (spec.package.height, body_actual[2]),
     )
     dimension_mismatch = any(
         (lower is not None and actual < lower - 1e-6)
@@ -2168,13 +2166,34 @@ def _verify_model_geometry(
         for dimension, actual in dimensions
         for lower, upper in (_model_dimension_bounds(dimension, tolerance_mm),)
     )
-    if dimension_mismatch or abs(overall_bbox[2]) > 0.01 or not body_inferred:
+    if dimension_mismatch or not body_inferred:
         _finding(
             findings,
             "model_body_dimension",
             "error",
             f"model.{path}",
-            "model body dimensions or overall bottom Z are outside the PartSpec limits",
+            "model body X/Y limits fail or the body could not be isolated",
+            model_sha256=model_sha256,
+        )
+    if abs(overall_bbox[2]) > 0.01:
+        _finding(
+            findings,
+            "model_body_dimension",
+            "error",
+            f"model.{path}",
+            "model overall bottom Z must be 0 ±0.01 mm",
+            model_sha256=model_sha256,
+        )
+    height_lower, height_upper = _model_dimension_bounds(spec.package.height, tolerance_mm)
+    if (height_lower is not None and overall_bbox[5] < height_lower - 1e-6) or (
+        height_upper is not None and overall_bbox[5] > height_upper + 1e-6
+    ):
+        _finding(
+            findings,
+            "model_height",
+            "error",
+            f"model.{path}",
+            "model overall z_max is outside the PartSpec seated-height limits",
             model_sha256=model_sha256,
         )
 

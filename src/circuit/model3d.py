@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from . import occt
 from .libitems import FootprintDef, PadDef, parse_footprint
-from .partspec import PartSpec
+from .partspec import Dimension, PartSpec
 
 GENERATOR_VERSION = "1"
 _SUPPORTED = {
@@ -42,10 +42,26 @@ class GeneratedModel(BaseModel):
     marker_note: str | None
 
 
-def _nominal(dimension: object, field: str) -> float:
-    value = getattr(dimension, "nom", None)
-    if value is None or not math.isfinite(value) or value <= 0:
-        raise Model3dError(f"{field} must have a positive nominal value")
+def _nominal(
+    dimension: Dimension | None,
+    field: str,
+    derived_nominals: dict[str, str],
+    *,
+    allow_zero: bool = False,
+) -> float:
+    if dimension is None:
+        raise Model3dError(f"{field} is unavailable")
+    value = dimension.nom
+    derived = value is None
+    if value is None:
+        if dimension.min is None or dimension.max is None:
+            raise Model3dError(f"{field} requires a nominal value or both min and max")
+        value = (dimension.min + dimension.max) / 2
+    if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
+        requirement = "non-negative" if allow_zero else "positive"
+        raise Model3dError(f"{field} must have a {requirement} nominal value")
+    if derived:
+        derived_nominals[field] = "midpoint"
     return float(value)
 
 
@@ -197,19 +213,20 @@ def _lead_terminal(
     body_length: float,
 ) -> occt.Shape:
     extent_x, extent_y = _pad_extents(pad)
+    foot_height = min(0.15, standoff)
     if side == "y":
         tangent = min(extent_x, lead_width)
         radial = min(extent_y, lead_length)
         sign = -1.0 if pad.y < 0 else 1.0
         body_edge = sign * body_length / 2
         foot_inner = pad.y + sign * radial / 2
-        shoulder = occt.box(
+        shoulder_bounds = (
             pad.x - tangent / 2,
             min(body_edge, foot_inner),
-            0.15,
+            foot_height,
             tangent,
             max(abs(foot_inner - body_edge), 0.01),
-            max(standoff - 0.15, 0.01),
+            standoff - foot_height,
         )
         foot = occt.box(
             pad.x - tangent / 2,
@@ -217,7 +234,7 @@ def _lead_terminal(
             0.0,
             tangent,
             radial,
-            0.15,
+            foot_height,
         )
     else:
         tangent = min(extent_y, lead_width)
@@ -225,13 +242,13 @@ def _lead_terminal(
         sign = -1.0 if pad.x < 0 else 1.0
         body_edge = sign * body_width / 2
         foot_inner = pad.x + sign * radial / 2
-        shoulder = occt.box(
+        shoulder_bounds = (
             min(body_edge, foot_inner),
             pad.y - tangent / 2,
-            0.15,
+            foot_height,
             max(abs(foot_inner - body_edge), 0.01),
             tangent,
-            max(standoff - 0.15, 0.01),
+            standoff - foot_height,
         )
         foot = occt.box(
             pad.x - radial / 2,
@@ -239,9 +256,12 @@ def _lead_terminal(
             0.0,
             radial,
             tangent,
-            0.15,
+            foot_height,
         )
-    return occt.fuse((foot, shoulder)) if standoff > 0.15 else foot
+    if standoff <= foot_height:
+        return foot
+    shoulder = occt.box(*shoulder_bounds)
+    return occt.fuse((foot, shoulder))
 
 
 def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel:
@@ -250,27 +270,37 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
         raise Model3dError("unsupported_family")
     try:
         parsed = parse_footprint(footprint)
-        body_length = _nominal(spec.package.body_length, "body_length")
-        body_width = _nominal(spec.package.body_width, "body_width")
-        height = _nominal(spec.package.height, "height")
+        derived_nominals: dict[str, str] = {}
+        body_length = _nominal(spec.package.body_length, "body_length", derived_nominals)
+        body_width = _nominal(spec.package.body_width, "body_width", derived_nominals)
+        height = _nominal(spec.package.height, "height", derived_nominals)
         standoff = (
-            _nominal(spec.package.standoff, "standoff")
+            _nominal(
+                spec.package.standoff,
+                "standoff",
+                derived_nominals,
+                allow_zero=True,
+            )
             if spec.package.standoff is not None
             else 0.0
         )
-        pitch = _nominal(spec.package.pitch, "pitch") if spec.package.pitch is not None else None
+        pitch = (
+            _nominal(spec.package.pitch, "pitch", derived_nominals)
+            if spec.package.pitch is not None
+            else None
+        )
         lead_span = (
-            _nominal(spec.package.lead_span, "lead_span")
+            _nominal(spec.package.lead_span, "lead_span", derived_nominals)
             if spec.package.lead_span is not None
             else None
         )
         lead_length = (
-            _nominal(spec.package.lead_length, "lead_length")
+            _nominal(spec.package.lead_length, "lead_length", derived_nominals)
             if spec.package.lead_length is not None
             else None
         )
         lead_width = (
-            _nominal(spec.package.lead_width, "lead_width")
+            _nominal(spec.package.lead_width, "lead_width", derived_nominals)
             if spec.package.lead_width is not None
             else None
         )
@@ -278,15 +308,17 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
             lead_length is None or lead_width is None
         ):
             raise Model3dError("lead_length and lead_width are required for this family")
-        body_bottom = max(standoff, 0.2)
-        body_top = body_bottom + height
+        body_bottom = max(standoff, 0.03)
+        body_top = height
+        if body_top <= body_bottom:
+            raise Model3dError("height must exceed the body bottom")
         body = occt.box(
             -body_width / 2,
             -body_length / 2,
             body_bottom,
             body_width,
             body_length,
-            height,
+            body_top - body_bottom,
         )
         copper = _copper_pads(parsed)
         exposed = spec.package.exposed_pad
@@ -324,7 +356,7 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
             for pad in copper[number]:
                 solid_index = len(terminals) + 1
                 if family == "chip":
-                    terminals.append(_pad_box(pad, 0.0, 0.2))
+                    terminals.append(_pad_box(pad, 0.0, height))
                 elif family.startswith("gullwing_"):
                     if lead_length is None or lead_width is None:
                         raise Model3dError("lead dimensions are unavailable")
@@ -357,7 +389,7 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
                         _pad_box(
                             pad,
                             0.0,
-                            0.2,
+                            min(0.2, height),
                             width_limit=terminal_width,
                             height_limit=terminal_height,
                         )
@@ -370,8 +402,8 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
                     }
                 )
         if exposed is not None:
-            ep_width = _nominal(exposed.width, "exposed_pad.width")
-            ep_length = _nominal(exposed.length, "exposed_pad.length")
+            ep_width = _nominal(exposed.width, "exposed_pad.width", derived_nominals)
+            ep_length = _nominal(exposed.length, "exposed_pad.length", derived_nominals)
             ep_pad = copper.get(exposed.number, [])
             ep_x = ep_pad[0].x if ep_pad else 0.0
             ep_y = ep_pad[0].y if ep_pad else 0.0
@@ -383,7 +415,7 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
                     0.0,
                     ep_width,
                     ep_length,
-                    0.2,
+                    min(0.2, height),
                 )
             )
             terminal_map.append(
@@ -425,6 +457,7 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
             "spec_sha256": spec_sha,
             "footprint_sha256": footprint_sha,
             "step_sha256": step_sha,
+            "derived_nominals": derived_nominals,
             "parameters": {
                 "body_length_mm": body_length,
                 "body_width_mm": body_width,

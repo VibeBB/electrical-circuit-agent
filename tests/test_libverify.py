@@ -2000,6 +2000,64 @@ def test_model_geometry_rejects_offset_pitch_and_unit_scale(
     assert "model_body_dimension" in _codes(scaled)
 
 
+def test_model_geometry_checks_overall_bottom_and_seated_height(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    translated, _ = _rewrite_model(
+        tmp_path / "translated-z",
+        monkeypatch,
+        spec=_vqfn_spec(),
+        mutation=lambda shape: occt.transform(shape, translation=(0.0, 0.0, 0.2)),
+    )
+    assert "model_body_dimension" in _codes(translated)
+    assert "model_height" in _codes(translated)
+    assert any(
+        item.code == "model_body_dimension" and "bottom Z" in item.message
+        for item in translated.findings
+    )
+    assert any(item.code == "model_height" for item in translated.findings)
+
+    spec = _vqfn_spec()
+    height = spec.package.height
+    height_nominal = height.nom
+    assert height_nominal is not None
+    package = spec.package.model_copy(
+        update={
+            "height": Dimension(
+                min=height_nominal - 0.05,
+                nom=height_nominal,
+                max=height_nominal + 0.02,
+                reading=height.reading,
+            )
+        }
+    )
+    bounded_spec = spec.model_copy(update={"package": package})
+
+    def add_overheight_solid(shape: occt.Shape) -> occt.Shape:
+        return occt.compound(
+            (
+                *occt.solids(shape),
+                occt.box(
+                    -0.01,
+                    -0.01,
+                    height_nominal + 0.01,
+                    0.02,
+                    0.02,
+                    0.05,
+                ),
+            )
+        )
+
+    overheight, _ = _rewrite_model(
+        tmp_path / "overheight",
+        monkeypatch,
+        spec=bounded_spec,
+        mutation=add_overheight_solid,
+    )
+    assert "model_height" in _codes(overheight)
+
+
 def test_model_geometry_requires_pin_marker_and_separate_terminals(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

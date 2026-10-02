@@ -21,14 +21,27 @@ solid validity, and export behavior need deterministic oracles.
   `src/circuit/occt.py`; this is the sole OCP import boundary. The generator
   emits a deterministic STEP file and a hash-bound manifest. Its supported
   parametric families use separate body, terminal, and exposed-pad solids so
-  terminal regions remain independently measurable.
+  terminal regions remain independently measurable. For generation, a missing
+  dimension nominal is derived from the midpoint of its min/max limits and
+  recorded as `derived_nominals: {field: "midpoint"}` in the manifest.
+- `package.height` is the overall seated height A: every generated model's
+  highest z coordinate equals A, and the body spans from its bottom to A. The
+  gullwing and no-lead body bottom is the standoff A1 nominal, clamped to at
+  least `0.03 mm`. The chip body uses the same `0.03 mm` minimum when A1 is
+  absent or smaller. This floor keeps the body above the `z=[0, 0.02] mm`
+  terminal slab, which must contain only terminals and an exposed pad.
+  Gullwing feet extend from z=0 to `min(0.15 mm, body_bottom)` and their
+  shoulders reach the body bottom. No-lead terminals and exposed pads extend
+  from z=0 to `min(0.20 mm, A)`; chip terminals span z=0 through A. These
+  thickness caps keep terminals from exceeding the seated height.
 - Verification checks STEP units, validity, closed solids, positive volumes,
-  deterministic round-trip geometry, body dimensions, and identity transforms.
-  It intersects each solid with the `z=[0, 0.02] mm` terminal slab and requires
-  a bijection between terminal-region centers and copper pads. A region must
-  fit its pad bbox within `0.025 mm`; adjacent terminal pitch must agree with
-  the PartSpec nominal within `0.01 mm`. Geometry, terminal, and pin-1 errors
-  fail closed.
+  deterministic round-trip geometry, body X/Y dimensions, overall z_max
+  against the PartSpec height limits, bottom z, and identity transforms. It
+  intersects each solid with the `z=[0, 0.02] mm` terminal slab and requires a
+  bijection between terminal-region centers and copper pads. A region must fit
+  its pad bbox within `0.025 mm`; adjacent terminal pitch must agree with the
+  PartSpec nominal within `0.01 mm`. Geometry, terminal, and pin-1 errors fail
+  closed.
 - Pin-1 evidence comes from a geometric dimple or qualifying top-face shape,
   with best-effort STEP face-color inspection as a second method. Polarized
   packages without either marker are unverifiable. Manufacturer and generated

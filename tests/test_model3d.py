@@ -45,6 +45,10 @@ def _dimension(value: float) -> Dimension:
     return Dimension(nom=value, reading=_reading(str(value)))
 
 
+def _dimension_limits(minimum: float, maximum: float) -> Dimension:
+    return Dimension(min=minimum, max=maximum, reading=_reading(f"{minimum}-{maximum}"))
+
+
 def _fixture(
     family: PackageFamily,
 ) -> tuple[PartSpec, list[tuple[str, float, float, float, float]]]:
@@ -209,6 +213,7 @@ def test_generate_model_lands_terminals_and_is_deterministic(
     assert facts.valid
     assert facts.units == "mm"
     assert facts.solid_count == len(pads) + 1
+    assert max(solid.bbox.z_max for solid in facts.solids) == pytest.approx(spec.package.height.nom)
     regions = occt.slab_regions(shape, 0.0, 0.02)
     assert len(regions) == len(pads)
     expected_pads = sorted(
@@ -234,6 +239,61 @@ def test_generate_model_lands_terminals_and_is_deterministic(
         marker = occt.pin1_marker(shape, body.bbox)
         assert marker is not None
         assert marker.quadrant == "top_left"
+
+
+def test_generate_model_derives_midpoint_nominals_and_records_them(tmp_path: Path) -> None:
+    spec, pads = _fixture("chip")
+    package = spec.package.model_copy(
+        update={
+            "body_length": _dimension_limits(1.8, 2.2),
+            "body_width": _dimension_limits(0.9, 1.1),
+            "height": _dimension_limits(0.7, 0.9),
+        }
+    )
+    spec = spec.model_copy(update={"package": package})
+    footprint = tmp_path / "chip.kicad_mod"
+    _write_footprint(footprint, pads)
+
+    generated = generate_model(spec, footprint, tmp_path / "out")
+    manifest = json.loads(generated.manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["derived_nominals"] == {
+        "body_length": "midpoint",
+        "body_width": "midpoint",
+        "height": "midpoint",
+    }
+    assert manifest["parameters"]["body_length_mm"] == pytest.approx(2.0)
+    assert manifest["parameters"]["body_width_mm"] == pytest.approx(1.0)
+    assert manifest["parameters"]["height_mm"] == pytest.approx(0.8)
+
+
+def test_generate_model_rejects_dimension_with_only_maximum(tmp_path: Path) -> None:
+    spec, pads = _fixture("chip")
+    package = spec.package.model_copy(
+        update={"body_length": Dimension(max=2.2, reading=_reading("maximum 2.2"))}
+    )
+    spec = spec.model_copy(update={"package": package})
+    footprint = tmp_path / "chip.kicad_mod"
+    _write_footprint(footprint, pads)
+
+    with pytest.raises(
+        Model3dError, match="body_length requires a nominal value or both min and max"
+    ):
+        generate_model(spec, footprint, tmp_path / "out")
+
+
+def test_generate_model_clamps_small_standoff_for_slab_clearance(tmp_path: Path) -> None:
+    spec, pads = _fixture("gullwing_dual")
+    package = spec.package.model_copy(update={"standoff": _dimension(0.01)})
+    spec = spec.model_copy(update={"package": package})
+    footprint = tmp_path / "gullwing.kicad_mod"
+    _write_footprint(footprint, pads)
+
+    generated = generate_model(spec, footprint, tmp_path / "out")
+    manifest = json.loads(generated.manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["parameters"]["body_bottom_mm"] == pytest.approx(0.03)
+    assert len(occt.slab_regions(occt.read_step(generated.step_path), 0.0, 0.02)) == len(pads)
 
 
 def test_generate_model_rejects_unsupported_family(tmp_path: Path) -> None:
