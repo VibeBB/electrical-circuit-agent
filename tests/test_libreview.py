@@ -222,12 +222,14 @@ def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
             rule_chain_sha256=cast(str | None, fields["rule_chain_sha256"]),
             pin_source_sha256=cast(str | None, fields["pin_source_sha256"]),
             pin_source_kind=cast(str | None, fields["pin_source_kind"]),
+            request_sha256=cast(str | None, fields.get("request_sha256")),
         )
 
     first = packet_for(values)
     assert first == packet_for({**values, "model_sha256s": ["e" * 64, "f" * 64]})
     assert first == packet_for({**values, "authoring_sha256s": ["e" * 64, "f" * 64]})
     assert len(first) == 16
+    assert packet_for({**values, "request_sha256": "9" * 64}) != first
     for field, changed in (
         ("pdf_sha256", "0" * 64),
         ("part_spec_sha256", "0" * 64),
@@ -634,6 +636,19 @@ def test_review_html_lists_warnings_and_information_after_errors() -> None:
         "land_pattern_crop": None,
         "message_template": "CIRCUIT-LIBRARY-REVIEW",
         "unknowns": [],
+        "agent_request": {
+            "agent_assessment": "Compare source evidence with the generated artifacts.",
+            "recommendation": "Review before approval.",
+            "recommendation_rationale": "The artifacts need human review.",
+            "recommended": 0,
+            "alternatives": [
+                {
+                    "option": "Review before approval.",
+                    "risks": ["A mismatch could be overlooked."],
+                },
+                {"option": "Request changes.", "risks": ["Release is delayed."]},
+            ],
+        },
     }
 
     private_api: Any = libreview
@@ -641,6 +656,8 @@ def test_review_html_lists_warnings_and_information_after_errors() -> None:
 
     assert rendered.index("error: deterministic_error") < rendered.index("warning: review_warning")
     assert rendered.index("warning: review_warning") < rendered.index("info: review_info")
+    assert rendered.index("Agent assessment") < rendered.index("Decision message template")
+    assert "A mismatch could be overlooked." in rendered
 
 
 def test_review_html_renders_inline_evidence_renders_and_mismatch_cells() -> None:

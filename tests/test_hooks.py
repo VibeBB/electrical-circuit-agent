@@ -12,6 +12,7 @@ from typing import Any, Literal
 import pytest
 
 from circuit.advisory import AdvisoryResult
+from circuit.humanrequest import HumanRequest, build_request, load_responses, write_request
 from circuit.kicad_cli import JobsetResult
 from circuit.report import DesignReport
 from circuit.sch_lint import SchLintReport
@@ -47,6 +48,14 @@ LIBRARY_REVIEW_SCRIPT = (
     / "hooks"
     / "scripts"
     / "record_library_review.py"
+)
+HUMAN_RESPONSE_SCRIPT = (
+    Path(__file__).parents[1]
+    / "plugins"
+    / "circuit"
+    / "hooks"
+    / "scripts"
+    / "record_human_response.py"
 )
 PART_AUTHOR_PROFILES_SCRIPT = (
     Path(__file__).parents[1]
@@ -1033,3 +1042,158 @@ def test_provenance_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     absolute = tmp_path / "abs" / "log.jsonl"
     monkeypatch.setenv(env, str(absolute))
     assert module.events_path(payload, env, rel) == absolute
+
+
+def _human_request_for_hook() -> HumanRequest:
+    return build_request(
+        kind="library_review",
+        subject={"manufacturer": "Example", "mpn": "TEST-1"},
+        reason="Review the current library artifacts against the source evidence.",
+        evidence=[
+            {
+                "kind": "note",
+                "ref": "verification",
+                "summary": "A fresh deterministic verification report.",
+            }
+        ],
+        known=["The request is bound to current artifact hashes."],
+        unknown=[],
+        agent_assessment=(
+            "This request presents source evidence and deterministic findings for review. "
+            "Compare each package and pin claim with the cited material before deciding. "
+            "Hash agreement does not prove that the underlying library content is correct. "
+            "Every unresolved field remains explicit, and approval requires independent "
+            "human review of the evidence."
+        ),
+        recommendation="Approve only after review.",
+        recommendation_rationale="Approval remains an independent human decision.",
+        alternatives=[
+            {
+                "option": "Approve only after review.",
+                "risks": ["A source discrepancy could be overlooked."],
+            },
+            {
+                "option": "Request corrections.",
+                "risks": ["Release is delayed pending correction."],
+            },
+        ],
+        recommended=0,
+        details={"kind": "library_review", "packet_id": "a" * 16},
+    )
+
+
+def test_record_human_response_pointer_is_user_only_and_hash_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    request = _human_request_for_hook()
+    write_request(request, project)
+    events = tmp_path / "events"
+    events.mkdir()
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(events))
+    response_text = (
+        f"CIRCUIT-HUMAN-RESPONSE {request.request_id}\n"
+        "decision: approve\nreviewer: Human Reviewer\n"
+    )
+    event_path = _write_review_event(events, "event-1.json", "user", response_text)
+    _write_review_event(events, "event-2.json", "agent", response_text)
+    env = dict(os.environ)
+    env["CIRCUIT_AGENT_EVENTS_DIR"] = str(events)
+    env["OPENHANDS_PROJECT_DIR"] = str(project)
+    payload = json.dumps({"working_dir": str(project)})
+
+    for _ in range(2):
+        result = subprocess.run(
+            [sys.executable, str(HUMAN_RESPONSE_SCRIPT)],
+            input=payload,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+        assert result.returncode == 0
+
+    pointers = list((project / "library" / "requests" / "responses").glob("*.json"))
+    assert len(pointers) == 1
+    pointer = json.loads(pointers[0].read_text(encoding="utf-8"))
+    assert pointer["request_sha256"] == request.request_sha256
+    assert pointer["event_sha256"] == hashlib.sha256(event_path.read_bytes()).hexdigest()
+    responses = load_responses(project, request)
+    assert len(responses) == 1
+    assert responses[0].valid is True
+    assert responses[0].decision == "approve"
+
+
+def test_human_response_event_hash_tampering_is_not_trusted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    request = _human_request_for_hook()
+    write_request(request, project)
+    events = tmp_path / "events"
+    events.mkdir()
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(events))
+    event_path = _write_review_event(
+        events,
+        "event-1.json",
+        "user",
+        f"CIRCUIT-HUMAN-RESPONSE {request.request_id}\n"
+        "decision: approve\nreviewer: Human Reviewer\n",
+    )
+    env = dict(os.environ)
+    env["CIRCUIT_AGENT_EVENTS_DIR"] = str(events)
+    env["OPENHANDS_PROJECT_DIR"] = str(project)
+    result = subprocess.run(
+        [sys.executable, str(HUMAN_RESPONSE_SCRIPT)],
+        input=json.dumps({"working_dir": str(project)}),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0
+    event_path.write_text("tampered event", encoding="utf-8")
+    responses = load_responses(project, request)
+    assert len(responses) == 1
+    assert responses[0].valid is False
+    assert "response event hash mismatch" in responses[0].reasons
+
+
+def test_human_response_is_invalid_after_request_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    request = _human_request_for_hook()
+    request_path, _ = write_request(request, project)
+    events = tmp_path / "events"
+    events.mkdir()
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(events))
+    _write_review_event(
+        events,
+        "event-1.json",
+        "user",
+        f"CIRCUIT-HUMAN-RESPONSE {request.request_id}\n"
+        "decision: approve\nreviewer: Human Reviewer\n",
+    )
+    env = dict(os.environ)
+    env["CIRCUIT_AGENT_EVENTS_DIR"] = str(events)
+    env["OPENHANDS_PROJECT_DIR"] = str(project)
+    result = subprocess.run(
+        [sys.executable, str(HUMAN_RESPONSE_SCRIPT)],
+        input=json.dumps({"working_dir": str(project)}),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0
+    stored = json.loads(request_path.read_text(encoding="utf-8"))
+    stored["reason"] = "changed after response"
+    request_path.write_text(json.dumps(stored), encoding="utf-8")
+    responses = load_responses(project, request)
+    assert len(responses) == 1
+    assert responses[0].valid is False
+    assert "stored request hash is missing or changed" in responses[0].reasons
