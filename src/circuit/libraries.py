@@ -185,6 +185,11 @@ def _project_verification_matches(
             part_spec_path = input_path(inputs.part_spec_path)
             input_symbol_path = input_path(inputs.symbol_lib)
             input_footprint_path = input_path(inputs.footprint_path)
+            input_pin_source_path = (
+                input_path(inputs.pin_source_path)
+                if inputs.pin_source_path is not None
+                else None
+            )
             if (
                 input_symbol_path != symbol_path.resolve()
                 or input_footprint_path != footprint_path.resolve()
@@ -203,6 +208,7 @@ def _project_verification_matches(
                     reference=compute_land_pattern(spec, inputs.density),
                     tolerance_mm=inputs.tolerance_mm,
                     model_required=inputs.model_required,
+                    pin_source_path=input_pin_source_path,
                     output_path=Path(temporary) / "fresh.verification.json",
                 )
         except Exception:
@@ -214,6 +220,7 @@ def _project_verification_matches(
                         "part_spec_path": part_spec_path,
                         "symbol_lib": input_symbol_path,
                         "footprint_path": input_footprint_path,
+                        "pin_source_path": input_pin_source_path,
                     }
                 )
             }

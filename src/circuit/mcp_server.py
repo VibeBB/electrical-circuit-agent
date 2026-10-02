@@ -760,6 +760,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "tolerance_mm": {"type": "number", "default": 0.02},
                 "model_required": {"type": "boolean", "default": True},
                 "test_board": {"type": "boolean", "default": True},
+                "pin_source_path": {"type": "string"},
                 "rule_profile": {"type": "string"},
                 "output_path": {"type": "string"},
             },
@@ -813,6 +814,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 },
                 "tolerance_mm": {"type": "number", "default": 0.02},
                 "model_required": {"type": "boolean", "default": True},
+                "pin_source_path": {"type": "string"},
                 "out_dir": {"type": "string"},
                 "output_path": {"type": "string"},
             },
@@ -843,6 +845,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 },
                 "tolerance_mm": {"type": "number", "default": 0.02},
                 "model_required": {"type": "boolean", "default": True},
+                "pin_source_path": {"type": "string"},
                 "output_path": {"type": "string"},
             },
             "required": [
@@ -1752,6 +1755,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 tolerance_mm=float(args.get("tolerance_mm", 0.02)),
                 model_required=bool(args.get("model_required", True)),
                 test_board=bool(args.get("test_board", True)),
+                pin_source_path=(
+                    Path(str(args["pin_source_path"]))
+                    if isinstance(args.get("pin_source_path"), str)
+                    else None
+                ),
                 output_path=output,
             )
         elif name == "circuit_corpus_score":
@@ -1795,6 +1803,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 density=density,
                 tolerance_mm=float(args.get("tolerance_mm", 0.02)),
                 model_required=bool(args.get("model_required", True)),
+                pin_source_path=(
+                    Path(str(args["pin_source_path"]))
+                    if isinstance(args.get("pin_source_path"), str)
+                    else None
+                ),
                 out_dir=output_dir,
             )
             output = _output_path(
@@ -1830,6 +1843,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 density=density,
                 tolerance_mm=tolerance_mm,
                 model_required=model_required,
+                pin_source_path=(
+                    Path(str(args["pin_source_path"]))
+                    if isinstance(args.get("pin_source_path"), str)
+                    else None
+                ),
             )
             result = libreview.review_status(
                 library_dir,

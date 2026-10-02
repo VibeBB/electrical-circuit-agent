@@ -21,7 +21,7 @@ import pdfplumber
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
-from . import advisory, authoring, datasheet, kicad_cli, visionread
+from . import advisory, authoring, datasheet, kicad_cli, pinsource, visionread
 from . import pinout as pinout_oracle
 from .datasheet import DatasheetExtraction, PageExtraction
 from .landpattern import Density, LandPatternResult, compute_land_pattern
@@ -188,6 +188,8 @@ def packet_id(
     authoring_sha256s: Iterable[str] = (),
     lineage_sha256: str | None = None,
     rule_chain_sha256: str | None = None,
+    pin_source_sha256: str | None = None,
+    pin_source_kind: str | None = None,
 ) -> str:
     value = {
         "format": 1,
@@ -206,6 +208,9 @@ def packet_id(
     authoring_hashes = sorted(authoring_sha256s)
     if authoring_hashes:
         value["authoring_sha256s"] = authoring_hashes
+    if pin_source_sha256 is not None:
+        value["pin_source_sha256"] = pin_source_sha256
+        value["pin_source_kind"] = pin_source_kind
     canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
@@ -322,6 +327,7 @@ def current_packet_id(
     density: Density,
     tolerance_mm: float,
     model_required: bool,
+    pin_source_path: Path | None = None,
 ) -> str:
     spec = load_part_spec(spec_path)
     spec_dir = spec_path.resolve().parent
@@ -358,6 +364,12 @@ def current_packet_id(
         authoring_sha256s=authoring_hashes,
         lineage_sha256=_optional_sha256(lineage_path_for(footprint_path)),
         rule_chain_sha256=rules.chain_sha256,
+        pin_source_sha256=(
+            _optional_sha256(pin_source_path) if pin_source_path is not None else None
+        ),
+        pin_source_kind=(
+            pin_source_path.suffix.casefold() if pin_source_path is not None else None
+        ),
     )
 
 
@@ -2636,6 +2648,96 @@ def _review_html(review: dict[str, Any]) -> str:
         + "</tr>"
         for row in review["pin_comparisons"]
     )
+    pin_sources = review.get("pin_sources")
+    pin_source_panel = ""
+    if isinstance(pin_sources, dict):
+        source_data = cast(dict[str, object], pin_sources)
+        class_a_value = source_data.get("class_a")
+        class_b_value = source_data.get("class_b")
+        class_a = cast(dict[str, object], class_a_value) if isinstance(class_a_value, dict) else {}
+        class_b = cast(dict[str, object], class_b_value) if isinstance(class_b_value, dict) else {}
+        class_b_input_value = source_data.get("class_b_input")
+        class_b_input = (
+            cast(dict[str, object], class_b_input_value)
+            if isinstance(class_b_input_value, dict)
+            else {}
+        )
+        class_a_pins = record_items(class_a.get("pins"))
+        class_b_pins = record_items(class_b.get("pins"))
+        class_a_by_number = {
+            str(item["number"]): str(item["name"])
+            for item in class_a_pins
+            if "number" in item and "name" in item
+        }
+        class_b_by_number = {
+            str(item["number"]): str(item["name"])
+            for item in class_b_pins
+            if "number" in item and "name" in item
+        }
+        mismatch_numbers = {
+            str(item["number"])
+            for item in record_items(
+                cast(dict[str, object], source_data.get("comparison")).get("findings")
+                if isinstance(source_data.get("comparison"), dict)
+                else None
+            )
+            if "number" in item
+        }
+
+        def source_description(data: dict[str, object]) -> str:
+            parts = [
+                str(data.get("description") or data.get("kind") or "pin source"),
+                str(data.get("path") or "path unavailable"),
+                f"SHA-256 {data.get('sha256') or 'unavailable'}",
+            ]
+            return " — ".join(parts)
+
+        class_a_header = source_description(class_a)
+        class_b_header = source_description(class_b or class_b_input)
+        source_numbers = sorted(
+            class_a_by_number.keys() | class_b_by_number.keys(),
+            key=lambda item: (0, int(item), item) if item.isdigit() else (1, item.casefold(), item),
+        )
+
+        def pin_source_cell(value: str, mismatch: bool) -> str:
+            class_name = ' class="mismatch"' if mismatch else ""
+            return f"<td{class_name}>{escape(value)}</td>"
+
+        pin_source_rows = "".join(
+            "<tr>"
+            + pin_source_cell(number, number in mismatch_numbers)
+            + pin_source_cell(class_a_by_number.get(number, "—"), number in mismatch_numbers)
+            + pin_source_cell(class_b_by_number.get(number, "—"), number in mismatch_numbers)
+            + "</tr>"
+            for number in source_numbers
+        )
+        single_banner = (
+            '<p class="single-pin-source"><strong>Single pin source:</strong> '
+            "Class B is not available.</p>"
+            if source_data.get("single_source") is True
+            else ""
+        )
+        source_error = source_data.get("error")
+        source_error_html = (
+            f"<p><strong>Class B pin source unavailable:</strong> {escape(source_error)}</p>"
+            if source_error
+            else ""
+        )
+        pin_source_panel = (
+            "<h2>Independent pin sources</h2>"
+            + single_banner
+            + source_error_html
+            + f"<p><strong>Class A:</strong> {escape(class_a_header)}</p>"
+            + (
+                f"<p><strong>Class B:</strong> {escape(class_b_header)}</p>"
+                if class_b or class_b_input
+                else ""
+            )
+            + "<table><thead><tr><th>Pin</th><th>Class A name</th>"
+            "<th>Class B name</th></tr></thead><tbody>"
+            + (pin_source_rows or '<tr><td colspan="3">No pin mappings.</td></tr>')
+            + "</tbody></table>"
+        )
     pinout_cell_keys = (
         "number",
         "drawing_name",
@@ -2879,7 +2981,9 @@ def _review_html(review: dict[str, Any]) -> str:
         "table{border-collapse:collapse;"
         "width:100%;font-size:13px}td,th{border:1px solid #bbb;padding:.3rem;text-align:left}"
         "img{max-width:100%;height:auto}"
-        ".mismatch{background:#f8d7da;color:#842029}</style></head><body>"
+        ".mismatch{background:#f8d7da;color:#842029}"
+        ".single-pin-source{padding:.6rem;background:#fff3cd;color:#664d03}</style>"
+        "</head><body>"
         f"<h1>Review packet {html.escape(review['packet_id'])}</h1>"
         "<h2>Contradictions and deterministic findings</h2><ul>"
         + findings_html
@@ -2898,7 +3002,9 @@ def _review_html(review: dict[str, Any]) -> str:
         "<th>Mismatch</th>"
         "</tr></thead><tbody>"
         + pin_rows
-        + "</tbody></table><h2>Pinout name-at-position</h2>"
+        + "</tbody></table>"
+        + pin_source_panel
+        + "<h2>Pinout name-at-position</h2>"
         + pinout_crop_html
         + "<table><thead><tr><th>Number</th><th>Drawing name</th><th>Vision name</th>"
         "<th>PartSpec name</th><th>Symbol name</th><th>Vision answer</th>"
@@ -2959,6 +3065,46 @@ def _finding_from_spec(item: SpecFinding) -> ReviewFinding:
     )
 
 
+def _pin_source_review_document(
+    spec: PartSpec,
+    *,
+    spec_path: Path,
+    pin_source_path: Path | None,
+    pin_source_sha256: str | None,
+) -> dict[str, Any]:
+    class_a = pinsource.source_from_part_spec(
+        spec,
+        spec_sha256=part_spec_sha256(spec_path),
+        spec_path=spec_path,
+    )
+    class_b: pinsource.PinSource | None = None
+    comparison: pinsource.PinSourceComparison | None = None
+    error: str | None = None
+    if pin_source_path is not None:
+        try:
+            class_b = pinsource.parse_pin_source(pin_source_path)
+            comparison = pinsource.compare_pin_sources(class_a, class_b)
+        except (OSError, ValueError) as exc:
+            error = str(exc)
+    return {
+        "single_source": pin_source_path is None,
+        "class_a": class_a.model_dump(mode="json"),
+        "class_b": class_b.model_dump(mode="json") if class_b is not None else None,
+        "class_b_input": (
+            {
+                "description": f"{pin_source_path.suffix.lstrip('.').upper()} pin map",
+                "kind": pin_source_path.suffix.lstrip(".").casefold(),
+                "path": str(pin_source_path.resolve()),
+                "sha256": pin_source_sha256,
+            }
+            if pin_source_path is not None
+            else None
+        ),
+        "comparison": comparison.model_dump(mode="json") if comparison is not None else None,
+        "error": error,
+    }
+
+
 def build_review_packet(
     spec_path: Path,
     *,
@@ -2969,11 +3115,24 @@ def build_review_packet(
     density: Density,
     tolerance_mm: float = 0.02,
     model_required: bool = True,
+    pin_source_path: Path | None = None,
     out_dir: Path,
 ) -> ReviewPacket:
     """Build fresh deterministic and human-review evidence for a library part."""
     spec = load_part_spec(spec_path)
     spec_dir = spec_path.resolve().parent
+    pin_source_sha256 = (
+        _optional_sha256(pin_source_path) if pin_source_path is not None else None
+    )
+    pin_source_kind = (
+        pin_source_path.suffix.casefold() if pin_source_path is not None else None
+    )
+    pin_source_document = _pin_source_review_document(
+        spec,
+        spec_path=spec_path,
+        pin_source_path=pin_source_path,
+        pin_source_sha256=pin_source_sha256,
+    )
     authoring_comparison: authoring.AuthoringComparison | None = None
     authoring_error: str | None = None
     try:
@@ -3035,6 +3194,11 @@ def build_review_packet(
         "authoring_sha256s": (
             sorted(authoring_comparison.sealed.values()) if authoring_comparison is not None else []
         ),
+        "pin_source_path": (
+            str(pin_source_path.resolve()) if pin_source_path is not None else None
+        ),
+        "pin_source_sha256": pin_source_sha256,
+        "pin_source_kind": pin_source_kind,
     }
     current_id = packet_id(
         pdf_sha256=pdf_sha256,
@@ -3051,6 +3215,8 @@ def build_review_packet(
         ),
         lineage_sha256=lineage_sha256,
         rule_chain_sha256=rules.chain_sha256,
+        pin_source_sha256=pin_source_sha256,
+        pin_source_kind=pin_source_kind,
     )
     packet_dir = out_dir / _safe_field(spec.mpn) / current_id
     packet_dir.mkdir(parents=True, exist_ok=True)
@@ -3140,6 +3306,7 @@ def build_review_packet(
             tolerance_mm=tolerance_mm,
             model_required=model_required,
             rules=rules,
+            pin_source_path=pin_source_path,
             output_path=packet_dir / "verification.json",
         )
         findings.extend(_finding_from_verify(item) for item in verification.findings)
@@ -3549,6 +3716,7 @@ def build_review_packet(
         ],
         "vision_review_images": vision_review_images,
         "pin_comparisons": pin_rows,
+        "pin_sources": pin_source_document,
         "pinout_comparisons": pinout_rows,
         "vision_reads": vision_reads,
         "authoring_comparison": (

@@ -1507,6 +1507,73 @@ def test_supplied_part_spec_check_is_bound_to_current_spec(
     assert "part_spec_unchecked" in _codes(stale)
 
 
+def test_independent_pin_source_comparison_and_single_source_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing_source, case = _verify(tmp_path, monkeypatch)
+    spec, reference, spec_path, _check_path, symbol_path, footprint_path = case
+    assert any(
+        item.code == "pin_source_single" and item.severity == "warning"
+        for item in missing_source.findings
+    )
+
+    pin_source_path = tmp_path / "part.ibs"
+    good_rows = [f"{pin.number} {pin.name} MODEL" for pin in spec.pins]
+    pin_source_path.write_text("[Pin]\n" + "\n".join(good_rows) + "\n", encoding="utf-8")
+    matched = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        pin_source_path=pin_source_path,
+    )
+    assert matched.pin_source_comparison is not None
+    assert matched.pin_source_comparison.passed
+    assert not {
+        "pin_source_missing",
+        "pin_source_name_mismatch",
+        "pin_source_invalid",
+        "pin_source_single",
+    } & _codes(matched)
+    assert matched.inputs.pin_source_path is not None
+    assert matched.inputs.pin_source_sha256 == hashlib.sha256(
+        pin_source_path.read_bytes()
+    ).hexdigest()
+
+    bad_rows = [f"{spec.pins[0].number} WRONG MODEL"]
+    pin_source_path.write_text("[Pin]\n" + "\n".join(bad_rows) + "\n", encoding="utf-8")
+    mismatched = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        pin_source_path=pin_source_path,
+    )
+    assert {"pin_source_missing", "pin_source_name_mismatch"} <= _codes(mismatched)
+    assert mismatched.verdict == "fail"
+
+    pin_source_path.write_text("not a recognized pin source\n", encoding="utf-8")
+    invalid = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        pin_source_path=pin_source_path,
+    )
+    assert "pin_source_invalid" in _codes(invalid)
+    assert invalid.verdict == "fail"
+
+
 def test_kicad_cli_failures_are_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

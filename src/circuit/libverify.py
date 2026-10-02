@@ -52,6 +52,12 @@ from .lineage import (
 )
 from .model3d import GENERATOR_VERSION, GeneratedModel
 from .modeloracle import ModelExportReport, verify_model_export
+from .pinsource import (
+    PinSourceComparison,
+    compare_pin_sources,
+    parse_pin_source,
+    source_from_part_spec,
+)
 from .partspec import (
     Dimension,
     LandPad,
@@ -168,6 +174,8 @@ class VerificationInputs(BaseModel):
     model_required: bool
     klc: bool = False
     test_board: bool = True
+    pin_source_path: Path | None = None
+    pin_source_sha256: str | None = None
 
 
 class LibraryVerification(BaseModel):
@@ -182,6 +190,7 @@ class LibraryVerification(BaseModel):
     models: list[VerifiedModel]
     findings: list[VerifyFinding]
     test_board: TestBoard | None = None
+    pin_source_comparison: PinSourceComparison | None = None
 
 
 _SYMBOL_TYPE_ALIASES = {
@@ -2764,6 +2773,7 @@ def verify_library_part(
     model_required: bool = True,
     klc: bool = False,
     test_board: bool = True,
+    pin_source_path: Path | None = None,
     output_path: Path | None = None,
 ) -> LibraryVerification:
     """Verify a library part against its current PartSpec and generated land pattern."""
@@ -2773,6 +2783,44 @@ def verify_library_part(
     rules = rules or load_rules("builtin:ipc7351b", Path("."))
     findings: list[VerifyFinding] = []
     spec_hash = part_spec_sha256(spec_path) if spec_path.is_file() else ""
+    pin_source_comparison: PinSourceComparison | None = None
+    pin_source_sha256: str | None = None
+    if pin_source_path is None:
+        _finding(
+            findings,
+            "pin_source_single",
+            "warning",
+            "pin_sources",
+            "only the PartSpec cell-bound pin source is available",
+        )
+    else:
+        try:
+            class_a = source_from_part_spec(
+                spec,
+                spec_sha256=spec_hash,
+                spec_path=spec_path,
+            )
+            class_b = parse_pin_source(pin_source_path)
+        except (OSError, ValueError) as exc:
+            pin_source_sha256 = _sha256(pin_source_path)
+            _finding(
+                findings,
+                "pin_source_invalid",
+                "error",
+                str(pin_source_path),
+                f"Class B pin source could not be parsed: {exc}",
+            )
+        else:
+            pin_source_sha256 = class_b.sha256
+            pin_source_comparison = compare_pin_sources(class_a, class_b)
+            for item in pin_source_comparison.findings:
+                _finding(
+                    findings,
+                    item.code,
+                    "error",
+                    f"pin {item.number}",
+                    item.message,
+                )
     check: PartSpecReport | None = None
     try:
         if spec_check_path is not None:
@@ -3009,6 +3057,17 @@ def verify_library_part(
             model_required=model_required,
             klc=klc,
             test_board=test_board,
+            pin_source_path=(
+                Path(
+                    os.path.relpath(
+                        pin_source_path.resolve(),
+                        (library_dir or footprint_path.parent.parent).resolve(),
+                    )
+                )
+                if pin_source_path is not None
+                else None
+            ),
+            pin_source_sha256=pin_source_sha256,
         ),
         symbol=VerifiedSymbol(
             lib_path=symbol_lib,
@@ -3023,6 +3082,7 @@ def verify_library_part(
         models=verified_models,
         findings=findings,
         test_board=test_board_report,
+        pin_source_comparison=pin_source_comparison,
     )
     try:
         assert_safe_destination(target.parent)
