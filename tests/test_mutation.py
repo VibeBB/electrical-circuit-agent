@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-from circuit import kicad_cli, libverify, occt
+from circuit import datasheet, kicad_cli, libverify, occt
+from circuit.advisory import build_review_record
+from circuit.datasheet import load_extraction
 from circuit.libitems import FootprintDef, PadDef, SymbolDef, SymPin, parse_symbol
 from circuit.mutation import (
     CHECK_FAMILY,
@@ -30,17 +35,27 @@ from circuit.partspec import (
     OrderableVariant,
     PackageSpec,
     PartSpec,
-    PartSpecReport,
     PinSpec,
     PinTable,
     Reading,
-    part_spec_sha256,
+    check_part_spec,
 )
-from pinout_fixtures import geometry_for_names
+from pinout_fixtures import QUAD16_NAMES, pinout_drawing, quad16_fixture
 from test_libverify import _vqfn_spec, _write_case  # pyright: ignore[reportPrivateUsage]
+from test_datasheet import _pdf  # pyright: ignore[reportPrivateUsage]
+from test_visionread import _synthetic_pdf  # pyright: ignore[reportPrivateUsage]
+from vision_fixtures import FIXTURE_IMPRESSION, attach_vision_reads
 
 REPO_ROOT = Path(__file__).parents[1]
-FINDING_MODULES = ("libverify", "partspec", "model3d", "ruleprofile", "libtestboard")
+FINDING_MODULES = (
+    "authoring",
+    "corpus",
+    "libverify",
+    "partspec",
+    "model3d",
+    "ruleprofile",
+    "libtestboard",
+)
 EXPECTED_OPERATORS = {
     "symbol_adjacent_pin_swap",
     "symbol_pin_name_swap",
@@ -69,6 +84,38 @@ EXPECTED_OPERATORS = {
     "model_offset_0_1mm",
     "model_scale_25_4",
     "model_removed_pin1_marker",
+}
+EXPECTED_INTEGRITY_CODES = {
+    "authoring_commit_unobserved",
+    "authoring_lane_input_mismatch",
+    "authoring_consensus_violated",
+    "corpus_approval_binding_mismatch",
+    "corpus_approval_event_invalid",
+    "corpus_approval_unavailable",
+    "corpus_confirmation_fields_missing",
+    "corpus_confirmation_time_invalid",
+    "corpus_manifest_changed_during_scoring",
+    "corpus_truth_changed_during_scoring",
+    "corpus_truth_unconfirmed",
+    "datasheet_hash_mismatch",
+    "datasheet_sha_mismatch",
+    "evidence_sha_mismatch",
+    "extraction_stale",
+    "lineage_base",
+    "lineage_evidence",
+    "lineage_footprint_hash",
+    "lineage_invalid",
+    "lineage_stale_change",
+    "lineage_unrecorded_change",
+    "model_manifest_invalid",
+    "parent_hash",
+    "part_spec_unchecked",
+    "provenance_missing",
+    "provenance_sha_mismatch",
+    "vision_compare_missing",
+    "vision_compare_stale",
+    "vision_record_mismatch",
+    "vision_record_missing",
 }
 
 
@@ -267,6 +314,324 @@ def _fixture(tmp_path: Path, *, seed: int = 0) -> MutationFixture:
     return MutationFixture(artifacts=artifacts, verify=verify, seed=seed)
 
 
+def _pdf_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _table_commands(
+    rows: list[list[str]],
+    x_edges: tuple[int, ...],
+    top: int,
+    row_height: int,
+    font_size: int = 8,
+) -> list[str]:
+    bottom = top - row_height * len(rows)
+    commands = [
+        *(f"{x} {bottom} m {x} {top} l S" for x in x_edges),
+        *(
+            f"{x_edges[0]} {top - row_height * index} m "
+            f"{x_edges[-1]} {top - row_height * index} l S"
+            for index in range(len(rows) + 1)
+        ),
+    ]
+    for row_index, row in enumerate(rows):
+        baseline = (
+            top
+            - row_height * row_index
+            - row_height // 2
+            - max(1, (font_size - 2) // 2)
+        )
+        for column, cell in enumerate(row):
+            if cell:
+                commands.append(
+                    f"BT /F1 {font_size} Tf {x_edges[column] + 4} {baseline} Td "
+                    f"({_pdf_escape(cell)}) Tj ET"
+                )
+    return commands
+
+
+def _synthetic_datasheet_pdf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[PartSpec, Path]:
+    spec = _vqfn_spec().model_copy(update={"mpn": "TESTVQFN16"})
+    pin_rows = [["Pin", "Function"], *[[number, name] for number, name in QUAD16_NAMES.items()]]
+    pin_rows.append(["", "EP"])
+    dimension_rows = [
+        ["DIMENSION", "MIN mm", "NOM mm", "MAX mm"],
+        ["Pitch", "0.495", "0.5", "0.505"],
+        ["Body length", "2.9", "3.0", "3.1"],
+        ["Body width", "2.9", "3.0", "3.1"],
+        ["Height", "0.75", "0.8", "0.85"],
+        ["Lead length", "0.35", "0.4", "0.45"],
+        ["Lead width", "0.18", "0.24", "0.3"],
+        ["EP length", "1.61", "1.68", "1.75"],
+        ["EP width", "1.61", "1.68", "1.75"],
+        ["Drawing ID", "VQFN-16-1EP", "", ""],
+        ["Drawing revision", "A", "", ""],
+    ]
+    orderable_rows = [
+        ["MPN", "Package", "Pins"],
+        [spec.mpn, spec.package.drawing_id, str(spec.package.pin_count)],
+    ]
+    commands = [
+        *_table_commands(pin_rows, (20, 65, 150), 760, 15),
+        *_table_commands(
+            dimension_rows,
+            (230, 310, 375, 410, 445),
+            650,
+            12,
+        ),
+        *_table_commands(
+            orderable_rows,
+            (265, 315, 370, 395),
+            760,
+            20,
+            font_size=7,
+        ),
+        "BT /F1 9 Tf 460 866 Td (TOP VIEW) Tj ET",
+        "BT /F1 9 Tf 460 826 Td (TOP LEFT) Tj ET",
+    ]
+    marker_stream = _synthetic_pdf(
+        tmp_path / "synthetic-datasheet.pdf",
+        page_size=(1500, 1300),
+        rectangle=(460, 799, 6, 6),
+    )
+    commands.extend(marker_stream.decode().splitlines())
+    _, pin_positions, pin_names = quad16_fixture(QUAD16_NAMES)
+    scale = 5.0
+    pinout_center = (503.0, 575.0)
+    for number, (x, y) in pin_positions.items():
+        label_x = pinout_center[0] + x * scale
+        label_top = pinout_center[1] + y * scale
+        name_x, name_y = (
+            (x + (-6 if x < 0 else 6), y)
+            if abs(x) >= abs(y)
+            else (x, y - 6 if y < 0 else y + 6)
+        )
+        name_center_x = pinout_center[0] + name_x * scale
+        name_top = pinout_center[1] + name_y * scale
+        for text, center_x, screen_top in (
+            (number, label_x, label_top),
+            (pin_names[number], name_center_x, name_top),
+        ):
+            text_x = center_x - len(text) * 1.5
+            baseline = 1300 - screen_top - 4
+            commands.append(
+                f"BT /F1 6 Tf {text_x:.1f} {baseline:.1f} Td "
+                f"({_pdf_escape(text)}) Tj ET"
+            )
+    pdf_path = _pdf(
+        tmp_path / "synthetic-datasheet.pdf",
+        [([], 0)],
+        page_size=(1500, 1300),
+        extra_commands=[commands],
+    )
+    extraction_dir = tmp_path / "datasheet-extraction"
+    extraction = datasheet.extract_datasheet(pdf_path, extraction_dir, dpi=72)
+    extraction_path = extraction_dir / "extraction.json"
+    tables = datasheet.page_tables(extraction, extraction_dir, 1)
+
+    def table_index(predicate: Callable[[list[list[str | None]]], bool]) -> int:
+        for index, rows in enumerate(tables):
+            if predicate(rows):
+                return index
+        raise AssertionError("synthetic datasheet table was not extracted")
+
+    pin_table_index = table_index(
+        lambda rows: len(rows) > 1 and rows[1][:2] == ["1", "SW"]
+    )
+    dimension_table_index = table_index(
+        lambda rows: any(row and row[0] == "Pitch" for row in rows)
+    )
+    orderable_table_index = table_index(
+        lambda rows: any(spec.mpn in row for row in rows)
+    )
+    dimension_row_indices = {
+        str(row[0]): index
+        for index, row in enumerate(tables[dimension_table_index])
+        if row and row[0] is not None
+    }
+
+    def bind_dimension(
+        dimension: Dimension,
+        label: str,
+        minimum: float,
+        nominal: float,
+        maximum: float,
+    ) -> Dimension:
+        row = dimension_row_indices[label]
+        reading = dimension.reading.model_copy(
+            update={
+                "bbox": (
+                    310.0,
+                    648.0 + row * 12,
+                    445.0,
+                    664.0 + row * 12,
+                ),
+                "cells": {
+                    "min": CellRef(table=dimension_table_index, row=row, col=1),
+                    "nom": CellRef(table=dimension_table_index, row=row, col=2),
+                    "max": CellRef(table=dimension_table_index, row=row, col=3),
+                },
+                    "vision": f"{minimum} {nominal} {maximum}",
+                "vision_record": "datasheet-review.advisory.json",
+            }
+        )
+        return dimension.model_copy(
+            update={
+                "label": label,
+                "min": minimum,
+                "nom": nominal,
+                "max": maximum,
+                "reading": reading,
+            }
+        )
+
+    package = spec.package
+    assert package.pitch is not None
+    assert package.lead_length is not None
+    assert package.lead_width is not None
+    assert package.exposed_pad is not None
+    package_updates = {
+        "pitch": bind_dimension(package.pitch, "Pitch", 0.495, 0.5, 0.505),
+        "body_length": bind_dimension(package.body_length, "Body length", 2.9, 3.0, 3.1),
+        "body_width": bind_dimension(package.body_width, "Body width", 2.9, 3.0, 3.1),
+        "height": bind_dimension(package.height, "Height", 0.75, 0.8, 0.85),
+        "lead_length": bind_dimension(package.lead_length, "Lead length", 0.35, 0.4, 0.45),
+        "lead_width": bind_dimension(package.lead_width, "Lead width", 0.18, 0.24, 0.3),
+        "drawing_revision": "A",
+        "pin1_reading": package.pin1_reading.model_copy(
+            update={
+                "bbox": (458.0, 460.0, 510.0, 485.0),
+                "vision_record": "datasheet-review.advisory.json",
+            }
+        ),
+    }
+    exposed_pad = package.exposed_pad.model_copy(
+        update={
+            "length": bind_dimension(
+                package.exposed_pad.length, "EP length", 1.61, 1.68, 1.75
+            ),
+            "width": bind_dimension(package.exposed_pad.width, "EP width", 1.61, 1.68, 1.75),
+        }
+    )
+    package_updates["exposed_pad"] = exposed_pad
+    spec = spec.model_copy(update={"package": package.model_copy(update=package_updates)})
+    if spec.land_pattern is not None:
+        assert spec.package.pitch is not None
+        pitch_reading = spec.package.pitch.reading
+        land_dimensions = dict(spec.land_pattern.dimensions)
+        land_dimensions["pitch"] = spec.land_pattern.dimensions["pitch"].model_copy(
+            update={
+                "label": "Pitch",
+                "min": 0.495,
+                "nom": 0.5,
+                "max": 0.505,
+                "reading": pitch_reading.model_copy(deep=True),
+            }
+        )
+        spec = spec.model_copy(
+            update={
+                "land_pattern": spec.land_pattern.model_copy(
+                    update={"dimensions": land_dimensions}
+                )
+            }
+        )
+
+    pdf_sha256 = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    spec = spec.model_copy(
+        update={
+            "datasheet": DatasheetRef(
+                path=str(pdf_path.resolve()),
+                sha256=pdf_sha256,
+                revision="A",
+                extraction_path=str(extraction_path.resolve()),
+            ),
+            "pin_table": PinTable(
+                page=1,
+                table=pin_table_index,
+                number_col=0,
+                name_col=1,
+            ),
+        }
+    )
+    pins: list[PinSpec] = []
+    for row, pin in enumerate(spec.pins, start=1):
+        reading = pin.reading.model_copy(
+            update={
+                "bbox": (
+                    20.0,
+                    540.0 + row * 15,
+                    150.0,
+                    555.0 + row * 15,
+                ),
+                "cells": {
+                    "min": CellRef(table=pin_table_index, row=row, col=0),
+                    "max": CellRef(table=pin_table_index, row=row, col=1),
+                },
+                "vision": f"{pin.number} {pin.name}",
+                "vision_record": "datasheet-review.advisory.json",
+            }
+        )
+        pins.append(pin.model_copy(update={"reading": reading}))
+    orderable = spec.orderable[0].model_copy(
+        update={
+            "mpn": spec.mpn,
+            "package_designator": spec.package.drawing_id,
+            "row": CellRef(table=orderable_table_index, row=1, col=0),
+            "reading": spec.orderable[0].reading.model_copy(
+                update={
+                    "bbox": (265.0, 540.0, 395.0, 580.0),
+                    "vision": (
+                        f"{spec.mpn} {spec.package.drawing_id} {spec.package.pin_count}"
+                    ),
+                    "vision_record": "datasheet-review.advisory.json",
+                }
+            ),
+        }
+    )
+    pinout = pinout_drawing(
+        QUAD16_NAMES,
+        page=1,
+        bbox=(408.0, 485.0, 600.0, 665.0),
+        vision_record="datasheet-review.advisory.json",
+    )
+    pinout = pinout.model_copy(
+        update={
+            "view_reading": pinout.view_reading.model_copy(
+                update={
+                    "bbox": (458.0, 420.0, 510.0, 450.0),
+                    "vision_record": "datasheet-review.advisory.json",
+                }
+            )
+        }
+    )
+    spec = spec.model_copy(
+        update={
+            "pins": pins,
+            "orderable": [orderable],
+            "pinout": pinout,
+        }
+    )
+    page_image = extraction_dir / extraction.pages[0].png_path
+    review = build_review_record(
+        page_image,
+        model="synthetic-fixture",
+        checklist="datasheet",
+        impression=FIXTURE_IMPRESSION,
+        findings=[],
+        summary="Synthetic datasheet evidence fixture.",
+    )
+    review_path = tmp_path / "datasheet-review.advisory.json"
+    review_path.write_text(review.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    spec_path = tmp_path / "evidence-part-spec.json"
+    spec_path.write_text(spec.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    spec = attach_vision_reads(spec, spec_path, extraction_path, monkeypatch)
+    spec_path.write_text(spec.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return spec, extraction_path
+
+
 def _known_good_library_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -274,22 +639,15 @@ def _known_good_library_fixture(
     seed: int = 0,
     run_export_oracle: bool = False,
 ) -> MutationFixture:
-    spec = _vqfn_spec()
-    lead_width = spec.package.lead_width
-    assert lead_width is not None
-    spec.package.lead_width = Dimension(
-        min=lead_width.min,
-        nom=0.24,
-        max=lead_width.max,
-        reading=_reading("0.24 mm"),
-    )
+    spec, _extraction_path = _synthetic_datasheet_pdf(tmp_path, monkeypatch)
     case = _write_case(
         tmp_path,
         monkeypatch,
         spec=spec,
         stub_cli=not run_export_oracle,
+        record_authoring=True,
     )
-    spec, _, spec_path, check_path, symbol_path, footprint_path = case
+    spec, _, spec_path, _, symbol_path, footprint_path = case
     exposed_pad = spec.package.exposed_pad
     assert exposed_pad is not None
     footprint_text = footprint_path.read_text(encoding="utf-8")
@@ -301,28 +659,10 @@ def _known_good_library_fixture(
     )
     assert paste_margin_count == 1
     footprint_path.write_text(footprint_text, encoding="utf-8")
-    assert spec.pinout is not None
-    check = PartSpecReport(
-        artifact_kind="circuit_part_spec_check",
-        verdict="pass",
-        part_spec_sha256=part_spec_sha256(spec_path),
-        extraction_sha256="c" * 64,
-        pdf_sha256=spec.datasheet.sha256,
-        checked_readings=1,
-        findings=[],
-        pinout=geometry_for_names(
-            spec.pinout.labels_vision,
-            pin_count=spec.package.pin_count,
-            topology="quad",
-            page=spec.pinout.page,
-        ),
-    )
-    check_path.write_text(check.model_dump_json(indent=2) + "\n", encoding="utf-8")
     monkeypatch.delenv("CIRCUIT_AUTHORING_LANE", raising=False)
     model_path = next((tmp_path / "models").rglob(f"{spec.package.drawing_id}.step"))
     return library_mutation_fixture(
         spec_path=spec_path,
-        spec_check_path=check_path,
         symbol_lib=symbol_path,
         symbol_name=spec.mpn,
         footprint_path=footprint_path,
@@ -375,7 +715,13 @@ def test_every_static_verification_code_has_a_family() -> None:
     assert family_for_code("footprint_chirality_mismatch") == "orientation"
     assert family_for_code("footprint_order_mismatch") == "orientation"
     assert family_for_code("footprint_rotation_mismatch") == "orientation"
+    assert family_for_code("pin1_mismatch") == "evidence"
+    assert family_for_code("view_label_mismatch") == "evidence"
     assert family_for_code("F6.3") == "land_geometry"
+    assert {
+        code for code, family in CHECK_FAMILY.items() if family == "integrity"
+    } == EXPECTED_INTEGRITY_CODES
+    assert family_for_code("part_spec_unchecked") == "integrity"
     with pytest.raises(MutationError, match="unmapped verification finding code"):
         family_for_code("new_unmapped_finding")
 
@@ -385,19 +731,52 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _known_good_library_fixture(tmp_path, monkeypatch, seed=41)
+    spec_path = fixture.artifacts.source_spec_path
+    assert spec_path is not None
+    datasheet_ref = fixture.artifacts.spec.datasheet
+    assert datasheet_ref is not None
+    extraction_path = Path(datasheet_ref.extraction_path)
+    fresh_check = check_part_spec(
+        fixture.artifacts.spec,
+        load_extraction(extraction_path),
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    fresh_counting_errors = [
+        (finding.code, finding.message)
+        for finding in fresh_check.findings
+        if finding.severity == "error"
+        and family_for_code(finding.code) not in {"vision", "integrity"}
+    ]
+    assert fresh_counting_errors == []
+
+    baseline_findings = list(fixture.verify(fixture.artifacts))
+    baseline_counting_errors = [
+        finding.code
+        for finding in baseline_findings
+        if finding.severity == "error"
+        and family_for_code(finding.code) not in {"vision", "integrity"}
+    ]
+    assert baseline_counting_errors == []
+
     first = run_mutations(fixture)
 
     assert {operator.name for operator in MUTATION_OPERATORS} == EXPECTED_OPERATORS
     assert len(first.outcomes) == len(MUTATION_OPERATORS)
-    assert first.baseline_findings == ["pin_source_single"]
+    assert first.baseline_findings == [
+        "pin_source_single",
+        "reading_order_divergence",
+        "vision_compare_missing",
+        "vision_compare_missing",
+    ]
     assert first.excluded_vision_findings > 0
     assert first.export_oracle_run is False
     assert first.passed is False
     assert all(outcome.finding_codes for outcome in first.outcomes)
     assert all(outcome.mutation.critical for outcome in first.outcomes)
-    assert {outcome.mutation.operator: tuple(outcome.families) for outcome in first.outcomes} == {
+    expected_counting_families = {
         # This non-Docker matrix intentionally records the production verifier's
-        # exact coverage without KiCad's export oracle.
+        # exact counting-family coverage without KiCad's export oracle.
         "symbol_adjacent_pin_swap": ("orientation", "pin_bijection"),
         "symbol_pin_name_swap": ("orientation", "pin_bijection"),
         "symbol_pin_number_offset": ("orientation", "pin_bijection"),
@@ -430,9 +809,9 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
             "land_geometry",
             "model_geometry",
         ),
-        "partspec_drawing_view_flip": ("evidence", "model_geometry"),
-        "partspec_pin1_corner_rotation": ("evidence", "model_geometry"),
-        "partspec_sibling_package_mpn": ("evidence", "model_geometry"),
+        "partspec_drawing_view_flip": ("evidence", "orientation"),
+        "partspec_pin1_corner_rotation": ("evidence", "model_geometry", "orientation"),
+        "partspec_sibling_package_mpn": ("evidence",),
         "model_mirror_x": ("model_geometry",),
         "model_rotate_90": ("model_geometry",),
         "model_rotate_180": ("model_geometry",),
@@ -440,6 +819,69 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
         "model_scale_25_4": ("model_geometry",),
         "model_removed_pin1_marker": ("model_geometry",),
     }
+    actual_counting_families = {
+        outcome.mutation.operator: tuple(
+            family for family in outcome.families if family not in {"vision", "integrity"}
+        )
+        for outcome in first.outcomes
+    }
+    assert actual_counting_families == expected_counting_families
+    assert all(
+        outcome.counting_family_count
+        == len(set(outcome.families).difference({"vision", "integrity"}))
+        for outcome in first.outcomes
+    )
+    assert {
+        outcome.mutation.operator
+        for outcome in first.outcomes
+        if outcome.counting_family_count < 2
+    } == set(first.single_oracle)
+    assert {
+        "partspec_min_nom_max_column_shift",
+        "partspec_drawing_view_flip",
+        "partspec_pin1_corner_rotation",
+        "partspec_sibling_package_mpn",
+    } <= {
+        outcome.mutation.operator
+        for outcome in first.outcomes
+        if "integrity" in outcome.families
+    }
+
+
+def test_partspec_mutations_rederive_pdf_evidence_against_unchanged_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _known_good_library_fixture(tmp_path, monkeypatch, seed=32032)
+    original_verify = libverify.verify_library_part
+    staged_specs: list[Path] = []
+
+    def capture_verify(*args: object, **kwargs: object) -> libverify.LibraryVerification:
+        spec_path = cast(Path, kwargs["spec_path"])
+        staged_specs.append(spec_path)
+        staged_spec = PartSpec.model_validate_json(spec_path.read_text(encoding="utf-8"))
+        assert staged_spec == args[0]
+        return original_verify(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(libverify, "verify_library_part", capture_verify)
+    operators = {operator.name: operator for operator in MUTATION_OPERATORS}
+    for name in (
+        "partspec_min_nom_max_column_shift",
+        "partspec_drawing_view_flip",
+        "partspec_pin1_corner_rotation",
+        "partspec_sibling_package_mpn",
+    ):
+        mutated, _ = operators[name].apply(fixture.artifacts, fixture.seed)
+        assert mutated.footprint == fixture.artifacts.footprint
+        assert mutated.model_path == fixture.artifacts.model_path
+        findings = list(fixture.verify(mutated))
+        assert any(
+            finding.severity == "error" and family_for_code(finding.code) == "evidence"
+            for finding in findings
+        )
+
+    assert len(staged_specs) == 4
+    assert len({path.parent for path in staged_specs}) == 4
 
 
 def test_symbol_mutations_are_serialized_and_reach_real_verifier(

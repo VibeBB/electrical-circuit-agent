@@ -2899,6 +2899,7 @@ def verify_library_part(
                     item.message,
                 )
     check: PartSpecReport | None = None
+    check_matches_spec = False
     try:
         if spec_check_path is not None:
             check = PartSpecReport.model_validate_json(spec_check_path.read_text(encoding="utf-8"))
@@ -2913,11 +2914,18 @@ def verify_library_part(
                 spec_path=spec_path,
                 extraction_path=extraction_path,
             )
-        check_ok = check.verdict == "pass" and check.part_spec_sha256 == spec_hash
+        check_matches_spec = check.part_spec_sha256 == spec_hash
+        check_ok = check.verdict == "pass" and check_matches_spec
         check_detail = "" if check_ok else "fresh PartSpec check failed or is stale"
     except Exception as exc:
         check_ok = False
         check_detail = str(exc)
+    if check is not None and check_matches_spec:
+        for item in check.findings:
+            subject = item.field
+            if item.page is not None:
+                subject = f"{subject} (page {item.page})"
+            _finding(findings, item.code, item.severity, subject, item.message)
     if not check_ok:
         _finding(
             findings,

@@ -184,10 +184,16 @@ and corpus truth is not available to authoring lanes. Score with
 
 Seeded critical mutations exercise symbols, footprints, PartSpecs, and STEP
 models against the deterministic verification stack. A critical mutation is
-detected only when at least two independent, non-vision oracle families report
-it. A `single_oracle` or undetected critical mutation fails the mutation gate;
-neither review approval nor metrics may waive that result. Metamorphic checks
-cover PDF DPI, rotation, bottom-view mirroring, and export invariants. The
+detected only when at least two independent counting oracle families report
+it: evidence, pin bijection, orientation, land geometry, export, model geometry,
+or rule profile. Vision and integrity families are reported but do not count.
+The `counting_family_count` field reports only those counting families.
+Integrity findings identify hash, seal, manifest, approval, lineage, and stale
+record problems; they do not show that consistently bound content agrees with
+its evidence. A `single_oracle` or undetected critical mutation fails the
+mutation gate; neither review approval nor metrics may waive that result.
+Metamorphic checks cover PDF DPI, rotation, bottom-view mirroring, and export
+invariants. The
 PartSpec unit-conversion relation is explicitly skipped because PartSpec has no
 unit field to transform. Pin validation compares Class A (cell-bound PartSpec)
 with Class B (an independent machine-readable pin source such as IBIS or BSDL);

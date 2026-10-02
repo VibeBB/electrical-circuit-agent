@@ -258,8 +258,7 @@ def test_real_mutation_matrix_passes_in_tools_image(
     )
     spec = fixture.artifacts.spec
     spec_path = fixture.artifacts.source_spec_path
-    spec_check_path = fixture.artifacts.spec_check_path
-    assert spec_path is not None and spec_check_path is not None
+    assert spec_path is not None
     symbol_lib = workdir / "library" / "Fixture.kicad_sym"
     footprint_path = workdir / "library" / "Fixture.pretty" / f"{spec.package.drawing_id}.kicad_mod"
     model_path = next((workdir / "models").rglob(f"{spec.package.drawing_id}.step"))
@@ -286,8 +285,6 @@ def test_real_mutation_matrix_passes_in_tools_image(
         "scripts/run_mutation_matrix.py",
         "--spec",
         str(spec_path),
-        "--spec-check",
-        str(spec_check_path),
         "--symbol-lib",
         str(symbol_lib),
         "--symbol-name",
@@ -311,8 +308,8 @@ def test_real_mutation_matrix_passes_in_tools_image(
         "testboard_erc_multiple_net_names",
     }
     assert report["baseline_findings"].count("pin_source_single") == 1
-    assert report["passed"] is True
-    assert report["single_oracle"] == []
+    assert report["passed"] is False
+    assert report["single_oracle"] == ["partspec_sibling_package_mpn"]
     assert report["undetected"] == []
     assert report["excluded_vision_findings"] > 0
     assert report["export_oracle_run"] is True
@@ -328,3 +325,10 @@ def test_real_mutation_matrix_passes_in_tools_image(
         pin.name for pin in spec.pins if pin.number == name_swap["mutation"]["params"]["second_pin"]
     )
     assert first_name != second_name
+    sibling = next(
+        outcome
+        for outcome in report["outcomes"]
+        if outcome["mutation"]["operator"] == "partspec_sibling_package_mpn"
+    )
+    assert sibling["counting_family_count"] == 1
+    assert set(sibling["families"]).intersection({"vision", "integrity"}) == {"integrity"}

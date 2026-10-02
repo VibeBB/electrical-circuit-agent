@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import random
 import re
@@ -43,10 +44,11 @@ CheckFamily = Literal[
     "model_geometry",
     "rule_profile",
     "vision",
+    "integrity",
 ]
 MutationTarget = Literal["symbol", "footprint", "part_spec", "model"]
 MutationStatus = Literal["detected", "single_oracle", "undetected"]
-_NON_VISION_FAMILIES: tuple[CheckFamily, ...] = (
+_COUNTING_FAMILIES: tuple[CheckFamily, ...] = (
     "evidence",
     "pin_bijection",
     "orientation",
@@ -59,7 +61,6 @@ _NON_VISION_FAMILIES: tuple[CheckFamily, ...] = (
 
 _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
     "evidence": (
-        "authoring_consensus_violated",
         "authoring_disagreement",
         "authoring_invalid",
         "authoring_missing",
@@ -72,39 +73,29 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "cell_unit_mismatch",
         "cell_value_mismatch",
         "datasheet_missing",
-        "datasheet_sha_mismatch",
         "drawing_id_missing",
         "drawing_revision_missing",
         "evidence_missing",
         "exposed_pad_table_mismatch",
-        "evidence_sha_mismatch",
-        "extraction_stale",
         "glyph_loss",
         "height_nonpositive",
         "invisible_text",
         "kind_mismatch",
-        "lineage_base",
-        "lineage_evidence",
-        "lineage_footprint_hash",
-        "lineage_invalid",
-        "lineage_stale_change",
-        "lineage_unrecorded_change",
         "mechanical_mismatch",
         "mechanical_single_lane",
         "orderable_designator_mismatch",
         "orderable_mpn_mismatch",
         "package_variant_unbound",
         "page_not_extracted",
-        "part_spec_unchecked",
         "pin_reading_page_mismatch",
-        "provenance_missing",
-        "provenance_sha_mismatch",
+        "pin1_mismatch",
         "reading_order_divergence",
         "redistribution_review",
         "rederivation_failed",
         "stacked_limit_order",
         "table_lane_disagreement",
         "value_mismatch",
+        "view_label_mismatch",
     ),
     "pin_bijection": (
         "duplicate_pin",
@@ -126,6 +117,9 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "pin_table_column_mismatch",
         "pin_table_missing",
         "pinout_missing",
+        "corpus_pad_numbers_mismatch",
+        "corpus_pin_map_mismatch",
+        "corpus_symbol_pin_map_mismatch",
         "symbol_pin_grid",
         "symbol_pin_name",
         "symbol_pin_set",
@@ -136,9 +130,14 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
     ),
     "orientation": (
         "pin1_location",
-        "pin1_mismatch",
         "pin1_unparseable",
+        "corpus_drawing_view_mismatch",
+        "corpus_pin1_corner_mismatch",
+        "pinout_name_ambiguous",
         "pinout_name_mismatch",
+        "pinout_name_unresolved",
+        "pinout_number_duplicate",
+        "pinout_number_missing",
         "pinout_permutation_diagnosis",
         "pinout_pin1_corner_mismatch",
         "pinout_unverified",
@@ -157,6 +156,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "fp_attribute",
         "lead_outside_pad",
         "lead_width_exceeds_pad",
+        "corpus_pad_geometry_mismatch",
         "pad_clearance",
         "pad_geometry",
         "pad_position",
@@ -181,6 +181,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "verification_output_unavailable",
     ),
     "model_geometry": (
+        "model_geometry_mismatch",
         "model_body_dimension",
         "model_courtyard",
         "model_fab_outline",
@@ -189,7 +190,6 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "model_height",
         "model_inspection_unavailable",
         "model_invalid",
-        "model_manifest_invalid",
         "model_missing",
         "model_pad_unmatched",
         "model_pin1_mismatch",
@@ -212,17 +212,24 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "rationale",
         "evidence",
         "paste_coverage",
+        "corpus_canary_leak",
+        "corpus_dimension_mismatch",
+        "corpus_expected_pads_unavailable",
+        "corpus_package_family_mismatch",
+        "corpus_truth_incomplete",
+        "datasheet_not_available",
+        "footprint_unavailable",
+        "model_unavailable",
+        "partspec_unavailable",
+        "symbol_unavailable",
         "testboard_drc",
         "rule_profile_cycle",
-        "parent_hash",
         "layer_order",
     ),
     "vision": (
         "glyph_loss_ambiguous",
         "pinout_vision_mismatch",
         "vision_compare_mismatch",
-        "vision_compare_missing",
-        "vision_compare_stale",
         "vision_control_failed",
         "vision_impression_missing",
         "vision_not_observed",
@@ -234,10 +241,40 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "vision_read_missing",
         "vision_read_not_observed",
         "vision_read_region_mismatch",
-        "vision_record_mismatch",
-        "vision_record_missing",
         "vision_table_mismatch",
         "vision_unparseable",
+    ),
+    "integrity": (
+        "authoring_commit_unobserved",
+        "authoring_lane_input_mismatch",
+        "authoring_consensus_violated",
+        "corpus_approval_binding_mismatch",
+        "corpus_approval_event_invalid",
+        "corpus_approval_unavailable",
+        "corpus_confirmation_fields_missing",
+        "corpus_confirmation_time_invalid",
+        "corpus_manifest_changed_during_scoring",
+        "corpus_truth_changed_during_scoring",
+        "corpus_truth_unconfirmed",
+        "datasheet_hash_mismatch",
+        "datasheet_sha_mismatch",
+        "evidence_sha_mismatch",
+        "extraction_stale",
+        "lineage_base",
+        "lineage_evidence",
+        "lineage_footprint_hash",
+        "lineage_invalid",
+        "lineage_stale_change",
+        "lineage_unrecorded_change",
+        "model_manifest_invalid",
+        "parent_hash",
+        "part_spec_unchecked",
+        "provenance_missing",
+        "provenance_sha_mismatch",
+        "vision_compare_missing",
+        "vision_compare_stale",
+        "vision_record_mismatch",
+        "vision_record_missing",
     ),
 }
 
@@ -406,6 +443,61 @@ def _prepare_spec(
     return spec.model_copy(update={"datasheet": datasheet.model_copy(update=updates)})
 
 
+def _copy_spec_evidence(spec: PartSpec, source_dir: Path, target_dir: Path) -> None:
+    def visit(value: object, key: str | None = None) -> None:
+        if isinstance(value, dict):
+            for child_key, child in value.items():
+                visit(child, child_key if isinstance(child_key, str) else None)
+            return
+        if isinstance(value, list):
+            for child in value:
+                visit(child, key)
+            return
+        if key not in {"vision_record", "vision_read", "labels_vision_read", "orderable_vision_read"}:
+            return
+        if not isinstance(value, str):
+            return
+        reference = value.partition("#")[0] if "#" in value else value
+        relative = Path(reference)
+        if relative.is_absolute():
+            return
+        source = (source_dir / relative).resolve()
+        if not source.is_relative_to(source_dir.resolve()) or not source.is_file():
+            return
+        target = target_dir / relative
+        if key in {"vision_read", "labels_vision_read", "orderable_vision_read"}:
+            source_batch_dir = source.parent
+            relative_batch_dir = relative.parent
+            target_batch_dir = target_dir / relative_batch_dir
+            if not target_batch_dir.exists():
+                shutil.copytree(source_batch_dir, target_batch_dir)
+            try:
+                batch_payload = json.loads(source.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return
+            if not isinstance(batch_payload, dict):
+                return
+            state_reference = batch_payload.get("control_state_path")
+            if not isinstance(state_reference, str):
+                return
+            state_path = Path(state_reference)
+            if state_path.is_absolute():
+                return
+            source_state = (source.parent / state_path).resolve()
+            if not source_state.is_relative_to(source_dir.resolve()) or not source_state.is_file():
+                return
+            relative_state = source_state.relative_to(source_dir.resolve())
+            target_state = target_dir / relative_state
+            target_state.parent.mkdir(parents=True, exist_ok=True)
+            if not target_state.exists():
+                shutil.copyfile(source_state, target_state)
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+
+    visit(spec.model_dump(mode="python"))
+
+
 class _LibraryVerifier:
     def __init__(
         self,
@@ -446,6 +538,12 @@ class _LibraryVerifier:
                 spec_path.write_text(
                     spec.model_dump_json(indent=2) + "\n",
                     encoding="utf-8",
+                )
+            if artifacts.source_spec_path is not None:
+                _copy_spec_evidence(
+                    spec,
+                    artifacts.source_spec_path.resolve().parent,
+                    directory,
                 )
             symbol_lib = directory / "library.kicad_sym"
             _write_symbol(symbol_lib, artifacts.symbol)
@@ -619,24 +717,24 @@ class MutationOutcome(BaseModel):
     mutation: Mutation
     finding_codes: list[str]
     families: list[CheckFamily]
-    non_vision_family_count: int
+    counting_family_count: int
     status: MutationStatus
 
     @model_validator(mode="after")
     def enforce_family_gate(self) -> MutationOutcome:
-        actual_count = len(set(self.families).intersection(_NON_VISION_FAMILIES))
-        if actual_count != self.non_vision_family_count:
-            raise ValueError("non_vision_family_count does not match families")
+        actual_count = len(set(self.families).intersection(_COUNTING_FAMILIES))
+        if actual_count != self.counting_family_count:
+            raise ValueError("counting_family_count does not match families")
         if self.status == "single_oracle" and (
             not self.mutation.critical or not self.families or actual_count >= 2
         ):
             raise ValueError(
-                "single_oracle requires a critical mutation with fewer than two families"
+                "single_oracle requires a critical mutation with fewer than two counting families"
             )
         if self.status == "detected" and not self.families:
             raise ValueError("detected mutations must have at least one oracle family")
         if self.status == "detected" and self.mutation.critical and actual_count < 2:
-            raise ValueError("critical mutations require two non-vision oracle families")
+            raise ValueError("critical mutations require two counting oracle families")
         if self.status == "undetected" and self.families:
             raise ValueError("undetected mutations cannot have oracle families")
         return self
@@ -1156,7 +1254,11 @@ def _part_spec_column_shift(
         field
         for field in fields
         if (dimension := getattr(artifacts.spec.package, field, None)) is not None
-        and any(value is not None for value in (dimension.min, dimension.nom, dimension.max))
+        and dimension.nom is not None
+        and any(
+            value is not None and value != dimension.nom
+            for value in (dimension.min, dimension.max)
+        )
     ]
     if not available:
         raise MutationError("PartSpec has no populated mechanical dimension")
@@ -1164,12 +1266,20 @@ def _part_spec_column_shift(
     dimension = getattr(artifacts.spec.package, field)
     if not isinstance(dimension, Dimension):
         raise MutationError(f"PartSpec dimension {field} is unavailable")
+    source_column = rng.choice(
+        [
+            column
+            for column in ("min", "max")
+            if (value := getattr(dimension, column)) is not None and value != dimension.nom
+        ]
+    )
+    shifted_value = getattr(dimension, source_column)
     shifted = dimension.model_copy(
-        update={"min": dimension.max, "nom": dimension.min, "max": dimension.nom}
+        update={"min": shifted_value, "nom": shifted_value, "max": shifted_value}
     )
     return _part_spec_package_update(artifacts, {field: shifted}), {
         "field": field,
-        "shift": "min<-max,nom<-min,max<-nom",
+        "shift": f"min,nom,max<-{source_column}",
     }
 
 
@@ -1179,7 +1289,14 @@ def _part_spec_flip_drawing_view(
 ) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
     current = artifacts.spec.package.drawing_view
     updated = "bottom" if current == "top" else "top"
-    return _part_spec_package_update(artifacts, {"drawing_view": updated}), {
+    mutated = _part_spec_package_update(artifacts, {"drawing_view": updated})
+    if mutated.spec.pinout is not None:
+        pinout = mutated.spec.pinout.model_copy(update={"view": updated})
+        mutated = replace(
+            mutated,
+            spec=mutated.spec.model_copy(update={"pinout": pinout}),
+        )
+    return mutated, {
         "from": current,
         "to": updated,
     }
@@ -1354,7 +1471,11 @@ def run_mutations(fixture: MutationFixture) -> MutationReport:
     baseline = list(fixture.verify(fixture.artifacts))
     for item in baseline:
         family_for_code(item.code)
-    baseline_errors = [item.code for item in baseline if item.severity == "error"]
+    baseline_errors = [
+        item.code
+        for item in baseline
+        if item.severity == "error" and family_for_code(item.code) in _COUNTING_FAMILIES
+    ]
     if baseline_errors:
         details = ", ".join(sorted(baseline_errors))
         raise MutationError(f"mutation fixture is not known-good; baseline errors: {details}")
@@ -1385,11 +1506,11 @@ def run_mutations(fixture: MutationFixture) -> MutationReport:
         unique_codes = sorted(set(new_codes))
         families: list[CheckFamily] = sorted({family_for_code(code) for code in unique_codes})
         family_hits.update(families)
-        non_vision_count = len(set(families).intersection(_NON_VISION_FAMILIES))
+        counting_count = len(set(families).intersection(_COUNTING_FAMILIES))
         if not families:
             status: MutationStatus = "undetected"
             undetected.append(record.operator)
-        elif record.critical and non_vision_count < 2:
+        elif record.critical and counting_count < 2:
             status = "single_oracle"
             single_oracle.append(record.operator)
         else:
@@ -1399,13 +1520,13 @@ def run_mutations(fixture: MutationFixture) -> MutationReport:
                 mutation=record,
                 finding_codes=unique_codes,
                 families=families,
-                non_vision_family_count=non_vision_count,
+                counting_family_count=counting_count,
                 status=status,
             )
         )
 
     total = len(outcomes)
-    family_keys: tuple[CheckFamily, ...] = (*_NON_VISION_FAMILIES, "vision")
+    family_keys: tuple[CheckFamily, ...] = (*_COUNTING_FAMILIES, "vision", "integrity")
     rates: dict[CheckFamily, float] = {
         family: family_hits[family] / total if total else 0.0 for family in family_keys
     }

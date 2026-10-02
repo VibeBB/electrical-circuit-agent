@@ -46,6 +46,7 @@ from circuit.partspec import (
     PinTable,
     Reading,
     part_spec_sha256,
+    SpecFinding,
 )
 from circuit.ruleprofile import EffectiveRules, EvidenceRef, load_rules
 from circuit.visionread import VisionBatch, VisionReadItem
@@ -476,6 +477,7 @@ def _write_case(
     symbol_kwargs: dict[str, object] | None = None,
     footprint_kwargs: dict[str, object] | None = None,
     stub_cli: bool = True,
+    record_authoring: bool = True,
 ) -> tuple[PartSpec, LandPatternResult, Path, Path, Path, Path]:
     spec = _dual_spec() if spec is None else spec
     authoring_ref = Path("authoring") / "part" / "run-1"
@@ -533,24 +535,45 @@ def _write_case(
     spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     run_dir = tmp_path / authoring_ref
     run_dir.mkdir(parents=True)
-    for lane, model in (("a", "model-a"), ("b", "model-b")):
-        lane_dir = run_dir / lane
-        lane_dir.mkdir()
-        lane_spec_path = lane_dir / "part-spec.json"
-        lane_spec = spec.model_copy(deep=True, update={"authoring": None})
-        _attach_authoring_read(lane_spec, lane_dir, lane)
-        lane_spec_path.write_text(
-            lane_spec.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("CIRCUIT_AUTHORING_LANE", lane)
-        authoring.commit_lane(
-            run_dir,
-            lane_spec_path,
-            profile=f"profile-{lane}",
-            model=model,
-            impression=FIXTURE_IMPRESSION,
-        )
+    if record_authoring:
+        for lane, model in (("a", "model-a"), ("b", "model-b")):
+            lane_dir = run_dir / lane
+            lane_dir.mkdir()
+            lane_spec_path = lane_dir / "part-spec.json"
+            lane_spec_data = cast(dict[str, Any], spec.model_dump(mode="python"))
+
+            def clear_vision_reads(value: Any) -> None:
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        if key in {
+                            "vision_read",
+                            "labels_vision_read",
+                            "orderable_vision_read",
+                        }:
+                            value[key] = None
+                        else:
+                            clear_vision_reads(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        clear_vision_reads(child)
+
+            clear_vision_reads(lane_spec_data)
+            lane_spec = PartSpec.model_validate(lane_spec_data).model_copy(
+                update={"authoring": None}
+            )
+            _attach_authoring_read(lane_spec, lane_dir, lane)
+            lane_spec_path.write_text(
+                lane_spec.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            monkeypatch.setenv("CIRCUIT_AUTHORING_LANE", lane)
+            authoring.commit_lane(
+                run_dir,
+                lane_spec_path,
+                profile=f"profile-{lane}",
+                model=model,
+                impression=FIXTURE_IMPRESSION,
+            )
     _write_comparison_records(spec, spec_path, symbol_path, footprint_path)
     report_path = tmp_path / "part-spec-check.json"
     return spec, reference, spec_path, report_path, symbol_path, footprint_path
@@ -1456,6 +1479,45 @@ def test_part_spec_must_pass_fresh_check(
     )
     assert "part_spec_unchecked" in _codes(report)
     assert "pinout_unverified" in _codes(report)
+
+
+def test_fresh_part_spec_findings_are_included_in_library_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, case = _verify(tmp_path, monkeypatch)
+    spec, reference, spec_path, check_path, symbol_path, footprint_path = case
+    failed_check = PartSpecReport(
+        artifact_kind="circuit_part_spec_check",
+        verdict="fail",
+        part_spec_sha256=part_spec_sha256(spec_path),
+        extraction_sha256="c" * 64,
+        pdf_sha256=spec.datasheet.sha256,
+        checked_readings=1,
+        findings=[
+            SpecFinding(
+                code="package_variant_unbound",
+                severity="error",
+                field="orderable",
+                message="the PartSpec MPN must match exactly one orderable variant",
+            )
+        ],
+    )
+    check_path.write_text(failed_check.model_dump_json(indent=2), encoding="utf-8")
+
+    report = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        spec_check_path=check_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+    )
+
+    assert "package_variant_unbound" in _codes(report)
+    assert "part_spec_unchecked" in _codes(report)
 
 
 def test_supplied_part_spec_check_is_bound_to_current_spec(

@@ -26,7 +26,13 @@ def _all_words_visible(
     return list(words), []
 
 
-def _pdf(path: Path, pages: list[tuple[list[str], int]]) -> Path:
+def _pdf(
+    path: Path,
+    pages: list[tuple[list[str], int]],
+    *,
+    page_size: tuple[int, int] = (200, 200),
+    extra_commands: list[list[str]] | None = None,
+) -> Path:
     page_ids = [3 + index * 2 for index in range(len(pages))]
     font_id = 3 + len(pages) * 2
     objects: dict[int, bytes] = {
@@ -59,12 +65,14 @@ def _pdf(path: Path, pages: list[tuple[list[str], int]]) -> Path:
                     "20 88 m 100 88 l S",
                 ]
             )
+        if extra_commands is not None:
+            text_commands.extend(extra_commands[index])
         text_commands.extend(
             f"{number % 80 + 110} 10 m {number % 80 + 111} 11 l S" for number in range(vector_count)
         )
         stream = "\n".join(text_commands).encode()
         objects[page_id] = (
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] "
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_size[0]} {page_size[1]}] "
             f"/Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>"
         ).encode()
         objects[content_id] = (

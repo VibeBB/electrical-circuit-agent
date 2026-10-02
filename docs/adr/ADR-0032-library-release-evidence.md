@@ -35,9 +35,14 @@ metamorphic relation without inventing unsupported state.
 - Apply deterministic, seeded mutations to symbols, footprints, PartSpecs,
   and generated STEP models and run them through the actual verification
   stack.
-- A critical mutation must be detected by at least two independent
-  non-vision oracle families. Vision evidence may supplement the report but
-  cannot count toward that minimum.
+- A critical mutation must be detected by at least two independent counting
+  oracle families: evidence, pin bijection, orientation, land geometry, export,
+  model geometry, or rule profile.
+- The report's `counting_family_count` includes only those seven families.
+- Report vision and integrity findings separately, but never count either
+  family toward the two-family minimum. Integrity findings identify changed or
+  missing hashes, seals, manifests, approvals, lineage, or stale records; they
+  do not establish that consistently bound content agrees with its evidence.
 - Preserve `single_oracle` as a failing status and report it in the mutation
   summary. No review, metric, or release option can weaken the two-family
   requirement.
@@ -92,6 +97,6 @@ detection rates, per-operator results, hashes, and fail-closed findings.
   empirical evidence for operator-to-family coverage.
 - A real mutation matrix must be run against deterministic verification before
   claiming the two-family criterion is met. Operators with fewer than two
-  non-vision families remain visible as failures.
+  counting families remain visible as failures.
 - Human review cannot be relaxed on a small sample, a stale metrics file, a
   missing corpus or mutation report, or a critical single-oracle mutation.

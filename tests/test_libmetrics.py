@@ -343,7 +343,7 @@ def test_metrics_report_mutation_families_outcomes_and_critical_single_oracle(
         ),
         finding_codes=["model_height"],
         families=["model_geometry"],
-        non_vision_family_count=1,
+        counting_family_count=1,
         status="single_oracle",
     )
     report = mutation.MutationReport(

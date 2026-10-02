@@ -296,7 +296,7 @@ def _fixture(
         ),
     )
     spec.package.body_length.label = "D"
-    spec.package.body_length.reading.bbox = (0, 40, 30, 60)
+    spec.package.body_length.reading.bbox = (7, 47, 31, 61)
     spec.package.body_length.reading.cells = {
         "min": CellRef(table=2, row=1, col=1),
         "max": CellRef(table=2, row=1, col=3),
@@ -842,6 +842,37 @@ def test_single_lane_and_invisible_mechanical_evidence_fail(
         extraction_path=extraction_path,
     )
     assert "invisible_text" in {finding.code for finding in report.findings}
+
+
+def test_dimension_reading_bbox_covers_referenced_cells_not_entire_table(
+    tmp_path: Path,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert not any(
+        finding.code == "cell_value_mismatch"
+        and finding.field == "package.body_length"
+        for finding in report.findings
+    )
+
+    spec.package.body_length.reading.bbox = (7, 47, 20, 61)
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert any(
+        finding.code == "cell_value_mismatch"
+        and finding.field == "package.body_length"
+        and "referenced table cell" in finding.message
+        for finding in report.findings
+    )
 
 
 def test_dimension_contradictions_and_glyph_loss_remain_errors(tmp_path: Path) -> None:
