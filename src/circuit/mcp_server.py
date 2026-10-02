@@ -28,6 +28,7 @@ from . import (
     apiserver,
     authoring,
     brief,
+    confidential,
     connectivity,
     corpus,
     datasheet,
@@ -807,6 +808,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
             "properties": {
                 "project_path": {"type": "string"},
                 "request": {"type": "object"},
+                "confidential": {"type": "boolean", "default": False},
             },
             "required": ["project_path", "request"],
         },
@@ -1264,8 +1266,19 @@ def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
     if name == "circuit_datasheet_extract":
         source = Path(str(args["pdf_path"]))
         output = args.get("output_dir")
-        if output is None:
-            digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
+        private_root = confidential.confidential_root_for(source)
+        if private_root is not None:
+            project = confidential.project_root_for(source)
+            private_root = confidential.ensure_confidential_store(project)
+            output_dir = (
+                private_root / "datasheet-extractions" / digest
+                if output is None
+                else Path(str(output)).resolve()
+            )
+            if not output_dir.resolve().is_relative_to(private_root.resolve()):
+                raise ValueError("confidential datasheet extraction must stay under .confidential")
+        elif output is None:
             output_dir = source.parent / f"datasheet-{digest}"
         else:
             output_dir = Path(str(output))
@@ -1919,6 +1932,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             json_path, markdown_path = humanrequest.write_request(
                 request,
                 Path(str(args["project_path"])),
+                confidential=args.get("confidential") is True,
             )
             result = {
                 "request_id": request.request_id,
@@ -1933,7 +1947,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 character not in "0123456789abcdef" for character in request_id
             ):
                 raise ValueError("request_id must be 16 lowercase hexadecimal characters")
-            request_path = project / "library" / "requests" / f"{request_id}.json"
+            request_path = humanrequest.find_request_path(project, request_id)
             request = humanrequest.load_request(request_path)
             result = {
                 "request": request.model_dump(mode="json"),

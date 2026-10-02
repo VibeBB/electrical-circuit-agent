@@ -3,6 +3,7 @@ import json
 import stat
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -16,6 +17,7 @@ from circuit.datasheet import (
     page_tables,
     page_words,
 )
+from circuit.humanrequest import build_request
 
 
 def _all_words_visible(
@@ -134,6 +136,160 @@ def _tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CIRCUIT_PDFTOPPM", str(rasterizer))
     monkeypatch.setenv("CIRCUIT_PDFTOTEXT", str(poppler))
     monkeypatch.setenv("CIRCUIT_TESSERACT", str(tesseract))
+
+
+def _datasheet_request() -> Any:
+    return build_request(
+        kind="datasheet_acquisition",
+        subject={"manufacturer": "Example", "mpn": "ABC123", "revision": "Rev B"},
+        reason="A matching datasheet is needed.",
+        evidence=[
+            {
+                "kind": "note",
+                "ref": "attempts",
+                "summary": "The manufacturer datasheet was not found.",
+            }
+        ],
+        known=["The requested part is ABC123."],
+        unknown=["The package drawing remains unverified."],
+        agent_assessment=(
+            "A datasheet matching the requested manufacturer part number and package evidence "
+            "is needed before the library can proceed."
+        ),
+        recommendation="Provide the requested datasheet.",
+        recommendation_rationale="The source evidence is required to verify the package.",
+        alternatives=[
+            {
+                "option": "Provide the requested datasheet.",
+                "risks": ["The library remains blocked until the source is checked."],
+            },
+            {
+                "option": "Mark it unavailable.",
+                "risks": ["Alternative evidence will be needed."],
+            },
+        ],
+        recommended=0,
+        details={
+            "kind": "datasheet_acquisition",
+            "failure_reason": "not_found",
+            "requested_revision": "Rev B",
+            "required_sections": [
+                "package_drawing",
+                "pinout",
+                "pin_table",
+                "land_pattern",
+                "orderable_table",
+            ],
+            "attempted_sources": ["manufacturer website"],
+            "optional_cad_requested": False,
+        },
+    )
+
+
+def _stub_received_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+    lane_text: dict[str, str],
+    extraction_dirs: list[Path],
+) -> None:
+    extraction = SimpleNamespace(pages=[SimpleNamespace(page=1)])
+
+    def extract(_pdf: Path, output_dir: Path, **_kwargs: object) -> Any:
+        extraction_dirs.append(output_dir)
+        return extraction
+
+    def words(
+        _extraction: Any,
+        _directory: Path,
+        _page: int,
+        *,
+        lanes: Sequence[str],
+    ) -> list[PdfWord]:
+        return [
+            PdfWord(text=token, x0=0, top=0, x1=1, bottom=1)
+            for token in lane_text[lanes[0]].split()
+        ]
+
+    monkeypatch.setattr(datasheet_module, "extract_datasheet", extract)
+    monkeypatch.setattr(datasheet_module, "page_words", words)
+
+
+_VALID_RECEIVED_TEXT = (
+    "ABC123 ordering information Rev B package outline top view pin configuration "
+    "pin number pin name recommended land pattern"
+)
+
+
+def test_check_received_requires_mpn_revision_and_sections_in_both_lanes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf = tmp_path / "received.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    output_dirs: list[Path] = []
+    _stub_received_extraction(
+        monkeypatch,
+        {
+            "poppler": "ordering information Rev A package outline top view pin configuration "
+            "pin number pin name recommended land pattern",
+            "pdfplumber": _VALID_RECEIVED_TEXT,
+        },
+        output_dirs,
+    )
+
+    findings = datasheet_module.check_received(pdf, _datasheet_request())
+
+    assert {finding.code for finding in findings} == {
+        "datasheet_mpn_mismatch",
+        "datasheet_revision_mismatch",
+    }
+    assert len(output_dirs) == 1
+    assert findings[0].severity == "error"
+
+
+def test_check_received_accepts_matching_evidence_in_both_lanes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf = tmp_path / "received.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    output_dirs: list[Path] = []
+    _stub_received_extraction(
+        monkeypatch,
+        {"poppler": _VALID_RECEIVED_TEXT, "pdfplumber": _VALID_RECEIVED_TEXT},
+        output_dirs,
+    )
+
+    assert datasheet_module.check_received(pdf, _datasheet_request()) == []
+
+
+def test_check_received_reports_missing_sections_and_uses_private_temp_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    pdf = project / ".confidential" / "received.pdf"
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF-1.4")
+    output_dirs: list[Path] = []
+    text_without_package_drawing = (
+        "ABC123 ordering information Rev B top view pin configuration pin number pin name "
+        "recommended land pattern"
+    )
+    _stub_received_extraction(
+        monkeypatch,
+        {
+            "poppler": text_without_package_drawing,
+            "pdfplumber": text_without_package_drawing,
+        },
+        output_dirs,
+    )
+
+    findings = datasheet_module.check_received(pdf, _datasheet_request())
+
+    assert [finding.code for finding in findings] == ["datasheet_section_missing:package_drawing"]
+    assert len(output_dirs) == 1
+    assert output_dirs[0].resolve().is_relative_to((project / ".confidential").resolve())
+    assert (project / ".confidential" / ".gitignore").is_file()
 
 
 def test_extract_datasheet_writes_manifest_and_both_lanes(

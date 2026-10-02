@@ -49,6 +49,16 @@ to a drawing ID and optional revision. Project-library verification is
 recomputed from recorded inputs by the project gate; a stored passing verdict
 is not authoritative. See [ADR-0025](adr/ADR-0025-part-library-evidence-authority.md).
 
+Datasheet acquisition failures use a hash-bound HumanRequest. A provided
+datasheet must be attached to the same user message as the response and is
+checked for target MPN, requested revision, and required sections in both
+Poppler and pdfplumber lanes before it can proceed. Confidential datasheets,
+extractions, review crops, and review packets belong under
+`<project>/.confidential/`; the generated `.gitignore` and tool guard are
+policy safeguards, not a security boundary. Verification rejects a
+confidential datasheet or extraction path outside that store. See
+[ADR-0033](adr/ADR-0033-human-requests-and-confidential-datasheets.md).
+
 Pinout geometry is freshly derived for the four supported leaded and no-lead
 quad/dual families, then compared with footprint pad order and symbol names.
 Package pin-1 corners always use top-view coordinates; per-pin view metadata

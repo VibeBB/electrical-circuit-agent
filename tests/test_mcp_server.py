@@ -211,8 +211,11 @@ def test_mcp_server_lists_expected_tools() -> None:
     }
 
 
+@pytest.mark.parametrize("confidential", [False, True])
 def test_human_request_mcp_create_and_status(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    confidential: bool,
 ) -> None:
     monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     request_fields = {
@@ -252,12 +255,25 @@ def test_human_request_mcp_create_and_status(
     async def exercise() -> None:
         created = await mcp_server.call_tool(
             "circuit_human_request_create",
-            {"project_path": str(tmp_path), "request": request_fields},
+            {
+                "project_path": str(tmp_path),
+                "request": request_fields,
+                "confidential": confidential,
+            },
         )
         assert created.isError is False
         created_value = json.loads(cast(TextContent, created.content[0]).text)
         assert len(created_value["request_id"]) == 16
-        assert (tmp_path / "library" / "requests" / f"{created_value['request_id']}.md").is_file()
+        request_root = (
+            tmp_path / ".confidential" / "library" / "requests"
+            if confidential
+            else tmp_path / "library" / "requests"
+        )
+        request_markdown = request_root / f"{created_value['request_id']}.md"
+        assert request_markdown.is_file()
+        if confidential:
+            assert "CONFIDENTIAL — local only" in request_markdown.read_text(encoding="utf-8")
+            assert (tmp_path / ".confidential" / ".gitignore").is_file()
 
         status = await mcp_server.call_tool(
             "circuit_human_request_status",
@@ -2436,6 +2452,7 @@ def test_render_valid_literal_args_pass_through(tmp_path: Path, monkeypatch: Any
 
 def test_tool_schema_enums_match_kicad_cli_literals() -> None:
     schemas = {name: schema for name, _, schema in mcp_server._TOOLS}  # pyright: ignore[reportPrivateUsage]
+    assert schemas["circuit_human_request_create"]["properties"]["confidential"]["default"] is False
     render_props = schemas["circuit_render"]["properties"]
     assert render_props["side"]["enum"] == list(mcp_server.kicad_cli.CAMERA_SIDES)
     assert render_props["background"]["enum"] == list(mcp_server.kicad_cli.RENDER_BACKGROUNDS)

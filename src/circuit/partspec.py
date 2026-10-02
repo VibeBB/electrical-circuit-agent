@@ -19,7 +19,7 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import advisory, datasheet, visionread
+from . import advisory, confidential, datasheet, visionread
 from . import pinout as pinout_oracle
 from .datasheet import (
     DatasheetError,
@@ -254,6 +254,8 @@ class DatasheetRef(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     revision: str = Field(min_length=1)
     extraction_path: str
+    confidential: bool = False
+    origin: Literal["web", "user_provided"] = "web"
 
 
 class PartSpec(BaseModel):
@@ -459,6 +461,10 @@ _RE_DERIVATION_STACK: ContextVar[ExitStack | None] = ContextVar(
     "partspec_rederivation_stack",
     default=None,
 )
+_RE_DERIVATION_BASE: ContextVar[Path | None] = ContextVar(
+    "partspec_rederivation_base",
+    default=None,
+)
 
 
 def rederive_pages(
@@ -467,7 +473,12 @@ def rederive_pages(
     stack = _RE_DERIVATION_STACK.get()
     if stack is None:
         raise DatasheetError("rederive_pages must run within a PartSpec check")
-    output_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="circuit-partspec-")))
+    base_dir = _RE_DERIVATION_BASE.get()
+    if base_dir is not None:
+        base_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(
+        stack.enter_context(tempfile.TemporaryDirectory(prefix="circuit-partspec-", dir=base_dir))
+    )
     return (
         datasheet.extract_datasheet(pdf_path, output_dir, pages=pages, dpi=dpi),
         output_dir,
@@ -2727,7 +2738,29 @@ def check_part_spec(
     spec_dir = spec_path.resolve().parent
     extraction_dir = extraction_path.resolve().parent
     pdf_path = _resolved(spec_dir, spec.datasheet.path)
+    stored_extraction_path = _resolved(spec_dir, spec.datasheet.extraction_path)
     actual_spec_sha = part_spec_sha256(spec_path)
+    if spec.datasheet.confidential:
+        project_root = confidential.project_root_for(spec_path)
+        private_root = confidential.ensure_confidential_store(project_root)
+        for field, artifact_path in (
+            ("datasheet.path", pdf_path),
+            ("datasheet.extraction_path", stored_extraction_path),
+        ):
+            try:
+                artifact_path.resolve().relative_to(private_root.resolve())
+            except ValueError:
+                findings.append(
+                    SpecFinding(
+                        code="confidential_artifact_outside_store",
+                        severity="error",
+                        field=field,
+                        message=(
+                            "confidential datasheet artifacts must be stored under "
+                            + str(private_root)
+                        ),
+                    )
+                )
     try:
         actual_extraction_sha = hashlib.sha256(extraction_path.read_bytes()).hexdigest()
     except OSError as exc:
@@ -2841,6 +2874,12 @@ def check_part_spec(
     pinout_geometry: PinoutGeometry | None = None
     derived_dir = Path()
     with ExitStack() as cleanup_stack:
+        confidential_token: Token[Path | None] | None = None
+        if spec.datasheet.confidential:
+            private_root = confidential.ensure_confidential_store(
+                confidential.project_root_for(spec_path)
+            )
+            confidential_token = _RE_DERIVATION_BASE.set(private_root / "partspec-checks")
         token: Token[ExitStack | None] = _RE_DERIVATION_STACK.set(cleanup_stack)
         try:
             if not pdf_path.is_file() or not available_stored_pages:
@@ -2864,6 +2903,8 @@ def check_part_spec(
             )
         finally:
             _RE_DERIVATION_STACK.reset(token)
+            if confidential_token is not None:
+                _RE_DERIVATION_BASE.reset(confidential_token)
 
         if derived_extraction is not None:
             if pdf_sha256 is not None and derived_extraction.pdf_sha256 != pdf_sha256:

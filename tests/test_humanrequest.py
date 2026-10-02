@@ -157,6 +157,48 @@ def test_request_details_kind_must_match_request_kind() -> None:
         build_request(**fields)
 
 
+@pytest.mark.parametrize(
+    "missing",
+    ["failure_reason", "required_sections", "attempted_sources", "optional_cad_requested"],
+)
+def test_datasheet_acquisition_details_require_all_core_fields(missing: str) -> None:
+    fields = _request_fields()
+    fields.update(
+        kind="datasheet_acquisition",
+        unknown=["The required source evidence is unavailable."],
+        details={
+            "kind": "datasheet_acquisition",
+            "failure_reason": "not_found",
+            "requested_revision": "B",
+            "required_sections": ["package_drawing"],
+            "attempted_sources": ["manufacturer website: not found"],
+            "optional_cad_requested": False,
+        },
+    )
+    fields["details"].pop(missing)
+
+    with pytest.raises(ValidationError):
+        build_request(**fields)
+
+
+def test_datasheet_acquisition_rejects_unknown_required_section() -> None:
+    fields = _request_fields()
+    fields.update(
+        kind="datasheet_acquisition",
+        unknown=["The required source evidence is unavailable."],
+        details={
+            "kind": "datasheet_acquisition",
+            "failure_reason": "not_found",
+            "required_sections": ["electrical_limits"],
+            "attempted_sources": ["manufacturer website: not found"],
+            "optional_cad_requested": False,
+        },
+    )
+
+    with pytest.raises(ValidationError):
+        build_request(**fields)
+
+
 def test_request_rejects_extra_fields_and_invalid_sha256() -> None:
     fields = _request_fields()
     fields["unexpected"] = "not permitted"

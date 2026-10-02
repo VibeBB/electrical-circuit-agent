@@ -60,13 +60,13 @@ def _request_id(record: dict[str, Any]) -> str | None:
 
 
 def _write_pointer(
-    project: Path,
+    request_root: Path,
     event_path: Path,
     request_id: str,
     request_sha256: str,
     event_sha256: str,
 ) -> None:
-    directory = project / "library" / "requests" / "responses"
+    directory = request_root / "responses"
     pointer = directory / f"{request_id}.{event_sha256[:12]}.json"
     if pointer.exists():
         return
@@ -100,7 +100,10 @@ def main() -> int:
         if events_dir is None:
             return 0
         project = project_dir(payload_record)
-        request_root = project / "library" / "requests"
+        request_roots = (
+            project / ".confidential" / "library" / "requests",
+            project / "library" / "requests",
+        )
         for event_path in sorted(events_dir.glob("event-*.json")):
             try:
                 raw = event_path.read_bytes()
@@ -115,30 +118,32 @@ def main() -> int:
             request_id = _request_id(event_record)
             if request_id is None:
                 continue
-            try:
-                request = json.loads(
-                    (request_root / f"{request_id}.json").read_text(encoding="utf-8")
+            for request_root in request_roots:
+                try:
+                    request = json.loads(
+                        (request_root / f"{request_id}.json").read_text(encoding="utf-8")
+                    )
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if not isinstance(request, dict):
+                    continue
+                request_record = cast(dict[str, Any], request)
+                request_sha256 = request_record.get("request_sha256")
+                if (
+                    request_record.get("request_id") != request_id
+                    or not isinstance(request_sha256, str)
+                    or REQUEST_SHA.fullmatch(request_sha256) is None
+                    or not request_sha256.startswith(request_id)
+                ):
+                    continue
+                _write_pointer(
+                    request_root,
+                    event_path,
+                    request_id,
+                    request_sha256,
+                    hashlib.sha256(raw).hexdigest(),
                 )
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            if not isinstance(request, dict):
-                continue
-            request_record = cast(dict[str, Any], request)
-            request_sha256 = request_record.get("request_sha256")
-            if (
-                request_record.get("request_id") != request_id
-                or not isinstance(request_sha256, str)
-                or REQUEST_SHA.fullmatch(request_sha256) is None
-                or not request_sha256.startswith(request_id)
-            ):
-                continue
-            _write_pointer(
-                project,
-                event_path,
-                request_id,
-                request_sha256,
-                hashlib.sha256(raw).hexdigest(),
-            )
+                break
     except Exception:
         return 0
     return 0
