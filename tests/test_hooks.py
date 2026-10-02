@@ -737,18 +737,18 @@ def test_intake_attachments_stores_confidential_pdf_and_request_metadata(
     assert (project / ".confidential" / ".gitignore").read_text(encoding="utf-8") == (
         "*\n!.gitignore\n"
     )
+    manifest = project / "intake" / "attachments" / "manifest.jsonl"
+    assert not manifest.exists()
     records = [
         json.loads(line)
-        for line in (project / "intake" / "attachments" / "manifest.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
+        for line in (private_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert len(records) == 1
-    assert records[0]["attachment_path"] == str(pdf_path)
     assert records[0]["origin"] == "user_provided"
     assert records[0]["event_sha256"] == hashlib.sha256(event_path.read_bytes()).hexdigest()
     assert records[0]["request_id"] == request_id
-    assert records[0]["confidential"] is True
+    assert "attachment_path" not in records[0]
+    assert "confidential" not in records[0]
 
 
 def test_intake_attachments_records_non_data_urls(tmp_path: Path) -> None:
