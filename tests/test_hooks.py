@@ -164,6 +164,76 @@ def test_protect_allows_reading_agent_canvas_events() -> None:
     assert _run_protect_hook(payload).returncode == 0
 
 
+def test_protect_blocks_git_and_web_access_to_confidential_artifacts(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    private_file = project / ".confidential" / "private.pdf"
+    private_file.parent.mkdir(parents=True)
+    private_file.write_bytes(_PDF)
+    listed_file = project / "intake" / "attachments" / "listed.pdf"
+    listed_file.parent.mkdir(parents=True)
+    listed_file.write_bytes(_PDF)
+    manifest = listed_file.parent / "manifest.jsonl"
+    manifest.write_text(
+        json.dumps(
+            {
+                "confidential": True,
+                "attachment_path": str(listed_file),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    git_init = subprocess.run(
+        ["git", "init", "-q"],
+        cwd=project,
+        capture_output=True,
+        check=False,
+    )
+    assert git_init.returncode == 0
+    git_add = subprocess.run(
+        ["git", "add", "-f", "--", ".confidential/private.pdf"],
+        cwd=project,
+        capture_output=True,
+        check=False,
+    )
+    assert git_add.returncode == 0
+
+    for command in (
+        "git add .confidential/private.pdf",
+        f"git -C {project} add .confidential/private.pdf",
+        "git add intake/attachments/listed.pdf",
+        "git commit -m 'publish artifacts'",
+        "git push origin feature",
+    ):
+        payload = {
+            "working_dir": str(project),
+            "tool_name": "terminal",
+            "tool_input": {"command": command},
+        }
+        result = _run_protect_hook(payload)
+        assert result.returncode == 2, command
+        assert "confidential artifacts" in result.stderr
+        assert "private.pdf" not in result.stderr
+        assert "listed.pdf" not in result.stderr
+
+    for tool_name in ("web_search", "fetch_url"):
+        payload = {
+            "working_dir": str(project),
+            "tool_name": tool_name,
+            "tool_input": {"url": str(private_file)},
+        }
+        result = _run_protect_hook(payload)
+        assert result.returncode == 2, tool_name
+        assert "confidential artifacts" in result.stderr
+
+    listed_payload = {
+        "working_dir": str(project),
+        "tool_name": "terminal",
+        "tool_input": {"command": f"git add {listed_file}"},
+    }
+    assert _run_protect_hook(listed_payload).returncode == 2
+
+
 _VISION_CONTROL_READS: tuple[dict[str, Any], ...] = (
     {
         "tool_name": "terminal",
@@ -539,6 +609,7 @@ _PNG = bytes.fromhex(
     "0000000a49444154789c626001000000ffff03000006000557bfabd40000000049"
     "454e44ae426082"
 )
+_PDF = b"%PDF-1.4\n%%EOF\n"
 
 
 def _write_event(events: Path, name: str, source: str, urls: list[str]) -> None:
@@ -624,6 +695,62 @@ def test_intake_attachments_materializes_user_images(tmp_path: Path) -> None:
     assert len((attachments / "manifest.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
 
+def test_intake_attachments_stores_confidential_pdf_and_request_metadata(
+    tmp_path: Path,
+) -> None:
+    events = tmp_path / "events"
+    events.mkdir()
+    request_id = "a" * 16
+    event_path = events / "event-1.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "source": "user",
+                "llm_message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                f"CIRCUIT-HUMAN-RESPONSE {request_id}\n"
+                                "decision: provided\nconfidential: yes"
+                            ),
+                        },
+                        {
+                            "type": "file",
+                            "url": "data:application/pdf;base64," + base64.b64encode(_PDF).decode(),
+                        },
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    project = tmp_path / "project"
+
+    result = _run_attach_hook({"working_dir": str(project)}, events)
+
+    assert result.returncode == 0
+    private_dir = project / ".confidential" / "intake" / "attachments"
+    pdf_path = private_dir / f"{hashlib.sha256(_PDF).hexdigest()[:12]}.pdf"
+    assert pdf_path.read_bytes() == _PDF
+    assert (project / ".confidential" / ".gitignore").read_text(encoding="utf-8") == (
+        "*\n!.gitignore\n"
+    )
+    manifest = project / "intake" / "attachments" / "manifest.jsonl"
+    assert not manifest.exists()
+    records = [
+        json.loads(line)
+        for line in (private_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["origin"] == "user_provided"
+    assert records[0]["event_sha256"] == hashlib.sha256(event_path.read_bytes()).hexdigest()
+    assert records[0]["request_id"] == request_id
+    assert "attachment_path" not in records[0]
+    assert "confidential" not in records[0]
+
+
 def test_intake_attachments_records_non_data_urls(tmp_path: Path) -> None:
     events = tmp_path / "events"
     events.mkdir()
@@ -638,6 +765,26 @@ def test_intake_attachments_records_non_data_urls(tmp_path: Path) -> None:
     record = json.loads(manifest.read_text(encoding="utf-8").splitlines()[0])
     assert record["materialized"] is False
     assert record["reason"] == "non-data-url"
+
+
+def test_intake_attachments_does_not_persist_undecodable_url_data(tmp_path: Path) -> None:
+    events = tmp_path / "events"
+    events.mkdir()
+    url = "data:image/png;base64,private-datasheet-token"
+    _write_event(events, "event-1.json", "user", [url])
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    result = _run_attach_hook({"working_dir": str(workdir)}, events)
+
+    assert result.returncode == 0
+    manifest = workdir / "intake" / "attachments" / "manifest.jsonl"
+    text = manifest.read_text(encoding="utf-8")
+    record = json.loads(text.splitlines()[0])
+    assert record["materialized"] is False
+    assert record["reason"] == "undecodable"
+    assert "url_prefix" not in record
+    assert "private-datasheet-token" not in text
 
 
 def test_intake_attachments_fails_open_without_events_dir(tmp_path: Path) -> None:
@@ -1082,6 +1229,50 @@ def _human_request_for_hook() -> HumanRequest:
     )
 
 
+def _datasheet_request_for_hook() -> HumanRequest:
+    return build_request(
+        kind="datasheet_acquisition",
+        subject={"manufacturer": "Example", "mpn": "TEST-1", "revision": "A"},
+        reason="The matching datasheet could not be found.",
+        evidence=[
+            {
+                "kind": "note",
+                "ref": "attempts",
+                "summary": "The manufacturer source was checked.",
+            }
+        ],
+        known=["The requested part is TEST-1."],
+        unknown=["Package evidence remains unavailable."],
+        agent_assessment=(
+            "The library cannot proceed without a datasheet matching the requested part and "
+            "revision. Package, pin, orderable, and mechanical claims remain unsupported until "
+            "the source PDF is checked. Keep the request open until an official matching "
+            "document is received and its evidence is reviewed."
+        ),
+        recommendation="Provide the requested datasheet.",
+        recommendation_rationale="Package and pin claims require source evidence.",
+        alternatives=[
+            {
+                "option": "Provide the requested datasheet.",
+                "risks": ["The library remains blocked until the PDF is checked."],
+            },
+            {
+                "option": "Report the datasheet unavailable.",
+                "risks": ["Alternative evidence or substitute permission is required."],
+            },
+        ],
+        recommended=0,
+        details={
+            "kind": "datasheet_acquisition",
+            "failure_reason": "not_found",
+            "requested_revision": "A",
+            "required_sections": ["package_drawing", "pinout", "pin_table"],
+            "attempted_sources": ["manufacturer"],
+            "optional_cad_requested": False,
+        },
+    )
+
+
 def test_record_human_response_pointer_is_user_only_and_hash_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1123,6 +1314,120 @@ def test_record_human_response_pointer_is_user_only_and_hash_bound(
     assert len(responses) == 1
     assert responses[0].valid is True
     assert responses[0].decision == "approve"
+
+
+@pytest.mark.parametrize(("include_pdf", "valid"), [(True, True), (False, False)])
+def test_provided_datasheet_response_requires_pdf_in_same_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    include_pdf: bool,
+    valid: bool,
+) -> None:
+    project = tmp_path / "project"
+    request = _datasheet_request_for_hook()
+    request_json_path, request_markdown_path = write_request(
+        request,
+        project,
+        confidential=True,
+    )
+    private_request_dir = project / ".confidential" / "library" / "requests"
+    assert request_json_path.parent == private_request_dir
+    assert request_markdown_path.parent == private_request_dir
+    assert (project / ".confidential" / ".gitignore").is_file()
+    events = tmp_path / "events"
+    events.mkdir()
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(events))
+    content: list[dict[str, str]] = [
+        {
+            "type": "text",
+            "text": (
+                f"CIRCUIT-HUMAN-RESPONSE {request.request_id}\n"
+                "decision: provided\nreviewer: Human Reviewer\nconfidential: yes"
+            ),
+        }
+    ]
+    if include_pdf:
+        content.append(
+            {
+                "type": "file",
+                "url": "data:application/pdf;base64," + base64.b64encode(_PDF).decode(),
+            }
+        )
+    event_path = events / "event-1.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "source": "user",
+                "llm_message": {"role": "user", "content": content},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = dict(os.environ)
+    env["CIRCUIT_AGENT_EVENTS_DIR"] = str(events)
+    env["OPENHANDS_PROJECT_DIR"] = str(project)
+    result = subprocess.run(
+        [sys.executable, str(HUMAN_RESPONSE_SCRIPT)],
+        input=json.dumps({"working_dir": str(project)}),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    responses = load_responses(project, request)
+    assert len(responses) == 1
+    assert responses[0].valid is valid
+    if not valid:
+        assert "provided response requires a PDF attachment in the same message" in (
+            responses[0].reasons
+        )
+
+
+def test_unavailable_datasheet_response_requires_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    request = _datasheet_request_for_hook()
+    write_request(request, project)
+    events = tmp_path / "events"
+    events.mkdir()
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(events))
+    event_path = events / "event-1.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "source": "user",
+                "llm_message": {
+                    "role": "user",
+                    "content": (
+                        f"CIRCUIT-HUMAN-RESPONSE {request.request_id}\n"
+                        "decision: unavailable\nreviewer: Human Reviewer"
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = dict(os.environ)
+    env["CIRCUIT_AGENT_EVENTS_DIR"] = str(events)
+    env["OPENHANDS_PROJECT_DIR"] = str(project)
+    result = subprocess.run(
+        [sys.executable, str(HUMAN_RESPONSE_SCRIPT)],
+        input=json.dumps({"working_dir": str(project)}),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    responses = load_responses(project, request)
+    assert len(responses) == 1
+    assert responses[0].valid is False
+    assert "unavailable response requires reason" in responses[0].reasons
 
 
 def test_human_response_event_hash_tampering_is_not_trusted(

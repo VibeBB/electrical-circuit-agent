@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -21,6 +23,7 @@ from pydantic import (
 )
 
 from .advisory import impression_is_prose
+from .confidential import ensure_confidential_store
 
 HumanRequestKind = Literal[
     "datasheet_acquisition",
@@ -59,6 +62,7 @@ _REQUEST_SHA = re.compile(r"^[0-9a-f]{64}$")
 _EVENTS_DIR_ENV = "CIRCUIT_AGENT_EVENTS_DIR"
 _DEFAULT_EVENTS_ROOT = Path(".openhands/agent-canvas/dev_conversations")
 _RESPONSE_LINE = re.compile(r"^CIRCUIT-HUMAN-RESPONSE ([0-9a-f]{16})$")
+_DATA_URL = re.compile(r"^data:[^,]+;base64,(.+)$", re.DOTALL | re.IGNORECASE)
 
 
 class HumanRequestError(ValueError):
@@ -286,17 +290,20 @@ def _request_document(request: HumanRequest) -> str:
     )
 
 
-def _markdown(request: HumanRequest) -> str:
-    lines = [
-        f"# Human request {request.request_id}",
-        "",
-        "## Reason",
-        "",
-        request.reason,
-        "",
-        "## Evidence",
-        "",
-    ]
+def _markdown(request: HumanRequest, *, confidential: bool = False) -> str:
+    lines = ["# CONFIDENTIAL — local only", ""] if confidential else []
+    lines.extend(
+        [
+            f"# Human request {request.request_id}",
+            "",
+            "## Reason",
+            "",
+            request.reason,
+            "",
+            "## Evidence",
+            "",
+        ]
+    )
     for item in request.evidence:
         if item.kind == "page_image" and not Path(item.ref).is_absolute():
             lines.extend(
@@ -351,14 +358,39 @@ def _markdown(request: HumanRequest) -> str:
     return "\n".join(lines)
 
 
-def write_request(request: HumanRequest, project: Path) -> tuple[Path, Path]:
-    directory = project / "library" / "requests"
+def request_directory(project: Path, *, confidential: bool = False) -> Path:
+    if confidential:
+        return project / ".confidential" / "library" / "requests"
+    return project / "library" / "requests"
+
+
+def find_request_path(project: Path, request_id: str) -> Path:
+    for directory in (
+        request_directory(project, confidential=True),
+        request_directory(project),
+    ):
+        path = directory / f"{request_id}.json"
+        if path.is_file():
+            return path
+    return request_directory(project) / f"{request_id}.json"
+
+
+def write_request(
+    request: HumanRequest,
+    project: Path,
+    *,
+    confidential: bool = False,
+) -> tuple[Path, Path]:
+    if confidential:
+        ensure_confidential_store(project)
+    directory = request_directory(project, confidential=confidential)
     directory.mkdir(parents=True, exist_ok=True)
     json_path = directory / f"{request.request_id}.json"
     markdown_path = directory / f"{request.request_id}.md"
+    markdown = _markdown(request, confidential=confidential)
     for path, content in (
         (json_path, _request_document(request)),
-        (markdown_path, _markdown(request)),
+        (markdown_path, markdown),
     ):
         try:
             with path.open("x", encoding="utf-8") as stream:
@@ -404,6 +436,41 @@ def _message_text(value: Any, key: str = "") -> list[str]:
     return []
 
 
+def _event_has_pdf_attachment(value: Any, *, attachment_context: bool = False) -> bool:
+    if isinstance(value, str):
+        text = value.strip()
+        match = _DATA_URL.fullmatch(text)
+        if match is not None:
+            try:
+                return base64.b64decode(match.group(1), validate=True).startswith(b"%PDF-")
+            except (binascii.Error, ValueError):
+                return False
+        if attachment_context:
+            try:
+                return base64.b64decode(text, validate=True).startswith(b"%PDF-")
+            except (binascii.Error, ValueError):
+                return False
+        return False
+    if isinstance(value, list):
+        return any(
+            _event_has_pdf_attachment(item, attachment_context=attachment_context)
+            for item in cast(list[Any], value)
+        )
+    if isinstance(value, dict):
+        record = cast(dict[str, Any], value)
+        context = attachment_context or record.get("type") in {
+            "file",
+            "document",
+            "pdf",
+            "attachment",
+        }
+        return any(
+            _event_has_pdf_attachment(child, attachment_context=context)
+            for child in record.values()
+        )
+    return False
+
+
 def _events_root() -> Path:
     override = os.environ.get(_EVENTS_DIR_ENV)
     if override:
@@ -418,6 +485,7 @@ def _response_from_event(
     text: str | None,
     pointer_request_sha256: str | None,
     error: str | None,
+    has_pdf_attachment: bool = False,
 ) -> HumanResponse:
     reasons: list[str] = []
     if error is not None:
@@ -467,6 +535,12 @@ def _response_from_event(
             and fields.get("confidential", "").casefold() not in {"yes", "no"}
         ):
             reasons.append("provided response requires confidential: yes|no")
+        if (
+            request.kind == "datasheet_acquisition"
+            and decision == "provided"
+            and not has_pdf_attachment
+        ):
+            reasons.append("provided response requires a PDF attachment in the same message")
         if request.kind == "substitute_permission" and decision == "grant":
             for required in ("scope", "target", "substitute", "substitute_sha256"):
                 if not fields.get(required):
@@ -493,10 +567,10 @@ def _response_from_event(
 
 
 def load_responses(project: Path, request: HumanRequest) -> list[HumanResponse]:
-    directory = project / "library" / "requests" / "responses"
+    request_path = find_request_path(project, request.request_id)
+    directory = request_path.parent / "responses"
     if not directory.is_dir():
         return []
-    request_path = project / "library" / "requests" / f"{request.request_id}.json"
     try:
         current = load_request(request_path)
         current_hash = current.request_sha256
@@ -508,6 +582,7 @@ def load_responses(project: Path, request: HumanRequest) -> list[HumanResponse]:
         event_sha256: str | None = None
         pointer_request_sha256: str | None = None
         text: str | None = None
+        has_pdf_attachment = False
         error: str | None = None
         try:
             pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
@@ -541,6 +616,7 @@ def load_responses(project: Path, request: HumanRequest) -> list[HumanResponse]:
             event_record = cast(dict[str, Any], event)
             if event_record.get("source") != "user":
                 raise ValueError("response event is not user-authored")
+            has_pdf_attachment = _event_has_pdf_attachment(event_record)
             if current_hash is None or current_hash != request.request_sha256:
                 raise ValueError("stored request hash is missing or changed")
             for candidate in _message_text(event_record):
@@ -561,6 +637,7 @@ def load_responses(project: Path, request: HumanRequest) -> list[HumanResponse]:
                 text,
                 pointer_request_sha256,
                 error,
+                has_pdf_attachment,
             )
         )
     return responses

@@ -88,6 +88,7 @@ EXPECTED_INTEGRITY_CODES = {
     "authoring_commit_unobserved",
     "authoring_lane_input_mismatch",
     "authoring_consensus_violated",
+    "confidential_artifact_outside_store",
     "corpus_approval_binding_mismatch",
     "corpus_approval_event_invalid",
     "corpus_approval_unavailable",

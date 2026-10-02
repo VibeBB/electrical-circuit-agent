@@ -13,8 +13,14 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
 import sys
+from pathlib import Path
 from typing import Any, cast
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _provenance import project_dir
 
 DESIGN_SUFFIXES = (".kicad_sch", ".kicad_pcb")
 BLOCKED_PATHS = (
@@ -43,6 +49,7 @@ ANY_OPERAND_WRITES = {
     "truncate",
     "shred",
 }
+WEB_FETCH_TOOL_MARKERS = ("web", "fetch", "browser")
 
 
 def _strings(value: Any) -> list[str]:
@@ -80,6 +87,160 @@ def _references_corpus(payload: dict[str, Any]) -> bool:
     return any(
         CORPUS_PATH.search(value.replace("\\", "/")) is not None for value in _strings(tool_input)
     )
+
+
+def _confidential_paths(project: Path) -> set[str]:
+    manifests = (
+        project / "intake" / "attachments" / "manifest.jsonl",
+        project / ".confidential" / "intake" / "attachments" / "manifest.jsonl",
+    )
+    paths: set[str] = set()
+    for manifest in manifests:
+        try:
+            lines = manifest.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            record = cast(dict[str, Any], record)
+            if record.get("confidential") is not True:
+                continue
+            for key in ("attachment_path", "image_path", "path"):
+                value = record.get(key)
+                if not isinstance(value, str) or not value:
+                    continue
+                normalized = value.replace("\\", "/")
+                paths.add(normalized.casefold())
+                path = Path(value)
+                if path.is_absolute():
+                    try:
+                        relative = path.resolve().relative_to(project.resolve()).as_posix()
+                    except ValueError:
+                        continue
+                    paths.add(relative.casefold())
+    return paths
+
+
+def _is_confidential_reference(value: str, confidential_paths: set[str]) -> bool:
+    normalized = value.replace("\\", "/").casefold()
+    return bool(re.search(r"(?:^|/)\.confidential(?:/|$)", normalized)) or any(
+        path in normalized for path in confidential_paths
+    )
+
+
+def _references_confidential_web_path(
+    payload: dict[str, Any],
+    confidential_paths: set[str],
+) -> bool:
+    tool_name = payload.get("tool_name")
+    tool_input = payload.get("tool_input")
+    if (
+        not isinstance(tool_name, str)
+        or not any(marker in tool_name.casefold() for marker in WEB_FETCH_TOOL_MARKERS)
+        or not isinstance(tool_input, dict)
+    ):
+        return False
+    return any(
+        _is_confidential_reference(value, confidential_paths)
+        for value in _strings(cast(dict[str, Any], tool_input))
+    )
+
+
+def _git_paths(project: Path, *, cached: bool) -> set[str]:
+    args = (
+        ["diff", "--cached", "--name-only", "--diff-filter=ACMRT"]
+        if cached
+        else ["diff", "--name-only", "@{upstream}..HEAD"]
+    )
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if result.returncode != 0:
+        return set()
+    return {line.strip().replace("\\", "/").casefold() for line in result.stdout.splitlines()}
+
+
+def _terminal_confidential_git_target(
+    payload: dict[str, Any],
+    project: Path,
+    confidential_paths: set[str],
+) -> str | None:
+    if payload.get("tool_name") != "terminal":
+        return None
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    command = cast(dict[str, Any], tool_input).get("command")
+    if not isinstance(command, str):
+        return None
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        tokens = command.split()
+    for index, token in enumerate(tokens[:-1]):
+        if _command_name(token) != "git":
+            continue
+        subcommand_index = index + 1
+        while subcommand_index < len(tokens):
+            option = tokens[subcommand_index]
+            if option in {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}:
+                subcommand_index += 2
+            elif option.startswith("-"):
+                subcommand_index += 1
+            else:
+                break
+        if subcommand_index >= len(tokens):
+            continue
+        subcommand = tokens[subcommand_index]
+        if subcommand not in {"add", "commit", "push"}:
+            continue
+        operands = [
+            item
+            for item in tokens[subcommand_index + 1 :]
+            if item not in COMMAND_SEPARATORS and not item.startswith("-")
+        ]
+        for operand in operands:
+            if _is_confidential_reference(operand, confidential_paths):
+                return operand
+        if subcommand == "add":
+            continue
+        changed_paths = _git_paths(project, cached=subcommand == "commit")
+        if subcommand == "push" and not changed_paths:
+            try:
+                result = subprocess.run(
+                    ["git", "ls-files"],
+                    cwd=project,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=5,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                result = None
+            if result is not None and result.returncode == 0:
+                changed_paths = {
+                    line.strip().replace("\\", "/").casefold()
+                    for line in result.stdout.splitlines()
+                }
+        for path in changed_paths:
+            if _is_confidential_reference(path, confidential_paths):
+                return path
+    return None
 
 
 def _is_protected(value: str) -> bool:
@@ -247,6 +408,22 @@ def main() -> int:
         return 2
     if _references_vision_control(payload):
         print("vision control state is inaccessible through agent tools", file=sys.stderr)
+        return 2
+    project = project_dir(payload)
+    confidential_paths = _confidential_paths(project)
+    if _references_confidential_web_path(payload, confidential_paths):
+        print("confidential artifacts may not be sent to web or fetch tools", file=sys.stderr)
+        return 2
+    confidential_target = _terminal_confidential_git_target(
+        payload,
+        project,
+        confidential_paths,
+    )
+    if confidential_target is not None:
+        print(
+            "confidential artifacts may not be staged, committed, or pushed",
+            file=sys.stderr,
+        )
         return 2
     if _is_design_write(payload):
         print(

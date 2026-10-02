@@ -65,6 +65,7 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_stackup",
         "circuit_rasterize",
         "circuit_datasheet_extract",
+        "circuit_datasheet_check_received",
         "circuit_vision_read",
         "circuit_vision_compare",
         "circuit_model_generate",
@@ -210,10 +211,110 @@ def test_mcp_server_lists_expected_tools() -> None:
         "footprint_path",
         "model_path",
     }
+    received_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_datasheet_check_received"
+    )
+    assert set(received_schema["properties"]) == {"pdf_path", "request_path"}
+    assert set(received_schema["required"]) == {"pdf_path", "request_path"}
 
 
+def test_datasheet_check_received_mcp_tool_returns_findings_and_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    pdf_path = tmp_path / "received.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    request = humanrequest.build_request(
+        kind="datasheet_acquisition",
+        subject={"manufacturer": "Example", "mpn": "TEST-1", "revision": "A"},
+        reason="The matching datasheet could not be found.",
+        evidence=[
+            {
+                "kind": "note",
+                "ref": "attempts",
+                "summary": "The manufacturer source was checked.",
+            }
+        ],
+        known=["The requested part is TEST-1."],
+        unknown=["Package evidence remains unavailable."],
+        agent_assessment=(
+            "The requested source is not yet available for package verification. Confirm that "
+            "the received file matches the manufacturer part number and requested revision, "
+            "then compare its pin and package evidence with the intended library content. A "
+            "successful text check does not authorize release or substitute for review of the "
+            "underlying PDF."
+        ),
+        recommendation="Provide the requested datasheet.",
+        recommendation_rationale="Package and pin claims require source evidence.",
+        alternatives=[
+            {
+                "option": "Provide the requested datasheet.",
+                "risks": ["The library remains blocked until the PDF is checked."],
+            },
+            {
+                "option": "Report the datasheet unavailable.",
+                "risks": ["Alternative evidence or substitute permission is required."],
+            },
+        ],
+        recommended=0,
+        details={
+            "kind": "datasheet_acquisition",
+            "failure_reason": "not_found",
+            "requested_revision": "A",
+            "required_sections": ["package_drawing", "pinout", "pin_table"],
+            "attempted_sources": ["manufacturer"],
+            "optional_cad_requested": False,
+        },
+    )
+    request_path, _ = humanrequest.write_request(request, tmp_path)
+    finding = mcp_server.partspec.SpecFinding(
+        code="datasheet_mpn_mismatch",
+        severity="error",
+        field="datasheet.mpn",
+        message="Target MPN is missing from received evidence.",
+    )
+    calls: list[tuple[Path, humanrequest.HumanRequest]] = []
+
+    def check_received(
+        checked_pdf: Path,
+        checked_request: humanrequest.HumanRequest,
+    ) -> list[mcp_server.partspec.SpecFinding]:
+        calls.append((checked_pdf, checked_request))
+        return [finding]
+
+    monkeypatch.setattr(mcp_server.datasheet, "check_received", check_received)
+    result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_datasheet_check_received",
+            {"pdf_path": str(pdf_path), "request_path": str(request_path)},
+        )
+    )
+
+    assert result.isError is False
+    payload = json.loads(cast(TextContent, result.content[0]).text)
+    assert payload == [finding.model_dump(mode="json")]
+    assert calls == [(pdf_path, request)]
+
+    failed = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_datasheet_check_received",
+            {
+                "pdf_path": str(pdf_path),
+                "request_path": str(tmp_path / "missing-request.json"),
+            },
+        )
+    )
+    assert failed.isError is True
+
+
+@pytest.mark.parametrize("confidential", [False, True])
 def test_human_request_mcp_create_and_status(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    confidential: bool,
 ) -> None:
     monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     request_fields = {
@@ -255,12 +356,25 @@ def test_human_request_mcp_create_and_status(
     async def exercise() -> None:
         created = await mcp_server.call_tool(
             "circuit_human_request_create",
-            {"project_path": str(tmp_path), "request": request_fields},
+            {
+                "project_path": str(tmp_path),
+                "request": request_fields,
+                "confidential": confidential,
+            },
         )
         assert created.isError is False
         created_value = json.loads(cast(TextContent, created.content[0]).text)
         assert len(created_value["request_id"]) == 16
-        assert (tmp_path / "library" / "requests" / f"{created_value['request_id']}.md").is_file()
+        request_root = (
+            tmp_path / ".confidential" / "library" / "requests"
+            if confidential
+            else tmp_path / "library" / "requests"
+        )
+        request_markdown = request_root / f"{created_value['request_id']}.md"
+        assert request_markdown.is_file()
+        if confidential:
+            assert "CONFIDENTIAL — local only" in request_markdown.read_text(encoding="utf-8")
+            assert (tmp_path / ".confidential" / ".gitignore").is_file()
 
         status = await mcp_server.call_tool(
             "circuit_human_request_status",
@@ -1320,7 +1434,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 49
+            assert len(tools.tools) == 50
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title
@@ -2456,6 +2570,7 @@ def test_render_valid_literal_args_pass_through(tmp_path: Path, monkeypatch: Any
 
 def test_tool_schema_enums_match_kicad_cli_literals() -> None:
     schemas = {name: schema for name, _, schema in mcp_server._TOOLS}  # pyright: ignore[reportPrivateUsage]
+    assert schemas["circuit_human_request_create"]["properties"]["confidential"]["default"] is False
     render_props = schemas["circuit_render"]["properties"]
     assert render_props["side"]["enum"] == list(mcp_server.kicad_cli.CAMERA_SIDES)
     assert render_props["background"]["enum"] == list(mcp_server.kicad_cli.RENDER_BACKGROUNDS)

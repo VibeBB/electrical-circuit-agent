@@ -1430,13 +1430,27 @@ def _make_extraction(pdf_path: Path, evidence_dir: Path) -> DatasheetExtraction:
     ("fresh_verdict", "regressed"),
     [("pass", False), ("fail", False), ("pass", True)],
 )
+@pytest.mark.parametrize("confidential", [False, True])
 def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fresh_verdict: Literal["pass", "fail"],
     regressed: bool,
+    confidential: bool,
 ) -> None:
     spec = _spec()
+    if confidential:
+        spec = spec.model_copy(
+            update={
+                "datasheet": spec.datasheet.model_copy(
+                    update={
+                        "confidential": True,
+                        "path": ".confidential/part.pdf",
+                        "extraction_path": ".confidential/extraction.json",
+                    }
+                )
+            }
+        )
     pitch = Dimension(
         nom=1.0,
         label="pitch",
@@ -1448,7 +1462,8 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
             "authoring": "authoring/run-1",
         }
     )
-    pdf_path = tmp_path / "part.pdf"
+    pdf_path = tmp_path / spec.datasheet.path
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
     pdf_path.write_bytes(b"pdf")
     spec_path = tmp_path / "part-spec.json"
     spec_path.write_text(spec.model_dump_json(), encoding="utf-8")
@@ -1675,6 +1690,23 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     review = json.loads(review_path.read_text(encoding="utf-8"))
     blind_html = (packet.packet_dir / "01-blind.html").read_text(encoding="utf-8")
     assert not packet.approvable
+    if confidential:
+        assert packet.packet_dir.is_relative_to(tmp_path / ".confidential")
+        assert (tmp_path / ".confidential" / ".gitignore").is_file()
+        assert "CONFIDENTIAL — local only" in blind_html
+        assert "CONFIDENTIAL — local only" in (packet.packet_dir / "02-review.html").read_text(
+            encoding="utf-8"
+        )
+        request_path = (
+            tmp_path
+            / ".confidential"
+            / "library"
+            / "requests"
+            / f"{review['agent_request']['request_id']}.md"
+        )
+        assert "CONFIDENTIAL — local only" in request_path.read_text(encoding="utf-8")
+    else:
+        assert "CONFIDENTIAL — local only" not in blind_html
     assert packet.packet_id == review["packet_id"]
     assert (
         review["inputs"]["lineage_sha256"]

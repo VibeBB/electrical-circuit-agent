@@ -21,7 +21,16 @@ import pdfplumber
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
-from . import advisory, authoring, datasheet, humanrequest, kicad_cli, pinsource, visionread
+from . import (
+    advisory,
+    authoring,
+    confidential,
+    datasheet,
+    humanrequest,
+    kicad_cli,
+    pinsource,
+    visionread,
+)
 from . import pinout as pinout_oracle
 from .datasheet import DatasheetExtraction, PageExtraction
 from .landpattern import Density, LandPatternResult, compute_land_pattern
@@ -262,7 +271,10 @@ def _matching_project_request(
     input_hashes: dict[str, Any],
     base_packet_id: str,
 ) -> humanrequest.HumanRequest | None:
-    request_dir = project_dir / "library" / "requests"
+    request_dir = humanrequest.request_directory(
+        project_dir,
+        confidential=spec.datasheet.confidential,
+    )
     expected_hashes = {
         "datasheet": input_hashes.get("pdf_sha256"),
         "part_spec": input_hashes.get("part_spec_sha256"),
@@ -542,7 +554,11 @@ def current_packet_id(
             pin_source_path.suffix.casefold() if pin_source_path is not None else None
         ),
     )
+    project_root = confidential.project_root_for(spec_path)
     review_library_dir = library_dir if library_dir is not None else spec_dir / "library"
+    if spec.datasheet.confidential:
+        private_root = confidential.ensure_confidential_store(project_root)
+        review_library_dir = private_root / "library"
     request = _matching_agent_request(
         review_library_dir / "reviews" / _safe_field(spec.mpn),
         input_hashes,
@@ -550,7 +566,7 @@ def current_packet_id(
     )
     if request is None:
         request = _matching_project_request(
-            review_library_dir.parent,
+            project_root,
             spec,
             input_hashes,
             base_packet_id,
@@ -2760,7 +2776,13 @@ def _blind_html(
         "<style>body{font:16px sans-serif;max-width:1000px;margin:2rem auto}"
         "img{max-width:100%;height:auto}section{border-bottom:1px solid #bbb;padding:1rem 0}"
         ".answer-line{display:inline-block;min-width:20rem;border-bottom:1px solid #333}</style>"
-        f"</head><body><h1>Blind review</h1><p>Packet {html.escape(packet_id)}</p>"
+        "</head><body>"
+        + (
+            '<p class="confidential-banner"><strong>CONFIDENTIAL — local only</strong></p>'
+            if spec.datasheet.confidential
+            else ""
+        )
+        + f"<h1>Blind review</h1><p>Packet {html.escape(packet_id)}</p>"
         + "".join(sections)
         + "</body></html>\n"
     )
@@ -3222,6 +3244,11 @@ def _review_html(review: dict[str, Any]) -> str:
         if request_data
         else ""
     )
+    confidential_banner = (
+        '<p class="confidential-banner"><strong>CONFIDENTIAL — local only</strong></p>'
+        if review.get("confidential") is True
+        else ""
+    )
     return (
         '<!doctype html><html><head><meta charset="utf-8"><title>Library review</title>'
         "<style>body{font:15px sans-serif;max-width:1200px;margin:2rem auto}"
@@ -3229,9 +3256,11 @@ def _review_html(review: dict[str, Any]) -> str:
         "width:100%;font-size:13px}td,th{border:1px solid #bbb;padding:.3rem;text-align:left}"
         "img{max-width:100%;height:auto}"
         ".mismatch{background:#f8d7da;color:#842029}"
-        ".single-pin-source{padding:.6rem;background:#fff3cd;color:#664d03}</style>"
+        ".single-pin-source{padding:.6rem;background:#fff3cd;color:#664d03}"
+        ".confidential-banner{padding:.6rem;background:#f8d7da;color:#842029}</style>"
         "</head><body>"
-        f"<h1>Review packet {html.escape(review['packet_id'])}</h1>"
+        + confidential_banner
+        + f"<h1>Review packet {html.escape(review['packet_id'])}</h1>"
         "<h2>Contradictions and deterministic findings</h2><ul>"
         + findings_html
         + "</ul>"
@@ -3370,6 +3399,9 @@ def build_review_packet(
     """Build fresh deterministic and human-review evidence for a library part."""
     spec = load_part_spec(spec_path)
     spec_dir = spec_path.resolve().parent
+    project_root = confidential.project_root_for(spec_path)
+    if spec.datasheet.confidential:
+        out_dir = confidential.ensure_confidential_store(project_root) / "library" / "reviews"
     pin_source_sha256 = _optional_sha256(pin_source_path) if pin_source_path is not None else None
     pin_source_kind = pin_source_path.suffix.casefold() if pin_source_path is not None else None
     pin_source_document = _pin_source_review_document(
@@ -3470,7 +3502,7 @@ def build_review_packet(
     )
     if agent_request is None:
         agent_request = _matching_project_request(
-            library_dir.parent,
+            project_root,
             spec,
             input_hashes,
             base_packet_id,
@@ -3481,7 +3513,11 @@ def build_review_packet(
             base_packet_id=base_packet_id,
             input_hashes=input_hashes,
         )
-    humanrequest.write_request(agent_request, library_dir.parent)
+    humanrequest.write_request(
+        agent_request,
+        project_root,
+        confidential=spec.datasheet.confidential,
+    )
     current_id = packet_id(
         pdf_sha256=pdf_sha256,
         part_spec_sha256=part_spec_hash,
@@ -3975,6 +4011,7 @@ def build_review_packet(
     review_document: dict[str, Any] = {
         "artifact_kind": "circuit_library_review_packet",
         "packet_id": current_id,
+        "confidential": spec.datasheet.confidential,
         "inputs": {
             **input_hashes,
             "spec_path": str(spec_path.resolve()),

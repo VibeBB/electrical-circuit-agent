@@ -496,6 +496,29 @@ def test_dimension_count_prefix_is_ignored_by_lane_comparison(tmp_path: Path) ->
     )
 
 
+def test_confidential_datasheet_paths_must_be_inside_project_store(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec = spec.model_copy(
+        update={"datasheet": spec.datasheet.model_copy(update={"confidential": True})}
+    )
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    outside_store = [
+        finding.field
+        for finding in report.findings
+        if finding.code == "confidential_artifact_outside_store"
+    ]
+    assert outside_store == ["datasheet.path", "datasheet.extraction_path"]
+    assert (tmp_path / ".confidential" / ".gitignore").is_file()
+
+
 def test_centered_count_prefix_is_removed_before_stacked_dimension_values() -> None:
     words = [
         PdfWord(text="0.30", x0=10, top=0, x1=20, bottom=5),

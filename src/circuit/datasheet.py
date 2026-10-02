@@ -17,13 +17,18 @@ import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from statistics import median
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pdfplumber
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
+from .confidential import confidential_root_for, ensure_confidential_store
 from .raster import RasterizeError, rasterize
+
+if TYPE_CHECKING:
+    from .humanrequest import HumanRequest
+    from .partspec import SpecFinding
 
 DRAWING_VECTOR_THRESHOLD = 500
 _DRAWING_TEXT_MARKERS = (
@@ -722,3 +727,139 @@ def page_tables(
         return tables
     except (OSError, json.JSONDecodeError, AttributeError, TypeError):
         return []
+
+
+def check_received(pdf: Path, request: HumanRequest) -> list[SpecFinding]:
+    """Check both text extraction lanes against a datasheet acquisition request."""
+    if request.kind != "datasheet_acquisition":
+        raise DatasheetError("received datasheet checks require a datasheet acquisition request")
+
+    request_data = cast(dict[str, object], request.model_dump(mode="python"))
+    subject = cast(dict[str, object], request_data["subject"])
+    details = cast(dict[str, object], request_data["details"])
+    mpn = str(subject["mpn"]).casefold()
+    revision = details.get("requested_revision")
+    required_sections = cast(list[str], details["required_sections"])
+    private_root = confidential_root_for(pdf)
+    if private_root is None:
+        with tempfile.TemporaryDirectory(prefix="circuit-received-") as temporary:
+            return _check_received_in_dir(
+                pdf,
+                Path(temporary),
+                mpn=mpn,
+                revision=revision if isinstance(revision, str) else None,
+                required_sections=required_sections,
+            )
+    ensure_confidential_store(private_root.parent)
+    check_root = private_root / "received-checks"
+    check_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="circuit-received-", dir=check_root) as temporary:
+        return _check_received_in_dir(
+            pdf,
+            Path(temporary),
+            mpn=mpn,
+            revision=revision if isinstance(revision, str) else None,
+            required_sections=required_sections,
+        )
+
+
+def _check_received_in_dir(
+    pdf: Path,
+    output_dir: Path,
+    *,
+    mpn: str,
+    revision: str | None,
+    required_sections: list[str],
+) -> list[SpecFinding]:
+    from .partspec import SpecFinding
+
+    try:
+        extraction = extract_datasheet(pdf, output_dir)
+    except DatasheetError as exc:
+        return [
+            SpecFinding(
+                code="datasheet_extraction_failed",
+                severity="error",
+                field="datasheet",
+                message=str(exc),
+            )
+        ]
+    lane_text: dict[str, str] = {}
+    for lane in ("poppler", "pdfplumber"):
+        lane_text[lane] = " ".join(
+            word.text
+            for page in extraction.pages
+            for word in page_words(extraction, output_dir, page.page, lanes=(lane,))
+        ).casefold()
+
+    findings: list[SpecFinding] = []
+    ordering_terms = ("ordering information", "orderable", "ordering")
+    missing_mpn_lanes = [
+        lane
+        for lane, text in lane_text.items()
+        if mpn not in text or not any(term in text for term in ordering_terms)
+    ]
+    if missing_mpn_lanes:
+        findings.append(
+            SpecFinding(
+                code="datasheet_mpn_mismatch",
+                severity="error",
+                field="datasheet.mpn",
+                message=(
+                    "target MPN or ordering information is missing from extraction lanes: "
+                    + ", ".join(missing_mpn_lanes)
+                ),
+            )
+        )
+    if revision is not None:
+        missing_revision_lanes = [
+            lane for lane, text in lane_text.items() if revision.casefold() not in text
+        ]
+        if missing_revision_lanes:
+            findings.append(
+                SpecFinding(
+                    code="datasheet_revision_mismatch",
+                    severity="error",
+                    field="datasheet.revision",
+                    message=(
+                        f"requested revision {revision!r} is missing from extraction lanes: "
+                        + ", ".join(missing_revision_lanes)
+                    ),
+                )
+            )
+    section_keywords = {
+        "package_drawing": (
+            "package outline",
+            "package drawing",
+            "package dimensions",
+            "mechanical data",
+        ),
+        "pinout": ("pinout", "pin configuration", "top view", "bottom view"),
+        "pin_table": ("pin description", "pin functions", "pin name", "pin number"),
+        "land_pattern": (
+            "land pattern",
+            "recommended land pattern",
+            "pcb layout",
+        ),
+        "orderable_table": ("ordering information", "orderable", "ordering"),
+    }
+    for section in required_sections:
+        keywords = section_keywords[section]
+        missing_lanes = [
+            lane
+            for lane, text in lane_text.items()
+            if not any(keyword in text for keyword in keywords)
+        ]
+        if missing_lanes:
+            findings.append(
+                SpecFinding(
+                    code=f"datasheet_section_missing:{section}",
+                    severity="error",
+                    field=f"datasheet.sections.{section}",
+                    message=(
+                        "required section is missing from extraction lanes: "
+                        + ", ".join(missing_lanes)
+                    ),
+                )
+            )
+    return findings
