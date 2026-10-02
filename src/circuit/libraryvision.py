@@ -39,8 +39,9 @@ def _dimension_region(
     by_page: dict[int, list[tuple[float, float, float, float]]] = {}
     for dimension in dimensions:
         bbox = dimension.reading.bbox
-        if bbox is not None:
-            by_page.setdefault(dimension.reading.page, []).append(bbox)
+        page = dimension.reading.page
+        if bbox is not None and page is not None and dimension.reading.alternative_evidence is None:
+            by_page.setdefault(page, []).append(bbox)
     if not by_page:
         raise ValueError("datasheet comparison region has no cited dimension bounds")
     page = max(by_page, key=lambda number: (len(by_page[number]), -number))
@@ -54,11 +55,13 @@ def _comparison_region(
     if kind == "compare_symbol":
         if spec.pinout is None:
             raise ValueError("PartSpec has no pinout drawing for symbol comparison")
+        if spec.pinout.view_reading.alternative_evidence is not None:
+            raise ValueError("pinout comparison requires a datasheet-backed view reading")
         return spec.pinout.page, spec.pinout.bbox
     if kind == "compare_model":
         reading = spec.package.pin1_reading
         bbox = reading.bbox
-        if bbox is None:
+        if bbox is None or reading.page is None or reading.alternative_evidence is not None:
             raise ValueError("package pin-1 drawing region is missing")
         x0, y0, x1, y1 = bbox
         margin = 36.0
@@ -70,7 +73,7 @@ def _comparison_region(
         dimensions.append(spec.package.pitch)
     page, dimension_bbox = _dimension_region(dimensions)
     pin1 = spec.package.pin1_reading
-    if pin1.page == page and pin1.bbox is not None:
+    if pin1.page == page and pin1.bbox is not None and pin1.alternative_evidence is None:
         return page, _union([dimension_bbox, pin1.bbox])
     return page, dimension_bbox
 

@@ -85,6 +85,10 @@ EXPECTED_OPERATORS = {
     "model_removed_pin1_marker",
 }
 EXPECTED_INTEGRITY_CODES = {
+    "alternative_evidence_missing",
+    "alternative_evidence_scope_exceeded",
+    "alternative_evidence_stale",
+    "alternative_evidence_used",
     "authoring_commit_unobserved",
     "authoring_lane_input_mismatch",
     "authoring_consensus_violated",
@@ -112,6 +116,9 @@ EXPECTED_INTEGRITY_CODES = {
     "part_spec_unchecked",
     "provenance_missing",
     "provenance_sha_mismatch",
+    "substitute_permission_missing",
+    "substitute_permission_stale",
+    "substitute_scope_exceeded",
     "vision_compare_missing",
     "vision_compare_stale",
     "vision_record_mismatch",

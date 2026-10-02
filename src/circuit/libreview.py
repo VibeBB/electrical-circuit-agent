@@ -628,6 +628,43 @@ def _readings(spec: PartSpec) -> list[tuple[str, Reading, Dimension | None]]:
     return values
 
 
+def _alternative_evidence_review_data(
+    spec: PartSpec,
+    project_root: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    requests: dict[str, dict[str, Any]] = {}
+    unknown_fields: set[str] = set()
+    for field, reading, _ in _readings(spec):
+        request_id = reading.alternative_evidence
+        if request_id is None:
+            continue
+        if request_id in requests:
+            requests[request_id]["fields"].append(field)
+            continue
+        request_path = humanrequest.find_request_path(project_root, request_id)
+        if not request_path.is_file():
+            continue
+        try:
+            request = humanrequest.load_request(request_path)
+        except humanrequest.HumanRequestError:
+            continue
+        if not isinstance(request.details, humanrequest.AlternativeEvidenceDetails):
+            continue
+        details = request.details
+        requests[request_id] = {
+            "request_id": request_id,
+            "evidence_kind": details.evidence_kind,
+            "fields": [],
+            "files": [item.model_dump(mode="json") for item in details.files],
+            "covers": details.covers,
+            "unknown_fields": details.unknown_fields,
+            "measurement_method": details.measurement_method,
+        }
+        unknown_fields.update(details.unknown_fields)
+        requests[request_id]["fields"].append(field)
+    return list(requests.values()), sorted(unknown_fields)
+
+
 def _authoring_question_region(
     spec: PartSpec,
     pointer: str,
@@ -645,6 +682,15 @@ def _authoring_question_region(
         if isinstance(dimension, Dimension):
             reading = dimension.reading
             field = f"package.{package_field}"
+        elif (
+            package_field == "exposed_pad"
+            and len(tokens) > 2
+            and spec.package.exposed_pad is not None
+        ):
+            dimension = getattr(spec.package.exposed_pad, tokens[2], None)
+            if isinstance(dimension, Dimension):
+                reading = dimension.reading
+                field = f"package.exposed_pad.{tokens[2]}"
         elif package_field in {
             "drawing_id",
             "drawing_revision",
@@ -661,22 +707,30 @@ def _authoring_question_region(
                 reading = dimension.reading
                 field = f"land_pattern.dimensions.{tokens[2]}"
     elif tokens[:1] == ["pins"] and len(tokens) > 1:
-        pin = next((item for item in spec.pins if item.number == tokens[1]), None)
-        if pin is not None:
+        try:
+            index = int(tokens[1])
+        except ValueError:
+            index = -1
+        if 0 <= index < len(spec.pins):
+            pin = spec.pins[index]
             reading = pin.reading
             field = f"pins.{pin.number}.reading"
     elif tokens[:1] == ["orderable"] and len(tokens) > 1:
-        variant = next((item for item in spec.orderable if item.mpn == tokens[1]), None)
-        if variant is not None:
-            index = spec.orderable.index(variant)
+        try:
+            index = int(tokens[1])
+        except ValueError:
+            index = -1
+        if 0 <= index < len(spec.orderable):
+            variant = spec.orderable[index]
             reading = variant.reading
             field = f"orderable.{index}.row"
     elif tokens[:1] == ["pinout"] and spec.pinout is not None:
         reading = spec.pinout.view_reading
         field = "pinout"
     if reading is not None:
-        page = reading.page
-        return page, reading.bbox, field
+        if reading.alternative_evidence is not None or reading.page is None:
+            return page, None, field
+        return reading.page, reading.bbox, field
     return page, None, field
 
 
@@ -690,26 +744,28 @@ def blind_questions(
         raise ValueError("packet_id must be 16 lowercase hexadecimal characters")
     pin_reading = spec.package.pin1_reading
     pin_table_page = spec.pin_table.page
+    pin_page = pin_reading.page or pin_table_page
+    pin_bbox = pin_reading.bbox if pin_reading.alternative_evidence is None else None
     questions = [
         BlindQuestion(
             question_id="drawing_id",
             prompt="What drawing identifier is printed on this package drawing?",
-            page=pin_reading.page,
-            bbox=pin_reading.bbox,
+            page=pin_page,
+            bbox=pin_bbox,
             expected=spec.package.drawing_id,
         ),
         BlindQuestion(
             question_id="drawing_view",
             prompt="Is this package drawing a top or bottom view?",
-            page=pin_reading.page,
-            bbox=pin_reading.bbox,
+            page=pin_page,
+            bbox=pin_bbox,
             expected=spec.package.drawing_view,
         ),
         BlindQuestion(
             question_id="pin1_corner",
             prompt="Which corner is marked as pin 1 in the top view?",
-            page=pin_reading.page,
-            bbox=pin_reading.bbox,
+            page=pin_page,
+            bbox=pin_bbox,
             expected=spec.package.pin1_corner,
         ),
         BlindQuestion(
@@ -723,19 +779,20 @@ def blind_questions(
             question_id="exposed_pad",
             prompt="Does the package drawing or pin table show an exposed pad?",
             page=(
-                spec.package.exposed_pad.length.reading.page
+                spec.package.exposed_pad.length.reading.page or pin_table_page
                 if spec.package.exposed_pad is not None
                 else pin_table_page
             ),
             bbox=(
                 spec.package.exposed_pad.length.reading.bbox
                 if spec.package.exposed_pad is not None
+                and spec.package.exposed_pad.length.reading.alternative_evidence is None
                 else None
             ),
             expected="yes" if spec.package.exposed_pad is not None else "no",
         ),
     ]
-    if spec.pinout is not None:
+    if spec.pinout is not None and spec.pinout.view_reading.alternative_evidence is None:
         questions.append(
             BlindQuestion(
                 question_id="pinout.view",
@@ -751,7 +808,10 @@ def blind_questions(
     pins = [
         pin
         for pin in spec.pins
-        if pin.number != exposed_number and pin.number in _pin_number_tokens(pin.reading.vision)
+        if pin.number != exposed_number
+        and pin.reading.alternative_evidence is None
+        and pin.reading.vision is not None
+        and pin.number in _pin_number_tokens(pin.reading.vision)
     ]
 
     def number_key(value: str) -> tuple[int, int | str]:
@@ -770,6 +830,8 @@ def blind_questions(
     selected_numbers.extend(remaining[:2])
     for number in selected_numbers:
         pin = next(pin for pin in pins if pin.number == number)
+        if pin.reading.page is None:
+            continue
         questions.append(
             BlindQuestion(
                 question_id=f"pin.{number}",
@@ -1889,6 +1951,8 @@ def _cited_bboxes(
 ) -> list[tuple[str, int, tuple[float, float, float, float]]]:
     results: list[tuple[str, int, tuple[float, float, float, float]]] = []
     for field, reading, _ in _readings(spec):
+        if reading.page is None or reading.alternative_evidence is not None:
+            continue
         bbox = reading.bbox
         if bbox is None and reading.cells:
             cell_boxes: list[tuple[float, float, float, float]] = []
@@ -1902,6 +1966,8 @@ def _cited_bboxes(
         if bbox is not None:
             results.append((field, reading.page, bbox))
     for index, variant in enumerate(spec.orderable):
+        if variant.reading.page is None or variant.reading.alternative_evidence is not None:
+            continue
         table = _table_record(
             extraction,
             extraction_dir,
@@ -1924,7 +1990,7 @@ def _cited_bboxes(
     table_bbox = _numeric_bbox(table.get("bbox")) if table is not None else None
     if table_bbox is not None:
         results.append(("pin_table", spec.pin_table.page, table_bbox))
-    if spec.pinout is not None:
+    if spec.pinout is not None and spec.pinout.view_reading.alternative_evidence is None:
         results.append(("pinout", spec.pinout.page, spec.pinout.bbox))
     return results
 
@@ -1966,6 +2032,8 @@ def _drawing_view_crops(
     page_by_number = {page.page: page for page in extraction.pages}
     requests: list[tuple[str, int, list[tuple[float, float, float, float]]]] = []
     package_page = spec.package.pin1_reading.page
+    if package_page is None or spec.package.pin1_reading.alternative_evidence is not None:
+        return {}
     package_boxes = [
         crop.bbox
         for crop in crops.values()
@@ -3249,6 +3317,35 @@ def _review_html(review: dict[str, Any]) -> str:
         if review.get("confidential") is True
         else ""
     )
+    substitution_value = review.get("substitution")
+    substitution_data = (
+        cast(dict[str, Any], substitution_value) if isinstance(substitution_value, dict) else None
+    )
+    substitution_html = (
+        "<section><h2>Substitution authorization</h2><p>Target: <strong>"
+        + escape(substitution_data.get("target_mpn", "—"))
+        + "</strong>; substitute: <strong>"
+        + escape(substitution_data.get("substitute_mpn", "—"))
+        + "</strong></p><p>Granted scope: "
+        + escape(", ".join(string_items(substitution_data.get("granted_scope"))) or "None")
+        + "</p><p>Unverifiable fields: "
+        + escape(", ".join(string_items(substitution_data.get("unverifiable_fields"))) or "None")
+        + "</p></section>"
+        if substitution_data is not None
+        else ""
+    )
+    alternative_fields = string_items(review.get("alternative_evidence_fields"))
+    alternative_unknowns = string_items(review.get("alternative_evidence_unknown_fields"))
+    alternative_review_html = (
+        "<section><h2>Alternative evidence and unknowns</h2><p>Human-review-backed fields "
+        "(not deterministic support):</p><ul>"
+        + "".join(f"<li>{escape(item)}</li>" for item in alternative_fields)
+        + ("" if alternative_fields else "<li>None.</li>")
+        + "</ul><p>Unknown fields:</p><ul>"
+        + "".join(f"<li>{escape(item)}</li>" for item in alternative_unknowns)
+        + ("" if alternative_unknowns else "<li>None.</li>")
+        + "</ul></section>"
+    )
     return (
         '<!doctype html><html><head><meta charset="utf-8"><title>Library review</title>'
         "<style>body{font:15px sans-serif;max-width:1200px;margin:2rem auto}"
@@ -3260,6 +3357,8 @@ def _review_html(review: dict[str, Any]) -> str:
         ".confidential-banner{padding:.6rem;background:#f8d7da;color:#842029}</style>"
         "</head><body>"
         + confidential_banner
+        + substitution_html
+        + alternative_review_html
         + f"<h1>Review packet {html.escape(review['packet_id'])}</h1>"
         "<h2>Contradictions and deterministic findings</h2><ul>"
         + findings_html
@@ -3424,7 +3523,12 @@ def build_review_packet(
     except (OSError, ValueError, datasheet.DatasheetError):
         dpi = 300
     cited_pages = sorted(
-        {reading.page for _, reading, _ in _readings(spec)} | {spec.pin_table.page}
+        {
+            reading.page
+            for _, reading, _ in _readings(spec)
+            if reading.page is not None and reading.alternative_evidence is None
+        }
+        | {spec.pin_table.page}
     )
 
     model_hashes: list[str] = []
@@ -3990,6 +4094,41 @@ def build_review_packet(
 
     severity_order = {"error": 0, "warning": 1, "info": 2}
     findings.sort(key=lambda item: (severity_order[item.severity], item.code, item.field))
+    alternative_requests, alternative_unknown_fields = _alternative_evidence_review_data(
+        spec,
+        project_root,
+    )
+    alternative_evidence_fields = sorted(
+        {field for field, reading, _ in _readings(spec) if reading.alternative_evidence is not None}
+    )
+    for unknown_field in reversed(alternative_unknown_fields):
+        unknowns.insert(0, f"alternative_evidence_unknown:{unknown_field}")
+    substitution_display = (
+        {
+            "target_mpn": (
+                part_check.substitute_permit.target_mpn
+                if part_check.substitute_permit is not None
+                else spec.mpn
+            ),
+            "substitute_mpn": (
+                part_check.substitute_permit.substitute_mpn
+                if part_check.substitute_permit is not None
+                else spec.substitution.substitute_mpn
+            ),
+            "granted_scope": (
+                part_check.substitute_permit.granted_scope
+                if part_check.substitute_permit is not None
+                else []
+            ),
+            "unverifiable_fields": (
+                part_check.substitute_permit.unverifiable_fields
+                if part_check.substitute_permit is not None
+                else []
+            ),
+        }
+        if spec.substitution is not None
+        else None
+    )
     approvable = (
         part_check.verdict == "pass"
         and verification is not None
@@ -4012,6 +4151,10 @@ def build_review_packet(
         "artifact_kind": "circuit_library_review_packet",
         "packet_id": current_id,
         "confidential": spec.datasheet.confidential,
+        "substitution": substitution_display,
+        "alternative_evidence": alternative_requests,
+        "alternative_evidence_fields": alternative_evidence_fields,
+        "alternative_evidence_unknown_fields": alternative_unknown_fields,
         "inputs": {
             **input_hashes,
             "spec_path": str(spec_path.resolve()),

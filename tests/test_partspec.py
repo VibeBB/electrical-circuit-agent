@@ -5,12 +5,13 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import pytest
 from PIL import Image, ImageDraw
 from pydantic import ValidationError
 
+from circuit import humanrequest
 from circuit import partspec as partspec_module
 from circuit.advisory import build_review_record
 from circuit.datasheet import DatasheetExtraction, LaneResult, PageExtraction, PdfWord
@@ -28,6 +29,7 @@ from circuit.partspec import (
     PinTable,
     Reading,
     SpecFinding,
+    SubstitutionRef,
     _vision_transcription_matches,  # pyright: ignore[reportPrivateUsage]
     check_part_spec,
     load_part_spec,
@@ -311,6 +313,82 @@ def _save_spec(spec: PartSpec, path: Path) -> None:
     path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
 
 
+def _human_request(
+    *,
+    kind: str,
+    mpn: str,
+    details: dict[str, Any],
+) -> humanrequest.HumanRequest:
+    return humanrequest.build_request(
+        kind=kind,
+        subject={"manufacturer": "Example", "mpn": mpn},
+        reason="A human decision is needed to bind this source evidence.",
+        evidence=[
+            {
+                "kind": "note",
+                "ref": "verification",
+                "summary": "The request is tied to the current PartSpec evidence.",
+            }
+        ],
+        known=["The PartSpec and request identities are hash-bound."],
+        unknown=["The underlying source claim requires independent human review."],
+        agent_assessment=_IMPRESSION,
+        recommendation="Grant the reviewed scope.",
+        recommendation_rationale="Only the cited evidence and requested fields are in scope.",
+        alternatives=[
+            {
+                "option": "Grant the reviewed scope.",
+                "risks": ["An incorrect source claim could be accepted."],
+            },
+            {
+                "option": "Deny the request.",
+                "risks": ["The part remains blocked from the library."],
+            },
+        ],
+        recommended=0,
+        details=details,
+    )
+
+
+def _record_human_response(
+    request: humanrequest.HumanRequest,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    response_fields: list[str],
+) -> None:
+    request_path, _ = humanrequest.write_request(request, project_root)
+    events_root = project_root / "events"
+    events_root.mkdir(exist_ok=True)
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(events_root))
+    content = "\n".join(
+        [
+            f"CIRCUIT-HUMAN-RESPONSE {request.request_id}",
+            "decision: grant",
+            "reviewer: Test Reviewer",
+            *response_fields,
+        ]
+    )
+    raw = json.dumps({"source": "user", "message": {"content": content}}).encode("utf-8")
+    event_path = events_root / f"event-{request.request_id}.json"
+    event_path.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    response_dir = request_path.parent / "responses"
+    response_dir.mkdir(exist_ok=True)
+    (response_dir / f"{request.request_id}.{digest[:12]}.json").write_text(
+        json.dumps(
+            {
+                "artifact_kind": "circuit_human_response_pointer",
+                "request_id": request.request_id,
+                "request_sha256": request.request_sha256,
+                "event_path": str(event_path),
+                "event_sha256": digest,
+                "recorded_at": "2026-01-01T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _vision_answer_record_path(spec_dir: Path, reference: str) -> tuple[Path, str]:
     batch_ref, read_id = reference.split("#", maxsplit=1)
     return spec_dir / Path(batch_ref).parent / "answers.json", read_id
@@ -434,6 +512,299 @@ _DIMENSION_EXAMPLES: list[
     ("2.90\u20133.10", (2.9, None, 3.1, False, None, [])),
     ("R0.05", (None, 0.05, None, False, None, ["R"])),
 ]
+
+
+def test_alternative_evidence_requires_a_current_grant_and_file_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    evidence_path = tmp_path / "measurement.csv"
+    evidence_path.write_text("length_mm,3.0\n", encoding="utf-8")
+    evidence_hash = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    request = _human_request(
+        kind="alternative_evidence",
+        mpn=spec.mpn,
+        details={
+            "kind": "alternative_evidence",
+            "evidence_kind": "measurement",
+            "files": [{"path": evidence_path.name, "sha256": evidence_hash}],
+            "covers": ["/package/body_length"],
+            "unknown_fields": ["drawing revision"],
+            "measurement_method": "Three caliper measurements averaged.",
+        },
+    )
+    _record_human_response(
+        request,
+        tmp_path,
+        monkeypatch,
+        ["covers: /package/body_length"],
+    )
+    spec.package.body_length.reading = Reading(alternative_evidence=request.request_id)
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert any(
+        finding.code == "alternative_evidence_used" and finding.field == "package.body_length"
+        for finding in report.findings
+    )
+    assert not any(
+        finding.code == "alternative_evidence_missing" and finding.field == "package.body_length"
+        for finding in report.findings
+    )
+
+    evidence_path.write_text("length_mm,4.0\n", encoding="utf-8")
+    stale = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert any(
+        finding.code == "alternative_evidence_stale" and finding.field == "package.body_length"
+        for finding in stale.findings
+    )
+
+
+def test_alternative_evidence_cannot_exceed_granted_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    evidence_path = tmp_path / "measurement.csv"
+    evidence_path.write_text("length_mm,3.0\n", encoding="utf-8")
+    evidence_hash = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    request = _human_request(
+        kind="alternative_evidence",
+        mpn=spec.mpn,
+        details={
+            "kind": "alternative_evidence",
+            "evidence_kind": "measurement",
+            "files": [{"path": evidence_path.name, "sha256": evidence_hash}],
+            "covers": ["/package/body_width"],
+            "unknown_fields": ["body length"],
+            "measurement_method": "Three caliper measurements averaged.",
+        },
+    )
+    _record_human_response(
+        request,
+        tmp_path,
+        monkeypatch,
+        ["covers: /package/body_width"],
+    )
+    spec.package.body_length.reading = Reading(alternative_evidence=request.request_id)
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert any(
+        finding.code == "alternative_evidence_scope_exceeded"
+        and finding.field == "package.body_length"
+        for finding in report.findings
+    )
+
+
+def test_invalid_alternative_pin_does_not_fall_back_to_datasheet_table(
+    tmp_path: Path,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    spec.pins[0].name = "ALTERNATIVE NAME"
+    spec.pins[0].reading = Reading(alternative_evidence="a" * 16)
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    codes = {finding.code for finding in report.findings}
+    assert "alternative_evidence_missing" in codes
+    assert "pin_table_bijection" not in codes
+
+
+def test_photo_alternative_evidence_requires_a_vision_impression(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    photo_path = tmp_path / "package-photo.jpg"
+    photo_path.write_bytes(b"synthetic photo evidence")
+    photo_hash = hashlib.sha256(photo_path.read_bytes()).hexdigest()
+    request = _human_request(
+        kind="alternative_evidence",
+        mpn=spec.mpn,
+        details={
+            "kind": "alternative_evidence",
+            "evidence_kind": "photo",
+            "files": [{"path": photo_path.name, "sha256": photo_hash}],
+            "covers": ["/package/body_length"],
+            "unknown_fields": ["drawing revision"],
+        },
+    )
+    _record_human_response(
+        request,
+        tmp_path,
+        monkeypatch,
+        ["covers: /package/body_length"],
+    )
+    spec.package.body_length.reading = Reading(alternative_evidence=request.request_id)
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert any(
+        finding.code == "alternative_evidence_missing"
+        and finding.field == "package.body_length"
+        and "vision read" in finding.message
+        for finding in report.findings
+    )
+
+
+def test_substitute_permission_binds_grant_mpn_and_datasheet_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    substitute_mpn = "EXAMPLE-2"
+    granted_scope: list[humanrequest.SubstituteScope] = [
+        "package_dimensions",
+        "pin_table",
+        "orderable",
+    ]
+    request = _human_request(
+        kind="substitute_permission",
+        mpn=spec.mpn,
+        details={
+            "kind": "substitute_permission",
+            "target_mpn": spec.mpn,
+            "substitute_mpn": substitute_mpn,
+            "substitute_datasheet_sha256": spec.datasheet.sha256,
+            "requested_scope": granted_scope,
+            "unverifiable_fields": ["electrical limits"],
+            "similarity_evidence": ["same package and pinout"],
+        },
+    )
+    _record_human_response(
+        request,
+        tmp_path,
+        monkeypatch,
+        [
+            f"scope: {','.join(granted_scope)}",
+            f"target: {spec.mpn}",
+            f"substitute: {substitute_mpn}",
+            f"substitute_sha256: {spec.datasheet.sha256}",
+        ],
+    )
+    spec.substitution = SubstitutionRef(
+        request_id=request.request_id,
+        substitute_mpn=substitute_mpn,
+        scope=granted_scope,
+    )
+    spec.orderable[0].mpn = substitute_mpn
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    codes = {finding.code for finding in report.findings}
+    assert report.substitute_permit is not None
+    assert "substitute_permission_stale" not in codes
+    assert "package_variant_unbound" not in codes
+    assert "orderable_mpn_mismatch" in codes
+
+    spec.substitution.scope = ["model3d"]
+    _save_spec(spec, spec_path)
+    excess_scope = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert any(
+        finding.code == "substitute_scope_exceeded" and finding.field == "substitution.scope"
+        for finding in excess_scope.findings
+    )
+
+    spec.substitution.request_id = "0" * 16
+    _save_spec(spec, spec_path)
+    missing = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "substitute_permission_missing" in {finding.code for finding in missing.findings}
+
+
+def test_substitute_permission_rejects_a_different_substitute_pdf_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    substitute_mpn = "EXAMPLE-2"
+    granted_scope: list[humanrequest.SubstituteScope] = [
+        "package_dimensions",
+        "pin_table",
+        "orderable",
+    ]
+    request = _human_request(
+        kind="substitute_permission",
+        mpn=spec.mpn,
+        details={
+            "kind": "substitute_permission",
+            "target_mpn": spec.mpn,
+            "substitute_mpn": substitute_mpn,
+            "substitute_datasheet_sha256": "b" * 64,
+            "requested_scope": granted_scope,
+            "unverifiable_fields": ["electrical limits"],
+            "similarity_evidence": ["same package and pinout"],
+        },
+    )
+    _record_human_response(
+        request,
+        tmp_path,
+        monkeypatch,
+        [
+            f"scope: {','.join(granted_scope)}",
+            f"target: {spec.mpn}",
+            f"substitute: {substitute_mpn}",
+            f"substitute_sha256: {'b' * 64}",
+        ],
+    )
+    spec.substitution = SubstitutionRef(
+        request_id=request.request_id,
+        substitute_mpn=substitute_mpn,
+        scope=granted_scope,
+    )
+    spec.orderable[0].mpn = substitute_mpn
+    _save_spec(spec, spec_path)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    assert "substitute_permission_stale" in {finding.code for finding in report.findings}
+    assert report.substitute_permit is None
 
 
 @pytest.mark.parametrize(
@@ -848,7 +1219,9 @@ def test_single_lane_and_invisible_mechanical_evidence_fail(
     image_hash = hashlib.sha256((tmp_path / "page-001.png").read_bytes()).hexdigest()
     extraction.pages[0].png_sha256 = image_hash
     derived.pages[0].png_sha256 = image_hash
-    record_path = tmp_path / spec.package.pin1_reading.vision_record
+    record_ref = spec.package.pin1_reading.vision_record
+    assert record_ref is not None
+    record_path = tmp_path / record_ref
     record = build_review_record(
         tmp_path / "page-001.png",
         model="placeholder-vision-model",

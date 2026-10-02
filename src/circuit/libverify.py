@@ -2834,6 +2834,17 @@ def _write_report(report: LibraryVerification, path: Path) -> None:
     path.write_text(content + "\n", encoding="utf-8")
 
 
+def _has_alternative_evidence(value: object) -> bool:
+    if isinstance(value, dict):
+        record = cast(dict[str, object], value)
+        if record.get("alternative_evidence") is not None:
+            return True
+        return any(_has_alternative_evidence(item) for item in record.values())
+    if isinstance(value, list):
+        return any(_has_alternative_evidence(item) for item in cast(list[object], value))
+    return False
+
+
 def verify_library_part(
     spec: PartSpec,
     *,
@@ -2901,7 +2912,10 @@ def verify_library_part(
     check: PartSpecReport | None = None
     check_matches_spec = False
     try:
-        if spec_check_path is not None:
+        requires_fresh_human_evidence = spec.substitution is not None or _has_alternative_evidence(
+            spec.model_dump(mode="python")
+        )
+        if spec_check_path is not None and not requires_fresh_human_evidence:
             check = PartSpecReport.model_validate_json(spec_check_path.read_text(encoding="utf-8"))
         else:
             extraction_path = Path(spec.datasheet.extraction_path)
@@ -2934,6 +2948,25 @@ def verify_library_part(
             "part_spec",
             check_detail or "PartSpec check is missing, failed, or stale",
         )
+    if spec.substitution is not None and check is not None and check.substitute_permit is not None:
+        required_scopes = {"land_pattern"}
+        if model_required:
+            required_scopes.add("model3d")
+        alternative_land_pattern = any(
+            item.code == "alternative_evidence_used" and item.field.startswith("land_pattern.")
+            for item in check.findings
+        )
+        for scope in sorted(required_scopes - set(check.substitute_permit.granted_scope)):
+            if scope == "land_pattern" and alternative_land_pattern:
+                continue
+            _finding(
+                findings,
+                "substitute_scope_exceeded",
+                "error",
+                f"substitution.{scope}",
+                f"{scope} is outside the substitute permission and lacks granted "
+                "alternative evidence",
+            )
 
     _check_authoring_consensus(
         spec,

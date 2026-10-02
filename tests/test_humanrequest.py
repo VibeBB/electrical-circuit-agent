@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from circuit import humanrequest
 from circuit.humanrequest import (
     HumanRequestError,
     build_request,
@@ -55,6 +56,127 @@ def _request_fields() -> dict[str, Any]:
         "recommended": 0,
         "details": {"kind": "library_review", "packet_id": "a" * 16},
     }
+
+
+def _decision_request(kind: str, details: dict[str, Any]) -> humanrequest.HumanRequest:
+    fields = _request_fields()
+    fields.update(
+        kind=kind,
+        unknown=["A human decision is needed to establish this evidence."],
+        details=details,
+    )
+    return build_request(**fields)
+
+
+def _grant_response(
+    request: humanrequest.HumanRequest,
+    fields: list[str],
+) -> humanrequest.HumanResponse:
+    content = "\n".join(
+        [
+            f"CIRCUIT-HUMAN-RESPONSE {request.request_id}",
+            "decision: grant",
+            "reviewer: Test Reviewer",
+            *fields,
+        ]
+    )
+    return humanrequest._response_from_event(  # pyright: ignore[reportPrivateUsage]
+        request,
+        Path("event.json"),
+        "a" * 64,
+        content,
+        request.request_sha256,
+        None,
+    )
+
+
+def test_substitute_grant_echoes_and_scope_are_bound_to_request() -> None:
+    request = _decision_request(
+        "substitute_permission",
+        {
+            "kind": "substitute_permission",
+            "target_mpn": "TEST-1",
+            "substitute_mpn": "TEST-2",
+            "target_source_sha256": "a" * 64,
+            "substitute_datasheet_sha256": "b" * 64,
+            "requested_scope": ["package_dimensions", "pinout"],
+            "unverifiable_fields": ["package.height"],
+            "similarity_evidence": ["same package drawing and pinout"],
+        },
+    )
+    valid_fields = [
+        "scope: package_dimensions",
+        "target: TEST-1",
+        "substitute: TEST-2",
+        f"substitute_sha256: {'b' * 64}",
+    ]
+    assert _grant_response(request, valid_fields).valid
+
+    for field, value in (
+        ("target", "OTHER"),
+        ("substitute", "OTHER"),
+        ("substitute_sha256", "c" * 64),
+        ("scope", "orderable"),
+    ):
+        altered = [
+            f"{name}: {value if name == field else original}"
+            for item in valid_fields
+            for name, original in [item.split(": ", maxsplit=1)]
+        ]
+        response = _grant_response(request, altered)
+        assert not response.valid
+
+
+def test_alternative_evidence_grant_is_limited_to_requested_pointers() -> None:
+    request = _decision_request(
+        "alternative_evidence",
+        {
+            "kind": "alternative_evidence",
+            "evidence_kind": "measurement",
+            "files": [{"path": "measurement.csv", "sha256": "b" * 64}],
+            "covers": ["/package/body_length", "/package/body_width"],
+            "unknown_fields": ["body taper"],
+            "measurement_method": "caliper measurement with three readings",
+        },
+    )
+    valid = _grant_response(request, ["covers: /package/body_length"])
+    assert valid.valid
+    excess = _grant_response(request, ["covers: /package/height"])
+    assert not excess.valid
+    assert any("exceeds the requested covers" in reason for reason in excess.reasons)
+    duplicate = _grant_response(
+        request,
+        ["covers: /package/body_length,/package/body_length"],
+    )
+    assert not duplicate.valid
+
+    with pytest.raises(ValidationError, match="JSON pointers"):
+        _decision_request(
+            "alternative_evidence",
+            {
+                "kind": "alternative_evidence",
+                "evidence_kind": "measurement",
+                "files": [{"path": "measurement.csv", "sha256": "b" * 64}],
+                "covers": ["/package/body~2length"],
+                "unknown_fields": [],
+            },
+        )
+
+
+def test_substitute_request_scope_must_be_unique() -> None:
+    with pytest.raises(ValidationError, match="requested substitute scope entries"):
+        _decision_request(
+            "substitute_permission",
+            {
+                "kind": "substitute_permission",
+                "target_mpn": "TEST-1",
+                "substitute_mpn": "TEST-2",
+                "substitute_datasheet_sha256": "b" * 64,
+                "requested_scope": ["package_dimensions", "package_dimensions"],
+                "unverifiable_fields": [],
+                "similarity_evidence": ["same package"],
+            },
+        )
 
 
 @pytest.mark.parametrize(
