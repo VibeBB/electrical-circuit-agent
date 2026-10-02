@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from itertools import pairwise
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -446,14 +446,19 @@ def _prepare_spec(
 def _copy_spec_evidence(spec: PartSpec, source_dir: Path, target_dir: Path) -> None:
     def visit(value: object, key: str | None = None) -> None:
         if isinstance(value, dict):
-            for child_key, child in value.items():
+            for child_key, child in cast(dict[object, object], value).items():
                 visit(child, child_key if isinstance(child_key, str) else None)
             return
         if isinstance(value, list):
-            for child in value:
+            for child in cast(list[object], value):
                 visit(child, key)
             return
-        if key not in {"vision_record", "vision_read", "labels_vision_read", "orderable_vision_read"}:
+        if key not in {
+            "vision_record",
+            "vision_read",
+            "labels_vision_read",
+            "orderable_vision_read",
+        }:
             return
         if not isinstance(value, str):
             return
@@ -477,7 +482,7 @@ def _copy_spec_evidence(spec: PartSpec, source_dir: Path, target_dir: Path) -> N
                 return
             if not isinstance(batch_payload, dict):
                 return
-            state_reference = batch_payload.get("control_state_path")
+            state_reference = cast(dict[str, object], batch_payload).get("control_state_path")
             if not isinstance(state_reference, str):
                 return
             state_path = Path(state_reference)
@@ -1256,8 +1261,7 @@ def _part_spec_column_shift(
         if (dimension := getattr(artifacts.spec.package, field, None)) is not None
         and dimension.nom is not None
         and any(
-            value is not None and value != dimension.nom
-            for value in (dimension.min, dimension.max)
+            value is not None and value != dimension.nom for value in (dimension.min, dimension.max)
         )
     ]
     if not available:

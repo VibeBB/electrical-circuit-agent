@@ -2116,11 +2116,15 @@ def _dimension_cell_checks(
             )
             continue
         cell_bbox = _table_cell_bbox(table, cell_ref.row, cell_ref.col)
-        if cell_bbox is None or reading.bbox is None or not (
-            reading.bbox[0] <= cell_bbox[0]
-            and reading.bbox[1] <= cell_bbox[1]
-            and reading.bbox[2] >= cell_bbox[2]
-            and reading.bbox[3] >= cell_bbox[3]
+        if (
+            cell_bbox is None
+            or reading.bbox is None
+            or not (
+                reading.bbox[0] <= cell_bbox[0]
+                and reading.bbox[1] <= cell_bbox[1]
+                and reading.bbox[2] >= cell_bbox[2]
+                and reading.bbox[3] >= cell_bbox[3]
+            )
         ):
             findings.append(
                 SpecFinding(

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import json
 import re
 from collections.abc import Callable
 from dataclasses import replace
@@ -41,8 +40,8 @@ from circuit.partspec import (
     check_part_spec,
 )
 from pinout_fixtures import QUAD16_NAMES, pinout_drawing, quad16_fixture
-from test_libverify import _vqfn_spec, _write_case  # pyright: ignore[reportPrivateUsage]
 from test_datasheet import _pdf  # pyright: ignore[reportPrivateUsage]
+from test_libverify import _vqfn_spec, _write_case  # pyright: ignore[reportPrivateUsage]
 from test_visionread import _synthetic_pdf  # pyright: ignore[reportPrivateUsage]
 from vision_fixtures import FIXTURE_IMPRESSION, attach_vision_reads
 
@@ -335,12 +334,7 @@ def _table_commands(
         ),
     ]
     for row_index, row in enumerate(rows):
-        baseline = (
-            top
-            - row_height * row_index
-            - row_height // 2
-            - max(1, (font_size - 2) // 2)
-        )
+        baseline = top - row_height * row_index - row_height // 2 - max(1, (font_size - 2) // 2)
         for column, cell in enumerate(row):
             if cell:
                 commands.append(
@@ -405,9 +399,7 @@ def _synthetic_datasheet_pdf(
         label_x = pinout_center[0] + x * scale
         label_top = pinout_center[1] + y * scale
         name_x, name_y = (
-            (x + (-6 if x < 0 else 6), y)
-            if abs(x) >= abs(y)
-            else (x, y - 6 if y < 0 else y + 6)
+            (x + (-6 if x < 0 else 6), y) if abs(x) >= abs(y) else (x, y - 6 if y < 0 else y + 6)
         )
         name_center_x = pinout_center[0] + name_x * scale
         name_top = pinout_center[1] + name_y * scale
@@ -418,8 +410,7 @@ def _synthetic_datasheet_pdf(
             text_x = center_x - len(text) * 1.5
             baseline = 1300 - screen_top - 4
             commands.append(
-                f"BT /F1 6 Tf {text_x:.1f} {baseline:.1f} Td "
-                f"({_pdf_escape(text)}) Tj ET"
+                f"BT /F1 6 Tf {text_x:.1f} {baseline:.1f} Td ({_pdf_escape(text)}) Tj ET"
             )
     pdf_path = _pdf(
         tmp_path / "synthetic-datasheet.pdf",
@@ -438,15 +429,9 @@ def _synthetic_datasheet_pdf(
                 return index
         raise AssertionError("synthetic datasheet table was not extracted")
 
-    pin_table_index = table_index(
-        lambda rows: len(rows) > 1 and rows[1][:2] == ["1", "SW"]
-    )
-    dimension_table_index = table_index(
-        lambda rows: any(row and row[0] == "Pitch" for row in rows)
-    )
-    orderable_table_index = table_index(
-        lambda rows: any(spec.mpn in row for row in rows)
-    )
+    pin_table_index = table_index(lambda rows: len(rows) > 1 and rows[1][:2] == ["1", "SW"])
+    dimension_table_index = table_index(lambda rows: any(row and row[0] == "Pitch" for row in rows))
+    orderable_table_index = table_index(lambda rows: any(spec.mpn in row for row in rows))
     dimension_row_indices = {
         str(row[0]): index
         for index, row in enumerate(tables[dimension_table_index])
@@ -474,7 +459,7 @@ def _synthetic_datasheet_pdf(
                     "nom": CellRef(table=dimension_table_index, row=row, col=2),
                     "max": CellRef(table=dimension_table_index, row=row, col=3),
                 },
-                    "vision": f"{minimum} {nominal} {maximum}",
+                "vision": f"{minimum} {nominal} {maximum}",
                 "vision_record": "datasheet-review.advisory.json",
             }
         )
@@ -493,7 +478,7 @@ def _synthetic_datasheet_pdf(
     assert package.lead_length is not None
     assert package.lead_width is not None
     assert package.exposed_pad is not None
-    package_updates = {
+    package_updates: dict[str, object] = {
         "pitch": bind_dimension(package.pitch, "Pitch", 0.495, 0.5, 0.505),
         "body_length": bind_dimension(package.body_length, "Body length", 2.9, 3.0, 3.1),
         "body_width": bind_dimension(package.body_width, "Body width", 2.9, 3.0, 3.1),
@@ -510,9 +495,7 @@ def _synthetic_datasheet_pdf(
     }
     exposed_pad = package.exposed_pad.model_copy(
         update={
-            "length": bind_dimension(
-                package.exposed_pad.length, "EP length", 1.61, 1.68, 1.75
-            ),
+            "length": bind_dimension(package.exposed_pad.length, "EP length", 1.61, 1.68, 1.75),
             "width": bind_dimension(package.exposed_pad.width, "EP width", 1.61, 1.68, 1.75),
         }
     )
@@ -533,9 +516,7 @@ def _synthetic_datasheet_pdf(
         )
         spec = spec.model_copy(
             update={
-                "land_pattern": spec.land_pattern.model_copy(
-                    update={"dimensions": land_dimensions}
-                )
+                "land_pattern": spec.land_pattern.model_copy(update={"dimensions": land_dimensions})
             }
         )
 
@@ -583,9 +564,7 @@ def _synthetic_datasheet_pdf(
             "reading": spec.orderable[0].reading.model_copy(
                 update={
                     "bbox": (265.0, 540.0, 395.0, 580.0),
-                    "vision": (
-                        f"{spec.mpn} {spec.package.drawing_id} {spec.package.pin_count}"
-                    ),
+                    "vision": (f"{spec.mpn} {spec.package.drawing_id} {spec.package.pin_count}"),
                     "vision_record": "datasheet-review.advisory.json",
                 }
             ),
@@ -832,9 +811,7 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
         for outcome in first.outcomes
     )
     assert {
-        outcome.mutation.operator
-        for outcome in first.outcomes
-        if outcome.counting_family_count < 2
+        outcome.mutation.operator for outcome in first.outcomes if outcome.counting_family_count < 2
     } == set(first.single_oracle)
     assert {
         "partspec_min_nom_max_column_shift",
@@ -842,9 +819,7 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
         "partspec_pin1_corner_rotation",
         "partspec_sibling_package_mpn",
     } <= {
-        outcome.mutation.operator
-        for outcome in first.outcomes
-        if "integrity" in outcome.families
+        outcome.mutation.operator for outcome in first.outcomes if "integrity" in outcome.families
     }
 
 

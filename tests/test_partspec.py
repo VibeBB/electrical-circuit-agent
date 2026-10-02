@@ -855,8 +855,7 @@ def test_dimension_reading_bbox_covers_referenced_cells_not_entire_table(
         extraction_path=extraction_path,
     )
     assert not any(
-        finding.code == "cell_value_mismatch"
-        and finding.field == "package.body_length"
+        finding.code == "cell_value_mismatch" and finding.field == "package.body_length"
         for finding in report.findings
     )
 

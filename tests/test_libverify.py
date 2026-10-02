@@ -45,8 +45,8 @@ from circuit.partspec import (
     PinSpec,
     PinTable,
     Reading,
-    part_spec_sha256,
     SpecFinding,
+    part_spec_sha256,
 )
 from circuit.ruleprofile import EffectiveRules, EvidenceRef, load_rules
 from circuit.visionread import VisionBatch, VisionReadItem
@@ -540,21 +540,22 @@ def _write_case(
             lane_dir = run_dir / lane
             lane_dir.mkdir()
             lane_spec_path = lane_dir / "part-spec.json"
-            lane_spec_data = cast(dict[str, Any], spec.model_dump(mode="python"))
+            lane_spec_data = spec.model_dump(mode="python")
 
             def clear_vision_reads(value: Any) -> None:
                 if isinstance(value, dict):
-                    for key, child in value.items():
+                    mapping = cast(dict[str, Any], value)
+                    for key, child in mapping.items():
                         if key in {
                             "vision_read",
                             "labels_vision_read",
                             "orderable_vision_read",
                         }:
-                            value[key] = None
+                            mapping[key] = None
                         else:
                             clear_vision_reads(child)
                 elif isinstance(value, list):
-                    for child in value:
+                    for child in cast(list[Any], value):
                         clear_vision_reads(child)
 
             clear_vision_reads(lane_spec_data)
