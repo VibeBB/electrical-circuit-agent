@@ -136,6 +136,44 @@ def test_export_oracle_checks_volume_terminals_and_both_rotations(
     assert all(run.passed and run.expected_terminal_count == 2 for run in report.runs)
 
 
+def test_export_oracle_uses_model_terminals_not_copper_pad_centers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    footprint_path, model_path = _inputs(tmp_path)
+    footprint_path.write_text(
+        footprint_path.read_text(encoding="utf-8")
+        .replace("(at -1 0)", "(at -1.1 0)")
+        .replace("(at 1 0)", "(at 1.1 0)"),
+        encoding="utf-8",
+    )
+    rotations = iter((0.0, 90.0))
+
+    def run(args: list[str], **_kwargs: object) -> kicad_cli.CompletedRun:
+        output = Path(args[args.index("--output") + 1])
+        rotation = next(rotations)
+        exported = occt.transform(
+            occt.read_step(model_path),
+            translation=(0.0, 0.0, 1.595),
+            rotation_z_deg=rotation,
+        )
+        occt.write_step(exported, output, product_name="KiCad export")
+        return kicad_cli.CompletedRun(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(kicad_cli, "run", run)
+    report = verify_model_export(
+        _spec(),
+        footprint_path,
+        model_reference=str(model_path),
+        model_path=model_path,
+        rules=load_rules("builtin:ipc7351b", tmp_path),
+        out_dir=tmp_path / "oracle",
+    )
+
+    assert report.verdict == "pass"
+    assert all(run.passed for run in report.runs)
+
+
 def test_export_oracle_reports_unavailable_kicad_cli(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

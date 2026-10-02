@@ -11,7 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from . import kicad_cli, occt, sexpr
-from .libitems import FootprintDef, parse_footprint
+from .libitems import parse_footprint
 from .libtestboard import write_model_export_board
 from .model3d import footprint_to_board_xy
 from .partspec import PartSpec
@@ -95,13 +95,16 @@ def _model_load_failure(message: str) -> bool:
 
 
 def _expected_terminal_centers(
-    footprint: FootprintDef,
+    shape: occt.Shape,
     rotation_deg: float,
 ) -> list[tuple[float, float]]:
     return [
-        footprint_to_board_xy(pad.x, pad.y, rotation_deg=rotation_deg)
-        for pad in footprint.pads
-        if pad.type != "np_thru_hole" and any(layer.endswith(".Cu") for layer in pad.layers)
+        footprint_to_board_xy(
+            (region.bbox_xy[0] + region.bbox_xy[2]) / 2,
+            (region.bbox_xy[1] + region.bbox_xy[3]) / 2,
+            rotation_deg=rotation_deg,
+        )
+        for region in occt.slab_regions(shape, 0.0, 0.02)
     ]
 
 
@@ -141,15 +144,17 @@ def verify_model_export(
     rules: EffectiveRules,
     out_dir: Path,
 ) -> ModelExportReport:
-    """Compare KiCad's board STEP export with the referenced model and pads."""
+    """Compare KiCad's board STEP export with the referenced model placement."""
     findings: list[ModelExportFinding] = []
     runs: list[ModelExportRun] = []
     model_sha256: str | None = None
     expected_volume: float | None = None
+    source_shape: occt.Shape | None = None
     if model_path is not None and model_path.is_file():
         model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
         try:
-            source_facts = occt.inspect(occt.read_step(model_path))
+            source_shape = occt.read_step(model_path)
+            source_facts = occt.inspect(source_shape)
             if source_facts.valid and source_facts.units == "mm" and source_facts.solid_count > 0:
                 expected_volume = sum(solid.volume for solid in source_facts.solids)
         except (OSError, ValueError) as error:
@@ -161,7 +166,7 @@ def verify_model_export(
             )
 
     try:
-        footprint = parse_footprint(footprint_path)
+        parse_footprint(footprint_path)
     except (OSError, ValueError) as error:
         findings.append(
             ModelExportFinding(
@@ -274,7 +279,11 @@ def verify_model_export(
             continue
 
         exported_volume = sum(solid.volume for solid in exported_facts.solids)
-        expected_centers = _expected_terminal_centers(footprint, rotation_deg)
+        expected_centers = (
+            _expected_terminal_centers(source_shape, rotation_deg)
+            if source_shape is not None
+            else []
+        )
         try:
             actual_centers = _terminal_centers(exported_shape, board_top_z_mm)
         except ValueError as error:

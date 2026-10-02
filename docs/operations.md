@@ -132,9 +132,12 @@ round-trip geometry, body dimensions, terminal-to-pad bijection, courtyard,
 and pin-1 marker evidence. Terminal geometry is measured in the `z=[0, 0.02]`
 mm slab; terminal bboxes must fit their pads within `0.025 mm`, and row pitch
 must match the PartSpec within `0.01 mm`. The KiCad export oracle independently
-checks placement at 0 and 90 degrees, with relative volume tolerance `1e-4`
-and terminal-pad alignment tolerance `0.02 mm`. Generated and imported models
-are also cross-checked for body extents, terminal centers, and pin-1 quadrant.
+checks placement at 0 and 90 degrees by matching exported terminal regions to
+the referenced STEP terminal regions, with relative volume tolerance `1e-4`
+and center tolerance `0.02 mm`. It does not assume copper-pad centers equal
+physical terminal centers because land pads can extend beyond the terminals.
+Generated and imported models are also cross-checked for body extents,
+terminal centers, and pin-1 quadrant.
 
 The 3D vision comparison reuses the tool-managed vision batch and answer path.
 It binds the PartSpec, footprint, STEP, and render hashes, and compares the

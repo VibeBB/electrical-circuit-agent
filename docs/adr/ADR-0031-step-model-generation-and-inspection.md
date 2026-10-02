@@ -24,6 +24,9 @@ solid validity, and export behavior need deterministic oracles.
   terminal regions remain independently measurable. For generation, a missing
   dimension nominal is derived from the midpoint of its min/max limits and
   recorded as `derived_nominals: {field: "midpoint"}` in the manifest.
+- Chip packages place `body_length` on X and `body_width` on Y, with terminals
+  meeting the two X body ends. Other supported families place `body_width` on X
+  and `body_length` on Y.
 - `package.height` is the overall seated height A: every generated model's
   highest z coordinate equals A, and the body spans from its bottom to A. The
   gullwing and no-lead body bottom is the standoff A1 nominal, clamped to at
@@ -49,8 +52,11 @@ solid validity, and export behavior need deterministic oracles.
   quadrant.
 - The independent export oracle uses `kicad-cli pcb export step` for placements
   at 0 and 90 degrees. Export volume must agree within relative `1e-4`, and
-  terminal slab regions must match transformed board pads within `0.02 mm`.
-  Missing or inconsistent exports are errors.
+  exported terminal slab regions must match the referenced STEP terminal
+  regions after footprint rotation within `0.02 mm`. It does not use copper
+  pad centers as model-terminal positions because land pads can extend beyond
+  the physical terminal; the separate model verifier checks terminal-to-pad
+  fit. Missing or inconsistent exports are errors.
 - Model vision comparison reuses the hash-bound vision batch and answer path.
   It pairs a datasheet package drawing with a same-scale orthographic KiCad
   render and includes a mirrored control. Each image requires an answer and a
