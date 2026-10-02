@@ -1,11 +1,11 @@
 """Reject protected design/library access through agent tools.
 
-Only path-bearing arguments decide the verdict: file bodies such as
-file_text/new_str may legitimately mention design suffixes or library paths, so
-payload content is not scanned for those rules. Vision-control references are
-blocked in every tool input. For the terminal, library writes are detected from
-shell-level operators rather than path mentions so read-only library commands
-remain available.
+Only path-bearing arguments decide the design and library-write verdict:
+file bodies such as file_text/new_str may legitimately mention design suffixes
+or library paths, so payload content is not scanned for those rules.
+Vision-control and corpus references are blocked in every tool input. For the
+terminal, library writes are detected from shell-level operators rather than
+path mentions so read-only library commands remain available.
 """
 
 from __future__ import annotations
@@ -20,8 +20,10 @@ DESIGN_SUFFIXES = (".kicad_sch", ".kicad_pcb")
 BLOCKED_PATHS = (
     "/opt/circuit/libraries",
     "libraries/cern-kicad-libs",
+    "library/corpus",
     ".openhands/agent-canvas",
 )
+CORPUS_PATH = re.compile(r"(?:^|/)library/corpus(?:/|$)", re.IGNORECASE)
 WRITE_TOOLS = {"file_editor", "apply_patch"}
 VIEW_ACTIONS = {"view", "read", "undo_edit"}
 WRITE_ACTIONS = {"create", "str_replace", "insert", "edit", "write"}
@@ -68,6 +70,15 @@ def _references_vision_control(payload: dict[str, Any]) -> bool:
         return False
     return any(
         ".vision-control" in value.replace("\\", "/").casefold() for value in _strings(tool_input)
+    )
+
+
+def _references_corpus(payload: dict[str, Any]) -> bool:
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return False
+    return any(
+        CORPUS_PATH.search(value.replace("\\", "/")) is not None for value in _strings(tool_input)
     )
 
 
@@ -228,6 +239,12 @@ def main() -> int:
         print("invalid hook input: not an object", file=sys.stderr)
         return 2
     payload = cast(dict[str, Any], payload)
+    if payload.get("tool_name") == "circuit_corpus_score":
+        print("golden corpus scoring is inaccessible through agent tools", file=sys.stderr)
+        return 2
+    if _references_corpus(payload):
+        print("golden corpus is inaccessible through agent tools", file=sys.stderr)
+        return 2
     if _references_vision_control(payload):
         print("vision control state is inaccessible through agent tools", file=sys.stderr)
         return 2

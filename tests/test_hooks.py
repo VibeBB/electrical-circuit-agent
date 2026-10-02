@@ -174,6 +174,29 @@ _VISION_CONTROL_READS: tuple[dict[str, Any], ...] = (
     },
 )
 
+_CORPUS_TRUTH_READS: tuple[dict[str, Any], ...] = (
+    {
+        "tool_name": "terminal",
+        "tool_input": {"command": "cat /project/library/corpus/truth/x.json"},
+    },
+    {
+        "tool_name": "terminal",
+        "tool_input": {"command": "rg . /project/library/corpus/truth"},
+    },
+    {
+        "tool_name": "file_editor",
+        "tool_input": {"command": "view", "path": "/project/library/corpus/truth/x.json"},
+    },
+    {
+        "tool_name": "file_editor",
+        "tool_input": {"command": "create", "path": "/project/library/corpus/corpus.json"},
+    },
+    {
+        "tool_name": "circuit_corpus_score",
+        "tool_input": {"entry_id": "fixture"},
+    },
+)
+
 
 def test_main_agent_guard_denies_vision_control_reads() -> None:
     for payload in _VISION_CONTROL_READS:
@@ -182,9 +205,24 @@ def test_main_agent_guard_denies_vision_control_reads() -> None:
         assert "vision control state is inaccessible" in result.stderr
 
 
+def test_main_agent_guard_denies_corpus_truth_and_scoring() -> None:
+    for payload in _CORPUS_TRUTH_READS:
+        result = _run_protect_hook(payload)
+        assert result.returncode == 2, payload
+        assert "golden corpus" in result.stderr
+
+
 @pytest.mark.parametrize("lane", ["a", "b"])
 def test_author_lane_guard_denies_vision_control_reads(lane: str) -> None:
     for payload in _VISION_CONTROL_READS:
+        result = _run_author_lane_guard(payload, lane)
+        assert result.returncode == 2, (lane, payload)
+        assert "blind authoring lane context is isolated" in result.stderr
+
+
+@pytest.mark.parametrize("lane", ["a", "b"])
+def test_author_lane_guard_denies_corpus_truth_and_scoring(lane: str) -> None:
+    for payload in _CORPUS_TRUTH_READS:
         result = _run_author_lane_guard(payload, lane)
         assert result.returncode == 2, (lane, payload)
         assert "blind authoring lane context is isolated" in result.stderr

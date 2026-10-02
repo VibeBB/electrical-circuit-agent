@@ -80,6 +80,7 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_library_review_packet",
         "circuit_library_review_status",
         "circuit_library_review_apply",
+        "circuit_corpus_score",
         "circuit_konnect_call",
         "circuit_kicad_version",
         "circuit_sch_lint",
@@ -165,6 +166,60 @@ def test_mcp_server_lists_expected_tools() -> None:
         "footprint_path",
         "model_path",
     }
+    corpus_score_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_corpus_score"
+    )
+    assert set(corpus_score_schema["required"]) == {
+        "entry_id",
+        "part_spec_path",
+        "symbol_lib_path",
+        "symbol_name",
+        "footprint_path",
+        "model_path",
+    }
+
+
+def test_corpus_score_mcp_dispatch_and_lane_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CIRCUIT_AUTHORING_LANE", raising=False)
+    captured: dict[str, object] = {}
+    workspace = Path(__file__).resolve().parents[1]
+
+    def score_entry(*args: object, **kwargs: object) -> dict[str, str]:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"verdict": "not_available"}
+
+    monkeypatch.setattr(mcp_server.corpus, "score_entry", cast(Any, score_entry))
+    arguments = {
+        "entry_id": "lm358-soic8",
+        "part_spec_path": str(workspace / "tests" / "part.json"),
+        "symbol_lib_path": str(workspace / "tests" / "symbols.kicad_sym"),
+        "symbol_name": "LM358",
+        "footprint_path": str(workspace / "tests" / "lm358.kicad_mod"),
+        "model_path": str(workspace / "tests" / "lm358.step"),
+    }
+    result = asyncio.run(mcp_server.call_tool("circuit_corpus_score", arguments))
+    assert result.isError is False
+    assert captured["args"] == (
+        workspace / "library" / "corpus",
+        "lm358-soic8",
+        workspace / "tests" / "part.json",
+        workspace / "tests" / "lm358.kicad_mod",
+        workspace / "tests" / "symbols.kicad_sym",
+        "LM358",
+        workspace / "tests" / "lm358.step",
+    )
+    assert captured["kwargs"] == {}
+
+    monkeypatch.setenv("CIRCUIT_AUTHORING_LANE", "a")
+    refused = asyncio.run(mcp_server.call_tool("circuit_corpus_score", arguments))
+    assert refused.isError is True
+    error = next(block.text for block in refused.content if isinstance(block, TextContent))
+    assert "author lanes cannot run the golden corpus scorer" in error
 
 
 def test_vision_compare_dispatch_returns_both_image_paths(
@@ -956,7 +1011,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 44
+            assert len(tools.tools) == 45
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

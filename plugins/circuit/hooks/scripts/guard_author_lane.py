@@ -21,13 +21,20 @@ def _strings(value: Any) -> list[str]:
 
 def _blocked(payload: dict[str, object], lane: str) -> bool:
     name = payload.get("tool_name")
-    if isinstance(name, str) and "circuit_part_author_compare" in name:
+    if isinstance(name, str) and (
+        "circuit_part_author_compare" in name or name == "circuit_corpus_score"
+    ):
         return True
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
         tool_input = {}
     values = _strings(tool_input)
     if any(".vision-control" in value.replace("\\", "/").casefold() for value in values):
+        return True
+    if any(
+        re.search(r"(?:^|[/\\])library[/\\]corpus(?:[/\\]|$)", value, re.IGNORECASE)
+        for value in values
+    ):
         return True
     if any(
         re.search(r"(?:^|[/\\])sealed(?:[/\\]|$)", value)

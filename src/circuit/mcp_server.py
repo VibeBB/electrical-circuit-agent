@@ -29,6 +29,7 @@ from . import (
     authoring,
     brief,
     connectivity,
+    corpus,
     datasheet,
     doctor,
     firmware,
@@ -771,6 +772,30 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_corpus_score",
+        "Score a PartSpec, symbol, footprint, and model against the sealed golden corpus",
+        {
+            "type": "object",
+            "properties": {
+                "entry_id": {"type": "string"},
+                "part_spec_path": {"type": "string"},
+                "symbol_lib_path": {"type": "string"},
+                "symbol_name": {"type": "string"},
+                "footprint_path": {"type": "string"},
+                "model_path": {"type": "string"},
+                "corpus_root": {"type": "string"},
+            },
+            "required": [
+                "entry_id",
+                "part_spec_path",
+                "symbol_lib_path",
+                "symbol_name",
+                "footprint_path",
+                "model_path",
+            ],
+        },
+    ),
+    (
         "circuit_library_review_packet",
         "Build a fresh, hash-bound human review packet for a library part",
         {
@@ -938,6 +963,7 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_library_import": _anno("Library import", write=True),
     "circuit_library_record": _anno("Library provenance record", write=True),
     "circuit_library_verify": _anno("Library verification", write=True),
+    "circuit_corpus_score": _anno("Golden corpus score", write=False),
     "circuit_library_review_packet": _anno("Library review packet", write=True),
     "circuit_library_review_status": _anno("Library review status", write=True),
     "circuit_library_review_apply": _anno("Apply review corrections", write=True),
@@ -1727,6 +1753,24 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 model_required=bool(args.get("model_required", True)),
                 test_board=bool(args.get("test_board", True)),
                 output_path=output,
+            )
+        elif name == "circuit_corpus_score":
+            if os.environ.get("CIRCUIT_AUTHORING_LANE") in {"a", "b"}:
+                raise ValueError("author lanes cannot run the golden corpus scorer")
+            corpus_root = Path(
+                str(
+                    args.get("corpus_root")
+                    or (Path(__file__).resolve().parents[2] / "library" / "corpus")
+                )
+            )
+            result = corpus.score_entry(
+                corpus_root,
+                str(args["entry_id"]),
+                Path(str(args["part_spec_path"])),
+                Path(str(args["footprint_path"])),
+                Path(str(args["symbol_lib_path"])),
+                str(args["symbol_name"]),
+                Path(str(args["model_path"])),
             )
         elif name == "circuit_library_review_packet":
             spec_path = Path(str(args["part_spec_path"]))
