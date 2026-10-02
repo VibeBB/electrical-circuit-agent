@@ -365,6 +365,12 @@ def family_for_code(code: str) -> CheckFamily:
     family = CHECK_FAMILY.get(code)
     if family is not None:
         return family
+    if code in {
+        "footprint_chirality_mismatch",
+        "footprint_order_mismatch",
+        "footprint_rotation_mismatch",
+    }:
+        return "orientation"
     if code.startswith("testboard_drc_"):
         return "rule_profile"
     if code.startswith("testboard_erc_"):

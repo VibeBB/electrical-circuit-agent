@@ -297,6 +297,9 @@ def test_every_static_verification_code_has_a_family() -> None:
     assert codes - CHECK_FAMILY.keys() == set()
     assert family_for_code("testboard_drc_clearance") == "rule_profile"
     assert family_for_code("testboard_erc_pin_not_connected") == "pin_bijection"
+    assert family_for_code("footprint_chirality_mismatch") == "orientation"
+    assert family_for_code("footprint_order_mismatch") == "orientation"
+    assert family_for_code("footprint_rotation_mismatch") == "orientation"
     assert family_for_code("F6.3") == "land_geometry"
     with pytest.raises(MutationError, match="unmapped verification finding code"):
         family_for_code("new_unmapped_finding")
