@@ -6,18 +6,33 @@ import hashlib
 import math
 import random
 import re
+import shutil
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from itertools import pairwise
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from . import occt
-from .libitems import FootprintDef, GraphicDef, PadDef, SymbolDef, SymPin
-from .partspec import Dimension, PartSpec
+from . import kicad_cli, occt, sexpr
+from .landpattern import Density, compute_land_pattern
+from .libitems import (
+    FootprintDef,
+    GraphicDef,
+    ModelRef,
+    PadDef,
+    SymbolDef,
+    SymPin,
+    parse_footprint,
+    parse_symbol,
+)
+from .libverify import VerifyFinding
+from .modeloracle import verify_model_export
+from .partspec import Dimension, PartSpec, PartSpecReport, load_part_spec
+from .ruleprofile import load_rules
 
 CheckFamily = Literal[
     "evidence",
@@ -94,6 +109,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
     "pin_bijection": (
         "duplicate_pin",
         "exposed_pad_unmapped",
+        "kicad_cli_unavailable",
         "kicad_parse",
         "orderable_pin_count_mismatch",
         "pad_set",
@@ -111,6 +127,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "pin_table_missing",
         "pinout_missing",
         "symbol_pin_grid",
+        "symbol_pin_name",
         "symbol_pin_set",
         "symbol_pin_type",
         "symbol_property",
@@ -128,7 +145,6 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "pinout_view_unverified",
         "pinout_winding_nonstandard",
         "symbol_permutation_diagnosis",
-        "symbol_pin_name",
         "symbol_pinout_name_mismatch",
     ),
     "land_geometry": (
@@ -143,8 +159,11 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "lead_width_exceeds_pad",
         "pad_clearance",
         "pad_geometry",
+        "pad_position",
         "pad_type",
         "pitch_exceeds_body",
+        "footprint_pitch",
+        "ep_size",
         "silk_over_pad",
     ),
     "export_oracle": (
@@ -152,6 +171,8 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "model_export_mismatch",
         "model_export_missing",
         "model_export_unavailable",
+        "model_export_pin1",
+        "testboard_terminal_outside_pad",
         "testboard_kicad_cli",
         "testboard_pad_readback",
         "testboard_setup",
@@ -200,6 +221,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "glyph_loss_ambiguous",
         "pinout_vision_mismatch",
         "vision_compare_mismatch",
+        "vision_compare_missing",
         "vision_compare_stale",
         "vision_control_failed",
         "vision_impression_missing",
@@ -236,6 +258,342 @@ _DYNAMIC_KLC_CODE = re.compile(r"^[FW]\d+(?:\.\d+)+$")
 
 class MutationError(ValueError):
     """Raised when a mutation cannot be applied or a finding is unmapped."""
+
+
+def _number(value: float) -> str:
+    return format(value, ".12g")
+
+
+def _quoted(value: str) -> sexpr.QuotedString:
+    return sexpr.quoted(value)
+
+
+def _property(key: str, value: str) -> list[sexpr.SExpr]:
+    return [
+        "property",
+        _quoted(key),
+        _quoted(value),
+        ["at", "0", "0", "0"],
+        ["layer", _quoted("F.Fab")],
+        ["effects", ["font", ["size", "1", "1"], ["thickness", "0.15"]]],
+    ]
+
+
+def _graphic_node(graphic: GraphicDef) -> list[sexpr.SExpr]:
+    points = [[_number(x), _number(y)] for x, y in graphic.points]
+    geometry: list[sexpr.SExpr]
+    if graphic.kind == "poly":
+        geometry = [["pts", *[["xy", *point] for point in points]]]
+    else:
+        keys = {
+            "line": ("start", "end"),
+            "rect": ("start", "end"),
+            "circle": ("center", "end"),
+            "arc": ("start", "mid", "end"),
+        }[graphic.kind]
+        geometry = [[key, *point] for key, point in zip(keys, points, strict=True)]
+    name = {"poly": "fp_poly"}.get(graphic.kind, f"fp_{graphic.kind}")
+    return [
+        name,
+        *geometry,
+        ["stroke", ["width", _number(graphic.width)], ["type", "default"]],
+        ["fill", "none"],
+        ["layer", _quoted(graphic.layer)],
+    ]
+
+
+def _write_footprint(path: Path, footprint: FootprintDef) -> None:
+    root: list[sexpr.SExpr] = [
+        "footprint",
+        _quoted(footprint.name),
+        ["version", "20240108"],
+        ["generator", _quoted("circuit_mutation")],
+        ["layer", _quoted("F.Cu")],
+        ["attr", *footprint.attributes],
+        *[_property(key, value) for key, value in footprint.properties.items()],
+    ]
+    for graphic in footprint.graphics:
+        root.append(_graphic_node(graphic))
+    for pad in footprint.pads:
+        node: list[sexpr.SExpr] = [
+            "pad",
+            _quoted(pad.number),
+            pad.type,
+            pad.shape,
+            ["at", _number(pad.x), _number(pad.y), _number(pad.rotation)],
+            ["size", _number(pad.width), _number(pad.height)],
+            ["layers", *[_quoted(layer) for layer in pad.layers]],
+        ]
+        if pad.drill is not None:
+            node.append(["drill", _number(pad.drill)])
+        if pad.roundrect_ratio is not None:
+            node.append(["roundrect_rratio", _number(pad.roundrect_ratio)])
+        if pad.paste_margin is not None:
+            node.append(["solder_paste_margin", _number(pad.paste_margin)])
+        if pad.mask_margin is not None:
+            node.append(["solder_mask_margin", _number(pad.mask_margin)])
+        root.append(node)
+    for model in footprint.models:
+        root.append(
+            [
+                "model",
+                _quoted(model.path),
+                ["offset", ["xyz", *[_number(value) for value in model.offset]]],
+                ["scale", ["xyz", *[_number(value) for value in model.scale]]],
+                ["rotate", ["xyz", *[_number(value) for value in model.rotate]]],
+            ]
+        )
+    path.write_text(sexpr.serialize(root) + "\n", encoding="utf-8")
+
+
+def _write_symbol(path: Path, symbol: SymbolDef) -> None:
+    properties = {"Reference": "U", "Value": symbol.name, **symbol.properties}
+    property_nodes: list[sexpr.SExpr] = [
+        ["property", _quoted(key), _quoted(value)] for key, value in properties.items()
+    ]
+    pins: list[sexpr.SExpr] = []
+    for pin in symbol.pins:
+        pins.append(
+            [
+                "pin",
+                pin.electrical_type,
+                pin.graphic_style,
+                ["at", _number(pin.x), _number(pin.y), _number(pin.orientation)],
+                ["length", _number(pin.length)],
+                ["name", _quoted(pin.name)],
+                ["number", _quoted(pin.number)],
+            ]
+        )
+    symbol_unit: sexpr.SExpr = [
+        "symbol",
+        _quoted(f"{symbol.name}_0_1"),
+        *pins,
+    ]
+    node: sexpr.SExpr = [
+        "symbol",
+        _quoted(symbol.name),
+        *property_nodes,
+        symbol_unit,
+    ]
+    root: sexpr.SExpr = [
+        "kicad_symbol_lib",
+        ["version", "20241209"],
+        node,
+    ]
+    path.write_text(sexpr.serialize(root) + "\n", encoding="utf-8")
+
+
+def _source_path(source_spec_path: Path, value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else source_spec_path.parent / path
+
+
+def _prepare_spec(
+    spec: PartSpec,
+    *,
+    source_spec_path: Path | None,
+    spec_check_path: Path | None,
+) -> PartSpec:
+    if source_spec_path is None or spec_check_path is not None:
+        return spec
+    datasheet = spec.datasheet
+    updates: dict[str, object] = {}
+    if datasheet.path:
+        updates["path"] = str(_source_path(source_spec_path, datasheet.path))
+    updates["extraction_path"] = str(_source_path(source_spec_path, datasheet.extraction_path))
+    if not updates:
+        return spec
+    return spec.model_copy(update={"datasheet": datasheet.model_copy(update=updates)})
+
+
+class _LibraryVerifier:
+    def __init__(
+        self,
+        *,
+        work_dir: Path,
+        run_export_oracle: bool,
+        density: Density,
+    ) -> None:
+        self.work_dir = work_dir.resolve()
+        self.run_export_oracle = run_export_oracle
+        self.density: Density = density
+        self.excluded_vision_findings = 0
+
+    def __call__(self, artifacts: MutationArtifacts) -> Sequence[MutationFinding]:
+        if self.run_export_oracle:
+            command = kicad_cli.command_prefix()
+            executable = command[0] if command else ""
+            if not executable or (
+                not Path(executable).is_file() and shutil.which(executable) is None
+            ):
+                raise MutationError("export oracle was requested but kicad-cli is unavailable")
+        try:
+            self.work_dir.mkdir(parents=True, exist_ok=True)
+            directory = Path(tempfile.mkdtemp(prefix="library-mutation-", dir=self.work_dir))
+            spec = _prepare_spec(
+                artifacts.spec,
+                source_spec_path=artifacts.source_spec_path,
+                spec_check_path=artifacts.spec_check_path,
+            )
+            spec_path = directory / "part.spec.json"
+            if (
+                artifacts.source_spec_path is not None
+                and artifacts.spec_check_path is not None
+                and spec == load_part_spec(artifacts.source_spec_path)
+            ):
+                shutil.copyfile(artifacts.source_spec_path, spec_path)
+            else:
+                spec_path.write_text(
+                    spec.model_dump_json(indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            symbol_lib = directory / "library.kicad_sym"
+            _write_symbol(symbol_lib, artifacts.symbol)
+            footprint_path = (
+                directory / "Footprint.pretty" / f"{artifacts.footprint.name}.kicad_mod"
+            )
+            footprint_path.parent.mkdir(parents=True, exist_ok=True)
+            model_path = directory / "model.step"
+            shutil.copyfile(artifacts.model_path, model_path)
+            manifest_source = Path(f"{artifacts.model_path}.gen.json")
+            if manifest_source.is_file():
+                shutil.copyfile(manifest_source, Path(f"{model_path}.gen.json"))
+            model_reference = ModelRef(
+                path=str(Path("..") / "model.step"),
+                offset=(0.0, 0.0, 0.0),
+                scale=(1.0, 1.0, 1.0),
+                rotate=(0.0, 0.0, 0.0),
+            )
+            footprint = artifacts.footprint.model_copy(update={"models": [model_reference]})
+            _write_footprint(footprint_path, footprint)
+            check_path: Path | None = None
+            if artifacts.spec_check_path is not None:
+                check_path = directory / "part.spec.check.json"
+                check = PartSpecReport.model_validate_json(
+                    artifacts.spec_check_path.read_text(encoding="utf-8")
+                )
+                check_path.write_text(
+                    check.model_dump_json(indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            if artifacts.source_spec_path is not None and spec.authoring is not None:
+                authoring_run_path = Path(spec.authoring)
+                authoring_source = _source_path(
+                    artifacts.source_spec_path,
+                    authoring_run_path,
+                )
+                if not authoring_source.is_dir():
+                    raise MutationError(f"authoring run is unavailable: {authoring_source}")
+                authoring_target = directory / authoring_run_path
+                authoring_target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(authoring_source, authoring_target)
+            rules = load_rules("builtin:ipc7351b", directory)
+            reference = compute_land_pattern(spec, self.density, rules=rules)
+            from . import libverify
+
+            verification = libverify.verify_library_part(
+                spec,
+                spec_path=spec_path,
+                spec_check_path=check_path,
+                symbol_lib=symbol_lib,
+                symbol_name=artifacts.symbol.name,
+                footprint_path=footprint_path,
+                library_dir=None,
+                reference=reference,
+                rules=rules,
+                model_required=True,
+                klc=False,
+                test_board=self.run_export_oracle,
+                run_export_oracle=False,
+            )
+            findings = list(verification.findings)
+            if self.run_export_oracle:
+                export_report = verify_model_export(
+                    spec,
+                    footprint_path,
+                    model_reference=str(model_path),
+                    model_path=model_path,
+                    rules=rules,
+                    out_dir=directory / "export-oracle",
+                )
+                findings.extend(
+                    VerifyFinding(
+                        code=item.code,
+                        severity=item.severity,
+                        subject="model.export",
+                        message=item.message,
+                    )
+                    for item in export_report.findings
+                )
+            filtered: list[MutationFinding] = []
+            for finding in findings:
+                if family_for_code(finding.code) == "vision":
+                    self.excluded_vision_findings += 1
+                else:
+                    filtered.append(MutationFinding(code=finding.code, severity=finding.severity))
+            return filtered
+        except MutationError:
+            raise
+        except Exception as error:
+            raise MutationError(f"real library verification failed: {error}") from error
+
+
+def library_verifier(
+    *,
+    work_dir: Path,
+    run_export_oracle: bool,
+    density: Density = "nominal",
+) -> MutationVerifier:
+    """Build a verifier backed by the production library and model oracles."""
+
+    return _LibraryVerifier(
+        work_dir=work_dir,
+        run_export_oracle=run_export_oracle,
+        density=density,
+    )
+
+
+def library_mutation_fixture(
+    *,
+    spec_path: Path,
+    symbol_lib: Path,
+    symbol_name: str,
+    footprint_path: Path,
+    model_path: Path,
+    spec_check_path: Path | None = None,
+    work_dir: Path,
+    run_export_oracle: bool,
+    density: Density = "nominal",
+    seed: int = 0,
+) -> MutationFixture:
+    """Load a library-part fixture and bind it to the real verification stack."""
+
+    try:
+        spec = load_part_spec(spec_path)
+        symbol = parse_symbol(symbol_lib, symbol_name)
+        footprint = parse_footprint(footprint_path)
+        model = occt.read_step(model_path)
+    except (OSError, ValueError) as error:
+        raise MutationError(f"cannot load mutation fixture: {error}") from error
+    verifier = library_verifier(
+        work_dir=work_dir,
+        run_export_oracle=run_export_oracle,
+        density=density,
+    )
+    return MutationFixture(
+        artifacts=MutationArtifacts(
+            spec=spec,
+            symbol=symbol,
+            footprint=footprint,
+            model=model,
+            model_path=model_path,
+            source_spec_path=spec_path,
+            spec_check_path=spec_check_path,
+        ),
+        verify=verifier,
+        seed=seed,
+        export_oracle_run=run_export_oracle,
+    )
 
 
 class Mutation(BaseModel):
@@ -295,6 +653,8 @@ class MutationReport(BaseModel):
     single_oracle: list[str]
     undetected: list[str]
     passed: bool
+    excluded_vision_findings: int = 0
+    export_oracle_run: bool = False
 
     @model_validator(mode="after")
     def enforce_report_gate(self) -> MutationReport:
@@ -321,6 +681,8 @@ class MutationArtifacts:
     footprint: FootprintDef
     model: occt.Shape
     model_path: Path
+    source_spec_path: Path | None = None
+    spec_check_path: Path | None = None
 
 
 MutationVerifier = Callable[[MutationArtifacts], Sequence[MutationFinding]]
@@ -331,6 +693,7 @@ class MutationFixture:
     artifacts: MutationArtifacts
     verify: MutationVerifier
     seed: int = 0
+    export_oracle_run: bool = False
 
 
 MutationTransform = Callable[
@@ -386,7 +749,13 @@ def _replace_symbol_pins(
 ) -> MutationArtifacts:
     symbol = artifacts.symbol.model_copy(update={"pins": pins})
     return MutationArtifacts(
-        artifacts.spec, symbol, artifacts.footprint, artifacts.model, artifacts.model_path
+        artifacts.spec,
+        symbol,
+        artifacts.footprint,
+        artifacts.model,
+        artifacts.model_path,
+        artifacts.source_spec_path,
+        artifacts.spec_check_path,
     )
 
 
@@ -397,6 +766,14 @@ def _numeric_symbol_indices(symbol: SymbolDef) -> list[int]:
     return [index for _, index in sorted(indexed)]
 
 
+def _number_name_map(symbol: SymbolDef) -> dict[str, frozenset[str]]:
+    mapping: dict[str, set[str]] = {}
+    for pin in symbol.pins:
+        if pin.number.isdecimal():
+            mapping.setdefault(pin.number, set()).add(pin.name)
+    return {number: frozenset(names) for number, names in mapping.items()}
+
+
 def _symbol_adjacent_pin_swap(
     artifacts: MutationArtifacts,
     rng: random.Random,
@@ -404,12 +781,29 @@ def _symbol_adjacent_pin_swap(
     indices = _numeric_symbol_indices(artifacts.symbol)
     if len(indices) < 2:
         raise MutationError("symbol requires at least two numeric pins")
-    offset = rng.randrange(len(indices) - 1)
-    left, right = indices[offset], indices[offset + 1]
     pins = list(artifacts.symbol.pins)
+    original_map = _number_name_map(artifacts.symbol)
+    candidates: list[tuple[int, int]] = []
+    for left, right in pairwise(indices):
+        left_pin, right_pin = pins[left], pins[right]
+        if (
+            not left_pin.name.strip()
+            or not right_pin.name.strip()
+            or left_pin.name == right_pin.name
+        ):
+            continue
+        candidate_pins = list(pins)
+        candidate_pins[left] = left_pin.model_copy(update={"number": right_pin.number})
+        candidate_pins[right] = right_pin.model_copy(update={"number": left_pin.number})
+        candidate_symbol = artifacts.symbol.model_copy(update={"pins": candidate_pins})
+        if _number_name_map(candidate_symbol) != original_map:
+            candidates.append((left, right))
+    if not candidates:
+        raise MutationError("symbol has no adjacent pins whose number-to-name map can change")
+    left, right = rng.choice(candidates)
     left_pin, right_pin = pins[left], pins[right]
-    pins[left] = left_pin.model_copy(update={"x": right_pin.x, "y": right_pin.y})
-    pins[right] = right_pin.model_copy(update={"x": left_pin.x, "y": left_pin.y})
+    pins[left] = left_pin.model_copy(update={"number": right_pin.number})
+    pins[right] = right_pin.model_copy(update={"number": left_pin.number})
     return _replace_symbol_pins(artifacts, pins), {
         "first_pin": left_pin.number,
         "second_pin": right_pin.number,
@@ -423,9 +817,28 @@ def _symbol_pin_name_swap(
     indices = _numeric_symbol_indices(artifacts.symbol)
     if len(indices) < 2:
         raise MutationError("symbol requires at least two numeric pins")
-    offset = rng.randrange(len(indices) - 1)
-    left, right = indices[offset], indices[offset + 1]
     pins = list(artifacts.symbol.pins)
+    original_map = _number_name_map(artifacts.symbol)
+
+    def changes_mapping(left: int, right: int) -> bool:
+        candidate_pins = list(pins)
+        candidate_pins[left] = candidate_pins[left].model_copy(update={"name": pins[right].name})
+        candidate_pins[right] = candidate_pins[right].model_copy(update={"name": pins[left].name})
+        candidate_symbol = artifacts.symbol.model_copy(update={"pins": candidate_pins})
+        return _number_name_map(candidate_symbol) != original_map
+
+    pairs = [
+        (left, right)
+        for position, left in enumerate(indices)
+        for right in indices[position + 1 :]
+        if pins[left].name.strip()
+        and pins[right].name.strip()
+        and pins[left].name != pins[right].name
+        and changes_mapping(left, right)
+    ]
+    if not pairs:
+        raise MutationError("symbol name swap would not change its number-to-name map")
+    left, right = rng.choice(pairs)
     left_pin, right_pin = pins[left], pins[right]
     pins[left] = left_pin.model_copy(update={"name": right_pin.name})
     pins[right] = right_pin.model_copy(update={"name": left_pin.name})
@@ -439,12 +852,15 @@ def _symbol_pin_number_offset(
     artifacts: MutationArtifacts,
     _rng: random.Random,
 ) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    original_map = _number_name_map(artifacts.symbol)
     pins: list[SymPin] = []
     for pin in artifacts.symbol.pins:
         if pin.number.isdecimal():
             pins.append(pin.model_copy(update={"number": str(int(pin.number) + 1)}))
         else:
             pins.append(pin)
+    if _number_name_map(artifacts.symbol.model_copy(update={"pins": pins})) == original_map:
+        raise MutationError("symbol number offset would not change its number-to-name map")
     return _replace_symbol_pins(artifacts, pins), {"offset": 1}
 
 
@@ -456,9 +872,15 @@ def _symbol_reversed_pin_order(
     if len(indices) < 2:
         raise MutationError("symbol requires at least two numeric pins")
     pins = list(artifacts.symbol.pins)
-    positions = [(pins[index].x, pins[index].y) for index in indices][::-1]
-    for index, (x, y) in zip(indices, positions, strict=True):
-        pins[index] = pins[index].model_copy(update={"x": x, "y": y})
+    distinct_names = {pins[index].name.strip() for index in indices if pins[index].name.strip()}
+    if len(distinct_names) < 2:
+        raise MutationError("symbol requires at least two distinct names")
+    original_map = _number_name_map(artifacts.symbol)
+    numbers = [pins[index].number for index in indices][::-1]
+    for index, number in zip(indices, numbers, strict=True):
+        pins[index] = pins[index].model_copy(update={"number": number})
+    if _number_name_map(artifacts.symbol.model_copy(update={"pins": pins})) == original_map:
+        raise MutationError("reversing symbol pin numbers would not change its number-to-name map")
     return _replace_symbol_pins(artifacts, pins), {"pin_count": len(indices)}
 
 
@@ -474,7 +896,13 @@ def _transform_footprint(
         }
     )
     return MutationArtifacts(
-        artifacts.spec, artifacts.symbol, footprint, artifacts.model, artifacts.model_path
+        artifacts.spec,
+        artifacts.symbol,
+        footprint,
+        artifacts.model,
+        artifacts.model_path,
+        artifacts.source_spec_path,
+        artifacts.spec_check_path,
     )
 
 
@@ -700,7 +1128,13 @@ def _part_spec_package_update(
     package = artifacts.spec.package.model_copy(update=updates)
     spec = artifacts.spec.model_copy(update={"package": package})
     return MutationArtifacts(
-        spec, artifacts.symbol, artifacts.footprint, artifacts.model, artifacts.model_path
+        spec,
+        artifacts.symbol,
+        artifacts.footprint,
+        artifacts.model,
+        artifacts.model_path,
+        artifacts.source_spec_path,
+        artifacts.spec_check_path,
     )
 
 
@@ -777,6 +1211,8 @@ def _part_spec_sibling_mpn(
             artifacts.footprint,
             artifacts.model,
             artifacts.model_path,
+            artifacts.source_spec_path,
+            artifacts.spec_check_path,
         ),
         {"mpn": updated},
     )
@@ -818,6 +1254,8 @@ def _model_transform(
                 artifacts.footprint,
                 model,
                 artifacts.model_path,
+                artifacts.source_spec_path,
+                artifacts.spec_check_path,
             ),
             params,
         )
@@ -851,6 +1289,8 @@ def _model_remove_pin1_marker(
             artifacts.footprint,
             model,
             artifacts.model_path,
+            artifacts.source_spec_path,
+            artifacts.spec_check_path,
         ),
         {"body_solid": body_index},
     )
@@ -977,4 +1417,10 @@ def run_mutations(fixture: MutationFixture) -> MutationReport:
         single_oracle=single_oracle,
         undetected=undetected,
         passed=not single_oracle and not undetected,
+        excluded_vision_findings=(
+            fixture.verify.excluded_vision_findings
+            if isinstance(fixture.verify, _LibraryVerifier)
+            else 0
+        ),
+        export_oracle_run=fixture.export_oracle_run,
     )

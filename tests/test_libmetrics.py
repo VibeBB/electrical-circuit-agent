@@ -365,6 +365,34 @@ def test_metrics_report_mutation_families_outcomes_and_critical_single_oracle(
     assert not metrics.release_relaxation_supported
 
 
+def test_release_relaxation_rejects_mutation_report_without_export_oracle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    _, report_path = _project_files(project)
+    report = _empty_mutation_report().model_copy(update={"export_oracle_run": False})
+    report_path.write_text(report.model_dump_json(), encoding="utf-8")
+    accepted = {(f"METRICS-{index}", f"{index + 1:064x}") for index in range(299)}
+
+    def accepted_parts(_library: Path) -> set[tuple[str, str]]:
+        return accepted
+
+    monkeypatch.setattr(libmetrics, "_accepted_parts", accepted_parts)
+
+    metrics = libmetrics.compute_metrics(project)
+
+    assert metrics.findings == ["mutation_export_oracle_not_run"]
+    assert not metrics.release_relaxation_supported
+    metrics_path = project / "library" / "library-metrics.json"
+    metrics_path.write_text(metrics.model_dump_json(), encoding="utf-8")
+    with pytest.raises(
+        libmetrics.LibraryMetricsError,
+        match="review_relaxation_not_supported_by_metrics",
+    ):
+        libmetrics.require_relaxation_supported(project)
+
+
 def test_review_relaxation_requires_fresh_hash_bound_metrics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

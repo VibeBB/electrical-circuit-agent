@@ -330,6 +330,7 @@ def compute_metrics(project: Path) -> LibraryMetrics:
 
     report_path = _mutation_report_path(project)
     report_hash: str | None = None
+    export_oracle_run: bool | None = None
     family_rates: dict[mutation.CheckFamily, float] = {}
     operator_outcomes: list[mutation.MutationOutcome] = []
     critical_single_oracle: list[str] = []
@@ -337,6 +338,7 @@ def compute_metrics(project: Path) -> LibraryMetrics:
         raw_report = report_path.read_bytes()
         report_hash = hashlib.sha256(raw_report).hexdigest()
         report = mutation.MutationReport.model_validate_json(raw_report)
+        export_oracle_run = report.export_oracle_run
         family_rates = report.family_detection_rates
         operator_outcomes = report.outcomes
         critical_single_oracle = [
@@ -346,6 +348,8 @@ def compute_metrics(project: Path) -> LibraryMetrics:
         ]
     except (OSError, ValueError) as exc:
         findings.append(f"mutation_report_unavailable:{exc}")
+    if export_oracle_run is False:
+        findings.append("mutation_export_oracle_not_run")
 
     accepted = _accepted_parts(library_dir)
     correction_escapes, correction_findings = _correction_escapes(
@@ -368,6 +372,7 @@ def compute_metrics(project: Path) -> LibraryMetrics:
         and not critical_single_oracle
         and manifest_hash is not None
         and report_hash is not None
+        and export_oracle_run is True
         and not findings
     )
     return LibraryMetrics(

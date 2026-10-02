@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from circuit import kicad_cli
+from circuit import kicad_cli, libtestboard
 from circuit.libitems import FootprintDef, GraphicDef, PadDef
 from circuit.libtestboard import (
     _check_pinmap,  # pyright: ignore[reportPrivateUsage]
@@ -163,6 +163,70 @@ def test_ipcd356_parser_resolves_extended_net_names(tmp_path: Path) -> None:
     record = _parse_ipcd356(output)[0]
 
     assert record[:3] == ("Exposed?Thermal?Pad", "17", "U1")
+
+
+def test_part_spec_terminals_must_fit_ipcd356_readback_pads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    package = spec.package.model_copy(update={"family": "chip", "lead_length": _dimension(1.0)})
+    spec = spec.model_copy(update={"package": package})
+    readback = tmp_path / "test-board.ipcd356"
+    readback.touch()
+
+    def footprint(center: float) -> FootprintDef:
+        return FootprintDef(
+            name="Chip-2",
+            attributes=["smd"],
+            pads=[
+                PadDef(
+                    number=number,
+                    type="smd",
+                    shape="rect",
+                    x=x,
+                    y=0,
+                    rotation=0,
+                    width=1,
+                    height=3,
+                    drill=None,
+                    layers=["F.Cu", "F.Mask", "F.Paste"],
+                )
+                for number, x in (("1", -center), ("2", center))
+            ],
+            graphics=[],
+            models=[],
+            properties={},
+        )
+
+    def parse_edge_positions(_path: Path) -> list[tuple[str, str, str, float, float]]:
+        return [
+            ("VIN", "1", "U1", -2.5, 0.0),
+            ("GND", "2", "U1", 2.5, 0.0),
+        ]
+
+    monkeypatch.setattr(libtestboard, "_parse_ipcd356", parse_edge_positions)
+    assert libtestboard._check_terminal_readback(  # pyright: ignore[reportPrivateUsage]
+        spec,
+        footprint(2.5),
+        readback,
+    ) == (True, "")
+
+    def parse_outside_positions(_path: Path) -> list[tuple[str, str, str, float, float]]:
+        return [
+            ("VIN", "1", "U1", -3.01, 0.0),
+            ("GND", "2", "U1", 3.01, 0.0),
+        ]
+
+    monkeypatch.setattr(libtestboard, "_parse_ipcd356", parse_outside_positions)
+    passed, details = libtestboard._check_terminal_readback(  # pyright: ignore[reportPrivateUsage]
+        spec,
+        footprint(3.01),
+        readback,
+    )
+    assert not passed
+    assert "PartSpec terminal 1" in details
+    assert "lies outside every corresponding IPC-D-356 pad" in details
 
 
 def test_pinmap_matches_kicad_pinfunction_suffix_and_detects_renames(tmp_path: Path) -> None:

@@ -889,15 +889,30 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
     ),
     (
         "circuit_mutation_report",
-        "Load and validate the latest seeded library mutation report",
+        "Run the seeded mutation suite against the real library verification stack",
         {
             "type": "object",
             "properties": {
                 "project_path": {"type": "string"},
-                "report_path": {"type": "string"},
+                "spec_path": {"type": "string"},
+                "spec_check_path": {"type": "string"},
+                "symbol_lib": {"type": "string"},
+                "symbol_name": {"type": "string"},
+                "footprint_path": {"type": "string"},
+                "model_path": {"type": "string"},
+                "run_export_oracle": {"type": "boolean", "default": True},
+                "density": {"type": "string", "enum": ["most", "nominal", "least"]},
+                "seed": {"type": "integer"},
                 "output_path": {"type": "string"},
             },
-            "required": ["project_path"],
+            "required": [
+                "project_path",
+                "spec_path",
+                "symbol_lib",
+                "symbol_name",
+                "footprint_path",
+                "model_path",
+            ],
         },
     ),
     (
@@ -1423,11 +1438,26 @@ def _library_metrics_tool(name: str, args: dict[str, Any]) -> Any:
         return result
     if name == "circuit_mutation_report":
         project_path = Path(str(args["project_path"]))
-        report_path = Path(
-            _optional_string(args.get("report_path"))
-            or (project_path / "library" / "mutation-report.json")
+        density_value = str(args.get("density", "nominal"))
+        if density_value not in {"most", "nominal", "least"}:
+            raise ValueError("density must be most, nominal, or least")
+        fixture = mutation.library_mutation_fixture(
+            spec_path=Path(str(args["spec_path"])),
+            spec_check_path=(
+                Path(str(args["spec_check_path"]))
+                if _optional_string(args.get("spec_check_path")) is not None
+                else None
+            ),
+            symbol_lib=Path(str(args["symbol_lib"])),
+            symbol_name=str(args["symbol_name"]),
+            footprint_path=Path(str(args["footprint_path"])),
+            model_path=Path(str(args["model_path"])),
+            work_dir=project_path / "library" / "mutation-work",
+            run_export_oracle=bool(args.get("run_export_oracle", True)),
+            density=cast(mutation.Density, density_value),
+            seed=int(args.get("seed", 0)),
         )
-        mutation_report = mutation.MutationReport.model_validate_json(report_path.read_bytes())
+        mutation_report = mutation.run_mutations(fixture)
         output_value = _optional_string(args.get("output_path"))
         if output_value is not None:
             output = Path(output_value)

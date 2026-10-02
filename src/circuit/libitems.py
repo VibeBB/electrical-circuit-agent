@@ -73,6 +73,7 @@ class SymPin(BaseModel):
     number: str
     name: str
     electrical_type: str
+    graphic_style: str = "line"
     x: float
     y: float
     length: float
@@ -347,6 +348,7 @@ def _parse_symbol_pin(node: list[sexpr.SExpr], unit: int) -> SymPin:
         number=_atom(number_node or [], 1, label="pin number"),
         name=_atom(name_node or [], 1, label="pin name"),
         electrical_type=electrical_type,
+        graphic_style=_atom(node, 2, label="pin graphic style"),
         x=_number(at[1], label="pin x"),
         y=_number(at[2], label="pin y"),
         length=_number(length_node[1], label="pin length"),

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import ast
+import re
+from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from circuit import occt
-from circuit.libitems import FootprintDef, PadDef, SymbolDef, SymPin
+from circuit import kicad_cli, libverify, occt
+from circuit.libitems import FootprintDef, PadDef, SymbolDef, SymPin, parse_symbol
 from circuit.mutation import (
     CHECK_FAMILY,
     MUTATION_OPERATORS,
@@ -15,6 +18,8 @@ from circuit.mutation import (
     MutationFinding,
     MutationFixture,
     family_for_code,
+    library_mutation_fixture,
+    library_verifier,
     run_mutations,
 )
 from circuit.partspec import (
@@ -25,10 +30,14 @@ from circuit.partspec import (
     OrderableVariant,
     PackageSpec,
     PartSpec,
+    PartSpecReport,
     PinSpec,
     PinTable,
     Reading,
+    part_spec_sha256,
 )
+from pinout_fixtures import geometry_for_names
+from test_libverify import _vqfn_spec, _write_case  # pyright: ignore[reportPrivateUsage]
 
 REPO_ROOT = Path(__file__).parents[1]
 FINDING_MODULES = ("libverify", "partspec", "model3d", "ruleprofile", "libtestboard")
@@ -258,6 +267,72 @@ def _fixture(tmp_path: Path, *, seed: int = 0) -> MutationFixture:
     return MutationFixture(artifacts=artifacts, verify=verify, seed=seed)
 
 
+def _known_good_library_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    seed: int = 0,
+    run_export_oracle: bool = False,
+) -> MutationFixture:
+    spec = _vqfn_spec()
+    lead_width = spec.package.lead_width
+    assert lead_width is not None
+    spec.package.lead_width = Dimension(
+        min=lead_width.min,
+        nom=0.24,
+        max=lead_width.max,
+        reading=_reading("0.24 mm"),
+    )
+    case = _write_case(
+        tmp_path,
+        monkeypatch,
+        spec=spec,
+        stub_cli=not run_export_oracle,
+    )
+    spec, _, spec_path, check_path, symbol_path, footprint_path = case
+    exposed_pad = spec.package.exposed_pad
+    assert exposed_pad is not None
+    footprint_text = footprint_path.read_text(encoding="utf-8")
+    footprint_text, paste_margin_count = re.subn(
+        rf'(\(pad "{re.escape(exposed_pad.number)}".*?\(size [^)]+\))',
+        r"\1 (solder_paste_margin -0.15)",
+        footprint_text,
+        count=1,
+    )
+    assert paste_margin_count == 1
+    footprint_path.write_text(footprint_text, encoding="utf-8")
+    assert spec.pinout is not None
+    check = PartSpecReport(
+        artifact_kind="circuit_part_spec_check",
+        verdict="pass",
+        part_spec_sha256=part_spec_sha256(spec_path),
+        extraction_sha256="c" * 64,
+        pdf_sha256=spec.datasheet.sha256,
+        checked_readings=1,
+        findings=[],
+        pinout=geometry_for_names(
+            spec.pinout.labels_vision,
+            pin_count=spec.package.pin_count,
+            topology="quad",
+            page=spec.pinout.page,
+        ),
+    )
+    check_path.write_text(check.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    monkeypatch.delenv("CIRCUIT_AUTHORING_LANE", raising=False)
+    model_path = next((tmp_path / "models").rglob(f"{spec.package.drawing_id}.step"))
+    return library_mutation_fixture(
+        spec_path=spec_path,
+        spec_check_path=check_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        model_path=model_path,
+        work_dir=tmp_path / "real-verifier",
+        run_export_oracle=run_export_oracle,
+        seed=seed,
+    )
+
+
 def _finding_codes(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     codes: set[str] = set()
@@ -305,21 +380,168 @@ def test_every_static_verification_code_has_a_family() -> None:
         family_for_code("new_unmapped_finding")
 
 
-def test_mutation_operators_are_seeded_typed_and_reach_two_families(tmp_path: Path) -> None:
-    fixture = _fixture(tmp_path, seed=41)
+def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _known_good_library_fixture(tmp_path, monkeypatch, seed=41)
     first = run_mutations(fixture)
-    second = run_mutations(fixture)
 
     assert {operator.name for operator in MUTATION_OPERATORS} == EXPECTED_OPERATORS
-    assert first.model_dump() == second.model_dump()
     assert len(first.outcomes) == len(MUTATION_OPERATORS)
-    assert first.passed is True
-    assert first.single_oracle == []
-    assert first.undetected == []
-    assert all(outcome.status == "detected" for outcome in first.outcomes)
-    assert all(outcome.non_vision_family_count >= 2 for outcome in first.outcomes)
+    assert first.baseline_findings == ["pin_source_single"]
+    assert first.excluded_vision_findings > 0
+    assert first.export_oracle_run is False
+    assert first.passed is False
     assert all(outcome.finding_codes for outcome in first.outcomes)
     assert all(outcome.mutation.critical for outcome in first.outcomes)
+    assert {outcome.mutation.operator: tuple(outcome.families) for outcome in first.outcomes} == {
+        # This non-Docker matrix intentionally records the production verifier's
+        # exact coverage without KiCad's export oracle.
+        "symbol_adjacent_pin_swap": ("orientation", "pin_bijection"),
+        "symbol_pin_name_swap": ("orientation", "pin_bijection"),
+        "symbol_pin_number_offset": ("orientation", "pin_bijection"),
+        "symbol_reversed_pin_order": ("orientation", "pin_bijection"),
+        "footprint_mirror_x": ("land_geometry", "model_geometry", "orientation"),
+        "footprint_mirror_y": ("land_geometry", "model_geometry", "orientation"),
+        "footprint_rotate_90": ("land_geometry", "model_geometry", "orientation"),
+        "footprint_rotate_180": ("land_geometry", "model_geometry", "orientation"),
+        "footprint_rotate_270": ("land_geometry", "model_geometry", "orientation"),
+        "footprint_pad_shift_0_1mm": ("land_geometry", "model_geometry"),
+        "footprint_pitch_scale_1_02": ("land_geometry", "model_geometry"),
+        "footprint_ep_size_delta_20_percent": ("land_geometry",),
+        "footprint_mm_to_inch": ("land_geometry", "model_geometry"),
+        "footprint_inch_to_mm": ("land_geometry", "model_geometry"),
+        "footprint_removed_pad": (
+            "land_geometry",
+            "model_geometry",
+            "orientation",
+            "pin_bijection",
+        ),
+        "footprint_duplicated_pad_number": (
+            "land_geometry",
+            "model_geometry",
+            "orientation",
+            "pin_bijection",
+        ),
+        "footprint_swapped_pad_numbers": ("land_geometry", "model_geometry", "orientation"),
+        "partspec_min_nom_max_column_shift": (
+            "evidence",
+            "land_geometry",
+            "model_geometry",
+        ),
+        "partspec_drawing_view_flip": ("evidence", "model_geometry"),
+        "partspec_pin1_corner_rotation": ("evidence", "model_geometry"),
+        "partspec_sibling_package_mpn": ("evidence", "model_geometry"),
+        "model_mirror_x": ("model_geometry",),
+        "model_rotate_90": ("model_geometry",),
+        "model_rotate_180": ("model_geometry",),
+        "model_offset_0_1mm": ("model_geometry",),
+        "model_scale_25_4": ("model_geometry",),
+        "model_removed_pin1_marker": ("model_geometry",),
+    }
+
+
+def test_symbol_mutations_are_serialized_and_reach_real_verifier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _known_good_library_fixture(tmp_path, monkeypatch, seed=41)
+    original_verify = libverify.verify_library_part
+    called: list[Path] = []
+
+    def capture_verify(*args: object, **kwargs: object) -> libverify.LibraryVerification:
+        called.append(cast(Path, kwargs["symbol_lib"]))
+        return original_verify(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(libverify, "verify_library_part", capture_verify)
+    assert not [
+        finding for finding in fixture.verify(fixture.artifacts) if finding.severity == "error"
+    ]
+
+    expected = {
+        "symbol_adjacent_pin_swap": {
+            "symbol_pin_name",
+            "symbol_pinout_name_mismatch",
+        },
+        "symbol_pin_name_swap": {
+            "symbol_pin_name",
+            "symbol_pinout_name_mismatch",
+        },
+        "symbol_reversed_pin_order": {
+            "symbol_pin_name",
+            "symbol_pinout_name_mismatch",
+        },
+    }
+    operators = {operator.name: operator for operator in MUTATION_OPERATORS}
+    for name, expected_codes in expected.items():
+        mutated, _ = operators[name].apply(fixture.artifacts, fixture.seed)
+        findings = list(fixture.verify(mutated))
+        codes = {finding.code for finding in findings}
+        assert expected_codes <= codes
+        assert {family_for_code(code) for code in expected_codes} == {
+            "pin_bijection",
+            "orientation",
+        }
+        staged_symbol = called[-1]
+        parsed = parse_symbol(staged_symbol, fixture.artifacts.symbol.name)
+        assert parsed == mutated.symbol
+
+    assert len(called) == 4
+    assert len({path.parent for path in called}) == len(called)
+
+
+def test_symbol_mutations_reject_unchanged_number_name_maps(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path, seed=9)
+    numeric_indices = [
+        index for index, pin in enumerate(fixture.artifacts.symbol.pins) if pin.number.isdecimal()
+    ]
+    assert len(numeric_indices) >= 3
+    operators = {operator.name: operator for operator in MUTATION_OPERATORS}
+
+    duplicated_number_pins = list(fixture.artifacts.symbol.pins)
+    for index in numeric_indices:
+        duplicated_number_pins[index] = duplicated_number_pins[index].model_copy(
+            update={"number": "1", "name": f"PIN{index}"}
+        )
+    duplicate_number_artifacts = replace(
+        fixture.artifacts,
+        symbol=fixture.artifacts.symbol.model_copy(update={"pins": duplicated_number_pins}),
+    )
+    for name in ("symbol_adjacent_pin_swap", "symbol_pin_name_swap"):
+        with pytest.raises(MutationError):
+            operators[name].apply(duplicate_number_artifacts, fixture.seed)
+
+    reversed_pins = list(fixture.artifacts.symbol.pins)
+    for offset, index in enumerate(numeric_indices):
+        mirror = min(offset, len(numeric_indices) - 1 - offset)
+        reversed_pins[index] = reversed_pins[index].model_copy(
+            update={
+                "number": str(offset + 1),
+                "name": "PIN_A" if mirror != 1 else "PIN_B",
+            }
+        )
+    reversed_artifacts = replace(
+        fixture.artifacts,
+        symbol=fixture.artifacts.symbol.model_copy(update={"pins": reversed_pins}),
+    )
+    with pytest.raises(MutationError, match="number-to-name map"):
+        operators["symbol_reversed_pin_order"].apply(reversed_artifacts, fixture.seed)
+
+
+def test_library_verifier_fails_closed_without_kicad_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _known_good_library_fixture(tmp_path, monkeypatch, seed=9)
+    monkeypatch.setattr(kicad_cli, "command_prefix", lambda: ["/missing/kicad-cli"])
+    verifier = library_verifier(
+        work_dir=tmp_path / "missing-cli",
+        run_export_oracle=True,
+    )
+
+    with pytest.raises(MutationError, match="kicad-cli is unavailable"):
+        verifier(fixture.artifacts)
 
 
 def test_single_family_critical_mutations_fail_closed(tmp_path: Path) -> None:
@@ -344,8 +566,11 @@ def test_single_family_critical_mutations_fail_closed(tmp_path: Path) -> None:
     assert all(outcome.status == "single_oracle" for outcome in report.outcomes)
 
 
-def test_mutation_operators_change_their_declared_target(tmp_path: Path) -> None:
-    fixture = _fixture(tmp_path)
+def test_mutation_operators_change_their_declared_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _known_good_library_fixture(tmp_path, monkeypatch)
     for operator in MUTATION_OPERATORS:
         mutated, record = operator.apply(fixture.artifacts, 18)
         assert record.operator == operator.name

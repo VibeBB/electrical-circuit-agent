@@ -35,6 +35,7 @@ from circuit.partspec import (
 from circuit.report import DesignReport
 from circuit.sch_lint import SchLintReport
 from pinout_fixtures import pinout_drawing
+from test_mutation import _known_good_library_fixture  # pyright: ignore[reportPrivateUsage]
 
 
 def test_mcp_server_lists_expected_tools() -> None:
@@ -124,6 +125,12 @@ def test_mcp_server_lists_expected_tools() -> None:
         for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
         if name in {"circuit_library_metrics", "circuit_mutation_report"}
     } == {"circuit_library_metrics", "circuit_mutation_report"}
+    mutation_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_mutation_report"
+    )
+    assert mutation_schema["properties"]["run_export_oracle"]["default"] is True
     land_pattern_schema = next(
         schema
         for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -252,18 +259,20 @@ def test_library_metrics_and_mutation_report_mcp_tools(
     library = project / "library"
     library.mkdir(parents=True)
     metrics_output = tmp_path / "metrics.json"
-    mutation_input = library / "mutation-report.json"
     mutation_output = tmp_path / "mutation-copy.json"
-    report = mcp_server.mutation.MutationReport(
-        seed=9,
-        baseline_findings=[],
-        outcomes=[],
-        family_detection_rates={},
-        single_oracle=[],
-        undetected=[],
-        passed=True,
+    fixture_root = tmp_path / "known-good-fixture"
+    fixture_root.mkdir()
+    verifier_fixture = _known_good_library_fixture(fixture_root, monkeypatch, seed=9)
+    spec = verifier_fixture.artifacts.spec
+    spec_path = verifier_fixture.artifacts.source_spec_path
+    spec_check_path = verifier_fixture.artifacts.spec_check_path
+    assert spec_path is not None and spec_check_path is not None
+    symbol_lib = fixture_root / "library" / "Fixture.kicad_sym"
+    footprint_path = (
+        fixture_root / "library" / "Fixture.pretty" / f"{spec.package.drawing_id}.kicad_mod"
     )
-    mutation_input.write_text(report.model_dump_json(), encoding="utf-8")
+    model_path = next((fixture_root / "models").rglob(f"{spec.package.drawing_id}.step"))
+    report: mcp_server.mutation.MutationReport | None = None
     metrics = mcp_server.libmetrics.LibraryMetrics(
         accepted_parts=0,
         escapes=0,
@@ -284,6 +293,25 @@ def test_library_metrics_and_mutation_report_mcp_tools(
 
     monkeypatch.setattr(mcp_server.libmetrics, "compute_metrics", compute_metrics)
 
+    def run_real_baseline(
+        mutation_fixture: mcp_server.mutation.MutationFixture,
+    ) -> mcp_server.mutation.MutationReport:
+        nonlocal report
+        findings = list(mutation_fixture.verify(mutation_fixture.artifacts))
+        assert not [item for item in findings if item.severity == "error"]
+        report = mcp_server.mutation.MutationReport(
+            seed=mutation_fixture.seed,
+            baseline_findings=sorted(item.code for item in findings),
+            outcomes=[],
+            family_detection_rates={},
+            single_oracle=[],
+            undetected=[],
+            passed=True,
+            export_oracle_run=mutation_fixture.export_oracle_run,
+        )
+        return report
+
+    monkeypatch.setattr(mcp_server.mutation, "run_mutations", run_real_baseline)
     metric_result = asyncio.run(
         mcp_server.call_tool(
             "circuit_library_metrics",
@@ -295,7 +323,14 @@ def test_library_metrics_and_mutation_report_mcp_tools(
             "circuit_mutation_report",
             {
                 "project_path": str(project),
-                "report_path": str(mutation_input),
+                "spec_path": str(spec_path),
+                "spec_check_path": str(spec_check_path),
+                "symbol_lib": str(symbol_lib),
+                "symbol_name": spec.mpn,
+                "footprint_path": str(footprint_path),
+                "model_path": str(model_path),
+                "run_export_oracle": False,
+                "seed": 9,
                 "output_path": str(mutation_output),
             },
         )
@@ -303,6 +338,7 @@ def test_library_metrics_and_mutation_report_mcp_tools(
 
     assert metric_result.isError is False
     assert mutation_result.isError is False
+    assert report is not None
     assert called == [project]
     assert (
         mcp_server.libmetrics.LibraryMetrics.model_validate_json(metrics_output.read_bytes())
@@ -312,6 +348,52 @@ def test_library_metrics_and_mutation_report_mcp_tools(
         mcp_server.mutation.MutationReport.model_validate_json(mutation_output.read_bytes())
         == report
     )
+
+
+def test_mutation_report_mcp_defaults_to_export_oracle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, Any] = {}
+    report = mcp_server.mutation.MutationReport(
+        seed=1,
+        baseline_findings=[],
+        outcomes=[],
+        family_detection_rates={},
+        single_oracle=[],
+        undetected=[],
+        passed=True,
+        export_oracle_run=True,
+    )
+
+    def make_fixture(**kwargs: Any) -> mcp_server.mutation.MutationFixture:
+        captured["run_export_oracle"] = kwargs["run_export_oracle"]
+        return cast(mcp_server.mutation.MutationFixture, object())
+
+    def run_mutations(
+        _fixture: mcp_server.mutation.MutationFixture,
+    ) -> mcp_server.mutation.MutationReport:
+        return report
+
+    monkeypatch.setattr(mcp_server.mutation, "library_mutation_fixture", make_fixture)
+    monkeypatch.setattr(mcp_server.mutation, "run_mutations", run_mutations)
+    result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_mutation_report",
+            {
+                "project_path": str(tmp_path / "project"),
+                "spec_path": str(tmp_path / "part.json"),
+                "symbol_lib": str(tmp_path / "symbols.kicad_sym"),
+                "symbol_name": "Fixture",
+                "footprint_path": str(tmp_path / "Fixture.kicad_mod"),
+                "model_path": str(tmp_path / "Fixture.step"),
+            },
+        )
+    )
+
+    assert result.isError is False
+    assert captured["run_export_oracle"] is True
 
 
 def test_vision_compare_dispatch_returns_both_image_paths(

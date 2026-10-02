@@ -382,11 +382,11 @@ def _symbol_text(
     }
     property_text = "\n".join(f'(property "{key}" "{value}")' for key, value in properties.items())
     pins: list[str] = []
-    for number in pin_numbers:
+    for index, number in enumerate(pin_numbers):
         spec_pin = next((pin for pin in spec.pins if pin.number == number), None)
         name = name_overrides.get(number, spec_pin.name if spec_pin is not None else f"PIN{number}")
         pin_type = type_overrides.get(number, spec_pin.electrical_type if spec_pin else "passive")
-        x = x_overrides.get(number, 0.0)
+        x = x_overrides.get(number, float(index) * 2.54)
         pins.append(
             f'(pin {pin_type} line (at {x} 0 0) (length 2.54) (name "{name}") (number "{number}"))'
         )
@@ -475,6 +475,7 @@ def _write_case(
     pad_transform: PadTransform | None = None,
     symbol_kwargs: dict[str, object] | None = None,
     footprint_kwargs: dict[str, object] | None = None,
+    stub_cli: bool = True,
 ) -> tuple[PartSpec, LandPatternResult, Path, Path, Path, Path]:
     spec = _dual_spec() if spec is None else spec
     authoring_ref = Path("authoring") / "part" / "run-1"
@@ -490,7 +491,8 @@ def _write_case(
     (tmp_path / "models" / "fixture.step").write_text("ISO-10303-21;", encoding="utf-8")
     monkeypatch.setenv("TEST_3D_MODEL_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("TEST_3DMODEL_DIR", str(tmp_path / "models"))
-    _fake_cli(tmp_path, monkeypatch)
+    if stub_cli:
+        _fake_cli(tmp_path, monkeypatch)
     symbol_args = cast(dict[str, Any], symbol_kwargs or {})
     footprint_args = cast(dict[str, Any], dict(footprint_kwargs or {}))
     model_reference = f"${{TEST_3DMODEL_DIR}}/{spec.mpn}.3dshapes/{spec.package.drawing_id}.step"

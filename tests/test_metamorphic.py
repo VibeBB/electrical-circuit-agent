@@ -236,12 +236,13 @@ def _export_spec() -> PartSpec:
             extraction_path="fixture-extraction.json",
         ),
         package=PackageSpec(
-            family="custom",
+            family="chip",
             drawing_id="Fixture",
             pin_count=2,
-            body_length=Dimension(nom=3, reading=_reading("3")),
-            body_width=Dimension(nom=2, reading=_reading("2")),
+            body_length=Dimension(nom=1.4, reading=_reading("1.4")),
+            body_width=Dimension(nom=0.8, reading=_reading("0.8")),
             height=Dimension(nom=1, reading=_reading("1")),
+            lead_length=Dimension(nom=0.6, reading=_reading("0.6")),
             drawing_view="top",
             pin1_corner="top_left",
             pin1_reading=_reading("pin 1 at top left"),
@@ -266,7 +267,7 @@ def _export_spec() -> PartSpec:
 def _export_model() -> occt.Shape:
     return occt.compound(
         [
-            occt.box(-1.5, -1, 0.2, 3, 2, 0.8),
+            occt.box(-0.7, -0.4, 0.2, 1.4, 0.8, 0.8),
             occt.box(-1.3, -0.4, 0, 0.6, 0.8, 0.2),
             occt.box(0.7, -0.4, 0, 0.6, 0.8, 0.2),
         ]
