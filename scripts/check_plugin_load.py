@@ -19,6 +19,7 @@ PLUGIN_DIR = REPO_ROOT / "plugins" / "circuit"
 
 EXPECTED_AGENTS = {
     "circuit-brief",
+    "circuit-library",
     "circuit-layout",
     "circuit-part-author-a",
     "circuit-part-author-b",
@@ -31,6 +32,7 @@ EXPECTED_SKILLS = {
     "circuit-firmware",
     "circuit-konnect",
     "circuit-libraries",
+    "circuit-library-authoring",
     "circuit-library-guard",
     "circuit-verification",
     "circuit-workflow",

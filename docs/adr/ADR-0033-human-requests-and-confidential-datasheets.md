@@ -37,11 +37,27 @@ not be placed in ordinary project storage or sent to web tools.
 - The protection hook blocks terminal Git add/commit/push operations and web
   or fetch tool inputs that reference `.confidential` or a manifest-listed
   confidential path.
+- Project-owned library authoring is orchestrated by the `circuit-library`
+  agent and its ordered authoring skill. It delegates independent PartSpec
+  derivation to lanes A and B, compares only after both lanes commit, and
+  requires a fresh deterministic library verification and hash-bound human
+  review before completion. The authoring context must not read the golden
+  corpus or `.vision-control` sidecars.
+- The authoring flow stops and creates a HumanRequest for an unavailable or
+  mismatched datasheet, required substitute permission or alternative
+  evidence, `model_terminals_unseparable`, or lane disagreement that source
+  evidence cannot resolve. Requests preserve hashes, known facts, unknowns,
+  assessment, recommendation, and alternatives with risks. A missing, denied,
+  mismatched, or stale response does not authorize progress. Substitute
+  permission and alternative evidence do not downgrade deterministic
+  contradictions.
 
 ## Consequences
 
 Acquisition is a human-assisted evidence step, not an approval to use a
 mismatched document. Keyword checks are deterministic and fail closed, but do
-not replace deeper PartSpec re-derivation or visual review. The protection
+not replace deeper PartSpec re-derivation or visual review. HumanRequests make
+missing evidence and decisions explicit, while the dual authoring and
+hash-bound approval gates keep unresolved uncertainty visible. The protection
 hook and `.gitignore` are policy safeguards, not a security boundary against
 arbitrary code execution under the same account.

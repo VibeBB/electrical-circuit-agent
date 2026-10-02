@@ -23,8 +23,15 @@ requirements, and schematic authoring proceeds only after intake is `ready` and
 library verification is `pass`. The runtime MCP includes
 `circuit_brief_intake_check` and `circuit_brief_library_check`.
 
-The four sub-agents declare the same library-protection pre-tool hook,
+For project-owned library parts, `circuit-library` follows the ordered
+`circuit-library-authoring` skill: independent PartSpec lanes, evidence-bound
+verification, and hash-bound human review. It stops for a HumanRequest when
+the datasheet is unavailable or mismatched, substitute or alternative evidence
+is needed, model terminals cannot be separated, or lane disagreement remains.
+
+Project-facing agents declare the library-protection pre-tool hook,
 `max_budget_per_run: 3.0` per run, and usage examples in their frontmatter.
+The blind PartSpec lanes also enforce their lane-specific context guard.
 Plugin-level hooks provide a session-start doctor and a Stop-time projection of
 the `design-report.json` verdicts. The `circuit-library-guard` skill treats
 KiCad/CERN libraries as read-only and enforces use of `register_*_library`.

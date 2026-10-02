@@ -29,6 +29,10 @@ requirements conversation becomes a verified schematic and a routed board.
   produced netlist against the design brief. LLM self-reports and Konnect
   explanatory text are never promoted to a verdict — missing tools and
   unknowns fail closed.
+- **Evidence-backed library parts** — the `circuit-library` agent coordinates
+  independent datasheet authoring lanes, deterministic library verification,
+  source/provenance recording, and hash-bound human approval. Unavailable or
+  mismatched evidence stops for a HumanRequest rather than being guessed.
 - **Firmware cooperation** — `circuit_firmware_export` writes MCU pin
   connectivity for firmware-agent, and `circuit_firmware_check` confirms
   the returned firmware pin map against the circuit (ADR-0023).
@@ -47,8 +51,8 @@ Plugins → Add plugin) with:
 | Path | `plugins/circuit` |
 
 The plugin includes the `circuit` runtime MCP, a Konnect MCP configuration,
-brief/schematic/layout/review sub-agents, doctor/design/ERC/DRC/export
-commands, lifecycle hooks, and six skills. Because MCP configuration is not
+brief/library/schematic/layout/review sub-agents, doctor/design/ERC/DRC/export
+commands, lifecycle hooks, and nine skills. Because MCP configuration is not
 automatically inherited by sub-agents from the parent, each AgentDefinition
 declares the same server map explicitly.
 
@@ -81,8 +85,9 @@ Commands (agent-facing):
 - `/circuit:export` — regenerate manufacturing artifacts only
 
 Sub-agents (`task` tool): `circuit-brief` (requirement/intake
-conversation), `circuit-schematic` and `circuit-layout` (authoring), and
-`circuit-review` (advisory review — no pass/fail authority).
+conversation), `circuit-library` (evidence-backed library parts),
+`circuit-schematic` and `circuit-layout` (authoring), and `circuit-review`
+(advisory review — no pass/fail authority).
 
 ### Using the core directly
 
@@ -97,7 +102,7 @@ command surface.
 user
   -> OpenHands Agent Canvas
   -> plugins/circuit
-  -> circuit-brief
+  -> circuit-brief / circuit-library
   -> circuit-schematic / circuit-layout / circuit-review
   -> Konnect MCP + kicad-cli
   -> KiCad project files
@@ -150,6 +155,10 @@ the license conditions that apply to their own usage.
   `circuit_connectivity_check` は生成 netlist を設計ブリーフと照合します。
   LLM の自己申告や Konnect の説明文を合否へ昇格させることはなく、
   ツール欠落・不明は fail-closed で不合格です。
+- **根拠に基づくライブラリ部品** — `circuit-library` エージェントが
+  独立した datasheet authoring lane、決定論的ライブラリ検証、source/provenance
+  の記録、hash-bound の人手承認を調整します。取得不能または不一致の根拠を
+  推測せず、HumanRequest で停止します。
 - **ファームウェア連携** — `circuit_firmware_export` が firmware-agent 向けに
   MCU ピンの接続情報を書き出し、`circuit_firmware_check` が返ってきた
   ファームウェアのピンマップを回路と照合します（ADR-0023）。
@@ -168,8 +177,8 @@ OpenHands プラグイン UI（Agent Canvas → Customize → Plugins → Add pl
 | Path | `plugins/circuit` |
 
 プラグインには `circuit` runtime MCP、Konnect MCP 設定、
-brief・schematic・layout・review の各サブエージェント、
-doctor/design/ERC/DRC/export コマンド、ライフサイクル hook、6つのスキルが
+brief・library・schematic・layout・review の各サブエージェント、
+doctor/design/ERC/DRC/export コマンド、ライフサイクル hook、9つのスキルが
 含まれます。サブエージェントは親から MCP 設定を自動継承しないため、
 各 AgentDefinition に同じ server map を明示しています。
 
@@ -201,6 +210,7 @@ docker run --rm --user circuit \
 - `/circuit:export` — 製造成果物のみ再生成
 
 サブエージェント（`task` ツール）: `circuit-brief`（要件・intake 対話）、
+`circuit-library`（根拠に基づくライブラリ部品）、
 `circuit-schematic` と `circuit-layout`（オーサリング）、
 `circuit-review`（助言レビュー — 合否権限なし）。
 
