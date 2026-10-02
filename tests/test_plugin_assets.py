@@ -13,16 +13,18 @@ PLUGIN = ROOT / "plugins" / "circuit"
 def test_plugin_loads_all_assets() -> None:
     plugin = Plugin.load(PLUGIN)
     assert plugin.name == "circuit"
-    assert len(plugin.agents) == 6
+    assert len(plugin.agents) == 7
     assert {agent.name for agent in plugin.agents} == {
         "circuit-brief",
         "circuit-schematic",
         "circuit-layout",
+        "circuit-library",
         "circuit-review",
         "circuit-part-author-a",
         "circuit-part-author-b",
     }
-    assert len(plugin.skills) == 8
+    assert len(plugin.skills) == 9
+    assert any(skill.name == "circuit-library-authoring" for skill in plugin.skills)
     assert set(plugin.mcp_config) == {"circuit", "konnect"}
     assert plugin.hooks is not None
     assert plugin.entry_slash_command == "/circuit:doctor"

@@ -14,6 +14,11 @@ triggers:
 
 # Circuit libraries
 
+For new project-owned parts, use the ordered
+[`circuit-library-authoring`](../circuit-library-authoring/SKILL.md) workflow
+and its `circuit-library` orchestrator. It requires independent PartSpec lanes,
+fresh verification, and hash-bound human approval.
+
 The image provides official KiCad libraries through the KiCad packages and the
 pinned CERN library at `/opt/circuit/libraries/cern-kicad-libs`. Preserve each
 library's license and provenance. Never edit files under `libraries/` or either

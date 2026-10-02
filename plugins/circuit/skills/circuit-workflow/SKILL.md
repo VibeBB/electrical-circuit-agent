@@ -23,3 +23,8 @@ authoritative netlist connectivity check before ERC. Save before running ERC or 
 and use the circuit MCP server as the deterministic verification boundary.
 When the board has an MCU, export its pin connectivity for firmware-agent and confirm the
 returned pin map with `circuit_firmware_check` (circuit-firmware skill).
+
+For each new project-owned part, delegate library authoring to `circuit-library`
+and follow the ordered [`circuit-library-authoring`](../circuit-library-authoring/SKILL.md)
+skill before schematic authoring. Do not route around its HumanRequest stops or
+the required hash-bound library review.

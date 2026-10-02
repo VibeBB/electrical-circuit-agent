@@ -59,6 +59,16 @@ policy safeguards, not a security boundary. Verification rejects a
 confidential datasheet or extraction path outside that store. See
 [ADR-0033](adr/ADR-0033-human-requests-and-confidential-datasheets.md).
 
+Project-owned library parts are orchestrated by the `circuit-library` agent
+using the ordered `circuit-library-authoring` skill. The flow searches official
+manufacturer sources and reusable candidates, authors independent PartSpecs
+through lanes A and B, verifies generated symbol/footprint/model artifacts
+against source evidence and the export oracle, and waits for approval bound to
+the current hashes. Unavailable or mismatched datasheets, required substitute
+or alternative evidence, `model_terminals_unseparable`, and unresolved lane
+disagreement stop the flow for a HumanRequest; neither that response nor review
+approval can override deterministic contradictions.
+
 Pinout geometry is freshly derived for the four supported leaded and no-lead
 quad/dual families, then compared with footprint pad order and symbol names.
 Package pin-1 corners always use top-view coordinates; per-pin view metadata
