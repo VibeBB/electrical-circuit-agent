@@ -256,6 +256,8 @@ def test_real_mutation_matrix_passes_in_tools_image(
         monkeypatch,
         seed=32032,
     )
+    for path in (tmp_path, *tmp_path.rglob("*")):
+        path.chmod(0o777 if path.is_dir() else 0o666)
     spec = fixture.artifacts.spec
     spec_path = fixture.artifacts.source_spec_path
     assert spec_path is not None
@@ -301,6 +303,7 @@ def test_real_mutation_matrix_passes_in_tools_image(
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode in {0, 1}, result.stderr + result.stdout
+    assert output_path.is_file(), result.stderr + result.stdout
     report = json.loads(output_path.read_text(encoding="utf-8"))
     assert set(report["baseline_findings"]) <= {
         "extraction_stale",
