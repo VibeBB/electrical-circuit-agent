@@ -154,7 +154,10 @@ def _datasheet_request() -> Any:
         unknown=["The package drawing remains unverified."],
         agent_assessment=(
             "A datasheet matching the requested manufacturer part number and package evidence "
-            "is needed before the library can proceed."
+            "is needed before the library can proceed. The package drawing, pinout, orderable "
+            "variants, and mechanical dimensions must be checked against the received source. "
+            "Until those claims are supported by evidence, the library artifacts remain blocked "
+            "and no release decision is justified."
         ),
         recommendation="Provide the requested datasheet.",
         recommendation_rationale="The source evidence is required to verify the package.",

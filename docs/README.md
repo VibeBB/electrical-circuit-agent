@@ -45,6 +45,7 @@
 | [0030](adr/ADR-0030-KLC-test-board-and-vision-oracles.md) | KLC, test-board, and vision oracles |
 | [0031](adr/ADR-0031-step-model-generation-and-inspection.md) | Deterministic STEP model generation and inspection |
 | [0032](adr/ADR-0032-library-release-evidence.md) | Golden-corpus, mutation, and escape-rate release evidence |
+| [0033](adr/ADR-0033-human-requests-and-confidential-datasheets.md) | Human requests and confidential datasheets |
 
 ## Research
 

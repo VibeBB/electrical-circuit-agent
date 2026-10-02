@@ -461,6 +461,18 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_datasheet_check_received",
+        "Check a received datasheet against a datasheet acquisition request",
+        {
+            "type": "object",
+            "properties": {
+                "pdf_path": {"type": "string"},
+                "request_path": {"type": "string"},
+            },
+            "required": ["pdf_path", "request_path"],
+        },
+    ),
+    (
         "circuit_vision_read",
         "Create datasheet image crops for visual reading; every image must receive an answer "
         "and a multi-sentence impression describing appearance, legibility, ambiguity, and "
@@ -1022,6 +1034,7 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_stackup": _anno("Stackup", write=True),
     "circuit_rasterize": _anno("Rasterize", write=True),
     "circuit_datasheet_extract": _anno("Datasheet extraction", write=True),
+    "circuit_datasheet_check_received": _anno("Check received datasheet", write=True),
     "circuit_vision_read": _anno("Create datasheet vision reads", write=True),
     "circuit_vision_compare": _anno("Compare library art with datasheet", write=True),
     "circuit_model_generate": _anno("Generate deterministic STEP model", write=True),
@@ -1253,6 +1266,7 @@ def _authoring_tool(name: str, args: dict[str, Any]) -> tuple[Any, list[Path]] |
 
 
 _PART_BUILD_TOOL_NAMES = {
+    "circuit_datasheet_check_received",
     "circuit_datasheet_extract",
     "circuit_part_spec_check",
     "circuit_land_pattern",
@@ -1263,6 +1277,13 @@ _PART_BUILD_TOOL_NAMES = {
 
 
 def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
+    if name == "circuit_datasheet_check_received":
+        pdf_path = Path(str(args["pdf_path"]))
+        request = humanrequest.load_request(Path(str(args["request_path"])))
+        return [
+            finding.model_dump(mode="json")
+            for finding in datasheet.check_received(pdf_path, request)
+        ]
     if name == "circuit_datasheet_extract":
         source = Path(str(args["pdf_path"]))
         output = args.get("output_dir")

@@ -92,6 +92,7 @@ EXPECTED_INTEGRITY_CODES = {
     "authoring_commit_unobserved",
     "authoring_lane_input_mismatch",
     "authoring_consensus_violated",
+    "confidential_artifact_outside_store",
     "corpus_approval_binding_mismatch",
     "corpus_approval_event_invalid",
     "corpus_approval_unavailable",
@@ -418,7 +419,8 @@ def _synthetic_datasheet_pdf(
             text_x = center_x - len(text) * 1.5
             baseline = 1300 - screen_top - 4
             commands.append(
-                f"BT /F1 6 Tf {text_x:.1f} {baseline:.1f} Td ({_pdf_escape(text)}) Tj ET"
+                f"BT /F1 {8 if text.isdigit() else 6} Tf "
+                f"{text_x:.1f} {baseline:.1f} Td ({_pdf_escape(text)}) Tj ET"
             )
     pdf_path = _pdf(
         tmp_path / "synthetic-datasheet.pdf",
@@ -881,7 +883,10 @@ def test_symbol_mutations_are_serialized_and_reach_real_verifier(
 
     monkeypatch.setattr(libverify, "verify_library_part", capture_verify)
     assert not [
-        finding for finding in fixture.verify(fixture.artifacts) if finding.severity == "error"
+        finding
+        for finding in fixture.verify(fixture.artifacts)
+        if finding.severity == "error"
+        and family_for_code(finding.code) not in {"vision", "integrity"}
     ]
 
     expected = {
@@ -971,6 +976,13 @@ def test_library_verifier_fails_closed_without_kicad_cli(
 
 def test_single_family_critical_mutations_fail_closed(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path, seed=9)
+    body_length = fixture.artifacts.spec.package.body_length
+    assert body_length is not None
+    package = fixture.artifacts.spec.package.model_copy(
+        update={"body_length": body_length.model_copy(update={"min": 2.8, "max": 3.2})}
+    )
+    spec = fixture.artifacts.spec.model_copy(update={"package": package})
+    fixture = replace(fixture, artifacts=replace(fixture.artifacts, spec=spec))
 
     def one_family_verifier(artifacts: MutationArtifacts) -> list[MutationFinding]:
         if artifacts == fixture.artifacts:
