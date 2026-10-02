@@ -38,11 +38,11 @@ authoring evidence.
    mismatched, create a `datasheet_acquisition` HumanRequest with
      `circuit_human_request_create` and stop. Read only its trusted response
      with `circuit_human_request_status`; a provided PDF must be attached to
-   that same user response and marked confidential when required. Re-extract
-   the received PDF and call the H2 Python API
-   `datasheet.check_received(pdf, request)` with the stored acquisition
-   request. There is no dedicated received-PDF MCP tool; fail closed on any
-   finding and do not use a PDF whose target MPN, revision, or required
+   that same user response and marked confidential when required. Call the
+   `circuit_datasheet_check_received` MCP tool with `pdf_path` set to the
+   received PDF and `request_path` set to its stored acquisition request.
+   Findings are normal tool results; fail closed on any finding or `isError`
+   response, and do not use a PDF whose target MPN, revision, or required
    sections do not validate. Never send confidential paths or content to web
    tools.
 
