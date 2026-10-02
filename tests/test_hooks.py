@@ -767,6 +767,26 @@ def test_intake_attachments_records_non_data_urls(tmp_path: Path) -> None:
     assert record["reason"] == "non-data-url"
 
 
+def test_intake_attachments_does_not_persist_undecodable_url_data(tmp_path: Path) -> None:
+    events = tmp_path / "events"
+    events.mkdir()
+    url = "data:image/png;base64,private-datasheet-token"
+    _write_event(events, "event-1.json", "user", [url])
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    result = _run_attach_hook({"working_dir": str(workdir)}, events)
+
+    assert result.returncode == 0
+    manifest = workdir / "intake" / "attachments" / "manifest.jsonl"
+    text = manifest.read_text(encoding="utf-8")
+    record = json.loads(text.splitlines()[0])
+    assert record["materialized"] is False
+    assert record["reason"] == "undecodable"
+    assert "url_prefix" not in record
+    assert "private-datasheet-token" not in text
+
+
 def test_intake_attachments_fails_open_without_events_dir(tmp_path: Path) -> None:
     result = _run_attach_hook({"working_dir": str(tmp_path)}, None)
     assert result.returncode == 0
