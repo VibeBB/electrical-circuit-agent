@@ -304,12 +304,14 @@ def test_library_metrics_and_mutation_report_mcp_tools(
     assert metric_result.isError is False
     assert mutation_result.isError is False
     assert called == [project]
-    assert mcp_server.libmetrics.LibraryMetrics.model_validate_json(
-        metrics_output.read_bytes()
-    ) == metrics
-    assert mcp_server.mutation.MutationReport.model_validate_json(
-        mutation_output.read_bytes()
-    ) == report
+    assert (
+        mcp_server.libmetrics.LibraryMetrics.model_validate_json(metrics_output.read_bytes())
+        == metrics
+    )
+    assert (
+        mcp_server.mutation.MutationReport.model_validate_json(mutation_output.read_bytes())
+        == report
+    )
 
 
 def test_vision_compare_dispatch_returns_both_image_paths(
@@ -1120,7 +1122,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 45
+            assert len(tools.tools) == 47
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

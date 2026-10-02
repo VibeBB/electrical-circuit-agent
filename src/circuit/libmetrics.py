@@ -114,10 +114,12 @@ def _mutation_report_path(project: Path) -> Path:
 
 
 def _critical_field(pointer: str) -> str | None:
-    try:
-        tokens = libreview._pointer_tokens(pointer)
-    except ValueError:
+    if not pointer.startswith("/"):
         return None
+    raw_tokens = pointer[1:].split("/")
+    if any(re.search(r"~(?![01])", token) for token in raw_tokens):
+        return None
+    tokens = [token.replace("~1", "/").replace("~0", "~") for token in raw_tokens]
     lowered = [token.casefold() for token in tokens]
     if not lowered:
         return None
@@ -125,11 +127,12 @@ def _critical_field(pointer: str) -> str | None:
         return "view"
     if lowered[0] == "pins":
         return "pin_map"
-    if lowered[0] == "pinout":
-        if any("label" in token or "pin" in token for token in lowered[1:]):
-            return "pin_map"
-    if "model_orientation" in lowered or "rotation" in lowered or (
-        "model" in lowered and "orientation" in lowered
+    if lowered[0] == "pinout" and any("label" in token or "pin" in token for token in lowered[1:]):
+        return "pin_map"
+    if (
+        "model_orientation" in lowered
+        or "rotation" in lowered
+        or ("model" in lowered and "orientation" in lowered)
     ):
         return "model_orientation"
     if "pin1_corner" in lowered or "pin1" in lowered:
@@ -199,7 +202,7 @@ def _current_review_status(
             symbol_name=str(inputs["symbol_name"]),
             footprint_path=footprint_path,
             library_dir=library_dir,
-            density=cast(Any, density_value),
+            density=density_value,
             tolerance_mm=float(inputs.get("tolerance_mm", 0.02)),
             model_required=bool(inputs.get("model_required", True)),
             pin_source_path=pin_source_path,
@@ -301,10 +304,12 @@ def _correction_escapes(
             or inputs.get("pdf_sha256") != record.pdf_sha256
             or packet_document.get("approvable") is not True
             or not isinstance(part_check, dict)
-            or part_check.get("verdict") != "pass"
             or not isinstance(verification, dict)
-            or verification.get("verdict") != "pass"
         ):
+            continue
+        part_check_data = cast(dict[str, Any], part_check)
+        verification_data = cast(dict[str, Any], verification)
+        if part_check_data.get("verdict") != "pass" or verification_data.get("verdict") != "pass":
             continue
         escapes.add((record.mpn, record.pdf_sha256))
     return escapes, findings
@@ -397,8 +402,7 @@ def require_relaxation_supported(
         raise LibraryMetricsError("review_relaxation_not_supported_by_metrics") from exc
     if (
         metrics != computed
-        or
-        metrics.corpus_manifest_sha256 != current_manifest_hash
+        or metrics.corpus_manifest_sha256 != current_manifest_hash
         or metrics.mutation_report_sha256 != current_report_hash
         or not metrics.release_relaxation_supported
         or metrics.accepted_parts < 299

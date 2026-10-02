@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 import pytest
@@ -52,10 +53,7 @@ def test_parse_ibis_pin_section_and_ignore_other_sections(tmp_path: Path) -> Non
 
 def test_parse_bsdl_pin_map_across_string_fragments(tmp_path: Path) -> None:
     path = tmp_path / "part.bsdl"
-    content = (
-        "constant PIN_MAP_STRING : PIN_MAP_STRING := "
-        '"1 : VDD, 2 : GND, " & "3 : NC";\n'
-    )
+    content = 'constant PIN_MAP_STRING : PIN_MAP_STRING := "1 : VDD, 2 : GND, " & "3 : NC";\n'
     path.write_text(content, encoding="utf-8")
 
     source = parse_bsdl(path)
@@ -109,7 +107,7 @@ def test_malformed_and_unsupported_pin_sources_fail_closed(
     path = tmp_path / f"part{suffix}"
     path.write_text(content, encoding="utf-8")
 
-    with pytest.raises(PinSourceError, match=message):
+    with pytest.raises(PinSourceError, match=re.escape(message)):
         parse_pin_source(path)
 
 

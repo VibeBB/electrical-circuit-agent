@@ -1540,9 +1540,9 @@ def test_independent_pin_source_comparison_and_single_source_warning(
         "pin_source_single",
     } & _codes(matched)
     assert matched.inputs.pin_source_path is not None
-    assert matched.inputs.pin_source_sha256 == hashlib.sha256(
-        pin_source_path.read_bytes()
-    ).hexdigest()
+    assert (
+        matched.inputs.pin_source_sha256 == hashlib.sha256(pin_source_path.read_bytes()).hexdigest()
+    )
 
     bad_rows = [f"{spec.pins[0].number} WRONG MODEL"]
     pin_source_path.write_text("[Pin]\n" + "\n".join(bad_rows) + "\n", encoding="utf-8")

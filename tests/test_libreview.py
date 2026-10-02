@@ -1556,12 +1556,14 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
         tolerance_mm: float,
         model_required: bool,
         rules: Any,
+        pin_source_path: Path | None,
         output_path: Path,
     ) -> LibraryVerification:
         assert json.loads(spec_check_path.read_text(encoding="utf-8"))["verdict"] == fresh_verdict
         assert reference.source == "datasheet"
         assert reference.rule_chain == rules.chain == ["builtin:kicad-generator"]
         del library_dir, model_required
+        assert pin_source_path is not None
         return LibraryVerification(
             artifact_kind="circuit_library_verification",
             verdict=fresh_verdict,
@@ -1667,15 +1669,13 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert review["footprint_tuning"]["evidence"][0]["sha256"] == lineage.evidence[0].sha256
     assert review["footprint_tuning"]["intentional_deviations"][0]["pad"] == "1"
     assert review["inputs"]["authoring_sha256s"] == sorted(comparison.sealed.values())
-    assert review["inputs"]["pin_source_sha256"] == hashlib.sha256(
-        pin_source_path.read_bytes()
-    ).hexdigest()
+    assert (
+        review["inputs"]["pin_source_sha256"]
+        == hashlib.sha256(pin_source_path.read_bytes()).hexdigest()
+    )
     assert review["pin_sources"]["single_source"] is False
     assert review["pin_sources"]["class_a"]["sha256"] == review["inputs"]["part_spec_sha256"]
-    assert (
-        review["pin_sources"]["class_b"]["sha256"]
-        == review["inputs"]["pin_source_sha256"]
-    )
+    assert review["pin_sources"]["class_b"]["sha256"] == review["inputs"]["pin_source_sha256"]
     assert review["artifact_hashes"]["pin_source_sha256"] == review["inputs"]["pin_source_sha256"]
     assert review["artifact_hashes"]["authoring:a"] == comparison.sealed["a"]
     if regressed:

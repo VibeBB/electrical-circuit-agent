@@ -52,12 +52,6 @@ from .lineage import (
 )
 from .model3d import GENERATOR_VERSION, GeneratedModel
 from .modeloracle import ModelExportReport, verify_model_export
-from .pinsource import (
-    PinSourceComparison,
-    compare_pin_sources,
-    parse_pin_source,
-    source_from_part_spec,
-)
 from .partspec import (
     Dimension,
     LandPad,
@@ -67,6 +61,12 @@ from .partspec import (
     part_spec_sha256,
 )
 from .pinout import PinoutGeometry
+from .pinsource import (
+    PinSourceComparison,
+    compare_pin_sources,
+    parse_pin_source,
+    source_from_part_spec,
+)
 from .ruleprofile import EffectiveRules, load_rules
 
 if TYPE_CHECKING:

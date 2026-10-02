@@ -134,11 +134,11 @@ def test_human_confirmation_requires_hash_bound_pr_b_event(
         manufacturer="Example",
         mpn="FIXTURE",
         package_family="custom",
-        datasheet={
-            "url": "https://example.invalid/fixture.pdf",
-            "sha256": "c" * 64,
-            "revision": "A",
-        },
+        datasheet=corpus.CorpusDatasheet(
+            url="https://example.invalid/fixture.pdf",
+            sha256="c" * 64,
+            revision="A",
+        ),
         truth_path="truth/fixture.json",
         truth_status="human_confirmed",
         confirmed_by="Test Reviewer",
@@ -149,14 +149,14 @@ def test_human_confirmation_requires_hash_bound_pr_b_event(
     approval_dir = tmp_path / "corpus" / "approvals"
     approval_dir.mkdir(parents=True)
     approval = corpus.CorpusApproval(
-        schema_name="circuit_corpus_truth_approval",
+        schema="circuit_corpus_truth_approval",
         version=1,
         entry_id=entry.id,
         packet_id=packet_id,
         truth_sha256=truth_digest,
         event_sha256=event_digest,
         reviewer="Test Reviewer",
-        confirmed_at=entry.confirmed_at,
+        confirmed_at="2026-01-01T00:00:00Z",
     )
     (approval_dir / "fixture.json").write_text(
         approval.model_dump_json(by_alias=True),

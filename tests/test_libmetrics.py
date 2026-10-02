@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -175,7 +176,7 @@ def test_metrics_consume_hash_bound_approvals_and_critical_corrections(
     corpus_path, report_path = _project_files(project)
     spec = _spec()
     spec_path = project / "part.json"
-    spec_path.parent.mkdir(parents=True)
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(spec.model_dump_json(), encoding="utf-8")
     approved_id = "b" * 16
     rejected_id = "c" * 16
@@ -204,22 +205,25 @@ def test_metrics_consume_hash_bound_approvals_and_critical_corrections(
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(
-        libreview,
-        "current_packet_id",
-        lambda _path, **_kwargs: _path.parent.name if _path.parent.name in (approved_id, rejected_id) else approved_id,
-    )
-    monkeypatch.setattr(
-        libreview,
-        "review_status",
-        lambda _library, _spec, packet_id, **_kwargs: libreview.ReviewStatus(
+    def current_packet_id_for_fixture(path: Path, **_kwargs: Any) -> str:
+        return path.parent.name if path.parent.name in (approved_id, rejected_id) else approved_id
+
+    def approved_review_status(
+        _library: Path,
+        _spec: PartSpec,
+        packet_id: str,
+        **_kwargs: Any,
+    ) -> libreview.ReviewStatus:
+        return libreview.ReviewStatus(
             artifact_kind="circuit_library_review_status",
             packet_id=packet_id,
             state="approved",
             reasons=[],
             decisions=[],
-        ),
-    )
+        )
+
+    monkeypatch.setattr(libreview, "current_packet_id", current_packet_id_for_fixture)
+    monkeypatch.setattr(libreview, "review_status", approved_review_status)
     decision = libreview.ReviewDecision(
         packet_id=rejected_id,
         decision="reject",
@@ -231,7 +235,11 @@ def test_metrics_consume_hash_bound_approvals_and_critical_corrections(
         reasons=[],
         integrity_valid=True,
     )
-    monkeypatch.setattr(libreview, "load_decisions", lambda _library, _packet: [decision])
+
+    def load_decisions_for_fixture(_library: Path, _packet: str) -> list[libreview.ReviewDecision]:
+        return [decision]
+
+    monkeypatch.setattr(libreview, "load_decisions", load_decisions_for_fixture)
 
     metrics = libmetrics.compute_metrics(project)
 
@@ -252,7 +260,7 @@ def test_metrics_ignore_corrections_when_gates_did_not_all_pass(
     _project_files(project)
     spec = _spec()
     spec_path = project / "part.json"
-    spec_path.parent.mkdir(parents=True)
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(spec.model_dump_json(), encoding="utf-8")
     packet_id = "e" * 16
     _review_packet(library, spec_path, packet_id, passing=False)
@@ -277,18 +285,26 @@ def test_metrics_ignore_corrections_when_gates_did_not_all_pass(
         + "\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(libreview, "current_packet_id", lambda _path, **_kwargs: packet_id)
-    monkeypatch.setattr(
-        libreview,
-        "review_status",
-        lambda _library, _spec, _packet, **_kwargs: libreview.ReviewStatus(
+
+    def current_packet_id_for_fixture(_path: Path, **_kwargs: Any) -> str:
+        return packet_id
+
+    def approved_review_status(
+        _library: Path,
+        _spec: PartSpec,
+        _packet: str,
+        **_kwargs: Any,
+    ) -> libreview.ReviewStatus:
+        return libreview.ReviewStatus(
             artifact_kind="circuit_library_review_status",
             packet_id=packet_id,
             state="approved",
             reasons=[],
             decisions=[],
-        ),
-    )
+        )
+
+    monkeypatch.setattr(libreview, "current_packet_id", current_packet_id_for_fixture)
+    monkeypatch.setattr(libreview, "review_status", approved_review_status)
     decision = libreview.ReviewDecision(
         packet_id=packet_id,
         decision="reject",
@@ -300,7 +316,11 @@ def test_metrics_ignore_corrections_when_gates_did_not_all_pass(
         reasons=[],
         integrity_valid=True,
     )
-    monkeypatch.setattr(libreview, "load_decisions", lambda _library, _packet: [decision])
+
+    def load_decisions_for_fixture(_library: Path, _packet: str) -> list[libreview.ReviewDecision]:
+        return [decision]
+
+    monkeypatch.setattr(libreview, "load_decisions", load_decisions_for_fixture)
 
     metrics = libmetrics.compute_metrics(project)
 
@@ -363,7 +383,11 @@ def test_review_relaxation_requires_fresh_hash_bound_metrics(
         release_relaxation_supported=True,
         findings=[],
     )
-    monkeypatch.setattr(libmetrics, "compute_metrics", lambda _project: metrics)
+
+    def compute_metrics_for_fixture(_project: Path) -> LibraryMetrics:
+        return metrics
+
+    monkeypatch.setattr(libmetrics, "compute_metrics", compute_metrics_for_fixture)
     metrics_path = project / "library" / "library-metrics.json"
     metrics_path.write_text(metrics.model_dump_json(), encoding="utf-8")
 

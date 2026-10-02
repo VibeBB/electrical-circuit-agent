@@ -3135,12 +3135,8 @@ def build_review_packet(
     """Build fresh deterministic and human-review evidence for a library part."""
     spec = load_part_spec(spec_path)
     spec_dir = spec_path.resolve().parent
-    pin_source_sha256 = (
-        _optional_sha256(pin_source_path) if pin_source_path is not None else None
-    )
-    pin_source_kind = (
-        pin_source_path.suffix.casefold() if pin_source_path is not None else None
-    )
+    pin_source_sha256 = _optional_sha256(pin_source_path) if pin_source_path is not None else None
+    pin_source_kind = pin_source_path.suffix.casefold() if pin_source_path is not None else None
     pin_source_document = _pin_source_review_document(
         spec,
         spec_path=spec_path,

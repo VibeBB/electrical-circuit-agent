@@ -37,15 +37,15 @@ from . import (
     intake,
     kicad_cli,
     landpattern,
+    libmetrics,
     libraries,
     libraryvision,
-    libmetrics,
-    mutation,
     libreuse,
     libreview,
     libsource,
     libverify,
     model3d,
+    mutation,
     netlist,
     partspec,
     raster,
@@ -1208,6 +1208,235 @@ def _authoring_tool(name: str, args: dict[str, Any]) -> tuple[Any, list[Path]] |
     return None
 
 
+_PART_BUILD_TOOL_NAMES = {
+    "circuit_datasheet_extract",
+    "circuit_part_spec_check",
+    "circuit_land_pattern",
+    "circuit_library_candidates",
+    "circuit_library_import",
+    "circuit_library_record",
+}
+
+
+def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
+    if name == "circuit_datasheet_extract":
+        source = Path(str(args["pdf_path"]))
+        output = args.get("output_dir")
+        if output is None:
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
+            output_dir = source.parent / f"datasheet-{digest}"
+        else:
+            output_dir = Path(str(output))
+        requested_pages = args.get("pages")
+        extraction = datasheet.extract_datasheet(
+            source,
+            output_dir,
+            pages=cast(list[int], requested_pages) if isinstance(requested_pages, list) else None,
+            dpi=int(args.get("dpi", 300)),
+        )
+        return {
+            **extraction.model_dump(mode="json"),
+            "extraction_path": str(output_dir / "extraction.json"),
+        }
+    if name == "circuit_part_spec_check":
+        spec_path = Path(str(args["part_spec_path"]))
+        spec = partspec.load_part_spec(spec_path)
+        extraction_path = Path(spec.datasheet.extraction_path)
+        if not extraction_path.is_absolute():
+            extraction_path = spec_path.resolve().parent / extraction_path
+        extraction = datasheet.load_extraction(extraction_path)
+        result = partspec.check_part_spec(
+            spec,
+            extraction,
+            spec_path=spec_path,
+            extraction_path=extraction_path,
+        )
+        output = _output_path(
+            spec_path,
+            _optional_string(args.get("output_path")),
+            "part-spec",
+        )
+        output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        return result
+    if name == "circuit_land_pattern":
+        spec_path = Path(str(args["part_spec_path"]))
+        spec = partspec.load_part_spec(spec_path)
+        library_dir_value = args.get("library_dir")
+        library_dir = (
+            Path(str(library_dir_value))
+            if isinstance(library_dir_value, str)
+            else spec_path.parent / "library"
+        )
+        rule_profile = _optional_string(args.get("rule_profile"))
+        rules = (
+            ruleprofile.load_rules(rule_profile, library_dir / "rules")
+            if rule_profile is not None
+            else None
+        )
+        density = cast(
+            landpattern.Density,
+            _literal(
+                args,
+                "density",
+                ("most", "nominal", "least"),
+                rules.density if rules is not None else "nominal",
+                context="circuit_land_pattern",
+            ),
+        )
+        result = landpattern.compute_land_pattern(spec, density, rules=rules)
+        output = _output_path(
+            spec_path,
+            _optional_string(args.get("output_path")),
+            "land-pattern",
+        )
+        output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        return result
+    if name == "circuit_library_candidates":
+        spec_path = Path(str(args["part_spec_path"]))
+        spec = partspec.load_part_spec(spec_path)
+        density = cast(
+            landpattern.Density,
+            _literal(
+                args,
+                "density",
+                ("most", "nominal", "least"),
+                "nominal",
+                context="circuit_library_candidates",
+            ),
+        )
+        reference = landpattern.compute_land_pattern(spec, density)
+        result = libreuse.find_candidates(
+            spec,
+            roots=libraries.default_roots(),
+            project_library_dir=spec_path.parent / "library",
+            reference=reference,
+            product=_optional_string(args.get("product")),
+        )
+        output = _output_path(
+            spec_path,
+            _optional_string(args.get("output_path")),
+            "library-candidates",
+        )
+        output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        return result
+    if name == "circuit_library_import":
+        source_path = Path(str(args["source_path"]))
+        library_dir = Path(str(args["library_dir"]))
+        license_data = args.get("license")
+        if not isinstance(license_data, dict):
+            raise ValueError("circuit_library_import requires a license object")
+        import_source = libsource.SourceInfoInput.model_validate(
+            {
+                "origin": args.get("origin"),
+                "vendor": args.get("vendor"),
+                "url": args.get("url"),
+                "retrieved_at": args.get("retrieved_at"),
+                "license": license_data,
+            }
+        )
+        symbol_names = args.get("symbol_names")
+        members = args.get("members")
+        result = libsource.import_library_item(
+            source_path,
+            library_dir,
+            str(args["nickname"]),
+            source=import_source,
+            symbol_names=cast(list[str], symbol_names) if isinstance(symbol_names, list) else None,
+            members=cast(list[str], members) if isinstance(members, list) else None,
+            replace=bool(args.get("replace", False)),
+        )
+        output = _output_path(
+            library_dir.parent / f"{args['nickname']}.json",
+            None,
+            "library-import",
+        )
+        output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        return result
+    if name == "circuit_library_record":
+        library_dir = Path(str(args["library_dir"]))
+        artifact_path = Path(str(args["artifact_path"]))
+        origin = args.get("origin")
+        source_info: libsource.SourceInfo | None = None
+        source_fields = ("origin", "vendor", "url", "license")
+        if any(args.get(field) is not None for field in source_fields):
+            if origin not in ("generated", "derived"):
+                raise ValueError(
+                    "source metadata for a new library record requires origin "
+                    "'generated' or 'derived'"
+                )
+            license_data = args.get("license")
+            if not isinstance(license_data, dict):
+                raise ValueError("source metadata requires a license object")
+            source_input = libsource.SourceInfoInput.model_validate(
+                {
+                    "origin": origin,
+                    "vendor": args.get("vendor"),
+                    "url": args.get("url"),
+                    "license": license_data,
+                }
+            )
+            resolved_artifact = artifact_path.resolve(strict=True)
+            relative_artifact = resolved_artifact.relative_to(library_dir.resolve())
+            source_info = libsource.SourceInfo(
+                **source_input.model_dump(),
+                original_path=relative_artifact.as_posix(),
+                original_sha256=hashlib.sha256(resolved_artifact.read_bytes()).hexdigest(),
+            )
+        part_spec_path = args.get("part_spec_path")
+        result = libsource.record_library_item(
+            library_dir,
+            artifact_path,
+            artifact=_literal(
+                args,
+                "artifact",
+                ("symbol", "footprint", "model3d"),
+                context="circuit_library_record",
+            ),
+            name=str(args["name"]),
+            source=source_info,
+            transformation=str(args["transformation"]),
+            part_spec_sha256=partspec.part_spec_sha256(Path(str(part_spec_path)))
+            if isinstance(part_spec_path, str)
+            else None,
+            derived_from=cast(list[str], args.get("derived_from", [])),
+        )
+        output = _output_path(
+            library_dir.parent / "library.json",
+            None,
+            "library-record",
+        )
+        output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        return result
+    raise ValueError(f"unsupported part build tool: {name}")
+
+
+def _library_metrics_tool(name: str, args: dict[str, Any]) -> Any:
+    if name == "circuit_library_metrics":
+        project_path = Path(str(args["project_path"]))
+        result = libmetrics.compute_metrics(project_path)
+        output = Path(
+            _optional_string(args.get("output_path"))
+            or (project_path / "library" / "library-metrics.json")
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        return result
+    if name == "circuit_mutation_report":
+        project_path = Path(str(args["project_path"]))
+        report_path = Path(
+            _optional_string(args.get("report_path"))
+            or (project_path / "library" / "mutation-report.json")
+        )
+        mutation_report = mutation.MutationReport.model_validate_json(report_path.read_bytes())
+        output_value = _optional_string(args.get("output_path"))
+        if output_value is not None:
+            output = Path(output_value)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(mutation_report.model_dump_json(indent=2), encoding="utf-8")
+        return mutation_report
+    raise ValueError(f"unsupported library metrics tool: {name}")
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     return tool_specs()
@@ -1553,193 +1782,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 "images": [str(path) for path in images],
             }
             image_paths = images
-        elif name == "circuit_datasheet_extract":
-            source = Path(str(args["pdf_path"]))
-            output = args.get("output_dir")
-            if output is None:
-                digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
-                output_dir = source.parent / f"datasheet-{digest}"
-            else:
-                output_dir = Path(str(output))
-            requested_pages = args.get("pages")
-            extraction = datasheet.extract_datasheet(
-                source,
-                output_dir,
-                pages=cast(list[int], requested_pages)
-                if isinstance(requested_pages, list)
-                else None,
-                dpi=int(args.get("dpi", 300)),
-            )
-            result = {
-                **extraction.model_dump(mode="json"),
-                "extraction_path": str(output_dir / "extraction.json"),
-            }
-        elif name == "circuit_part_spec_check":
-            spec_path = Path(str(args["part_spec_path"]))
-            spec = partspec.load_part_spec(spec_path)
-            extraction_path = Path(spec.datasheet.extraction_path)
-            if not extraction_path.is_absolute():
-                extraction_path = spec_path.resolve().parent / extraction_path
-            extraction = datasheet.load_extraction(extraction_path)
-            result = partspec.check_part_spec(
-                spec,
-                extraction,
-                spec_path=spec_path,
-                extraction_path=extraction_path,
-            )
-            output = _output_path(
-                spec_path,
-                _optional_string(args.get("output_path")),
-                "part-spec",
-            )
-            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
-        elif name == "circuit_land_pattern":
-            spec_path = Path(str(args["part_spec_path"]))
-            spec = partspec.load_part_spec(spec_path)
-            library_dir_value = args.get("library_dir")
-            library_dir = (
-                Path(str(library_dir_value))
-                if isinstance(library_dir_value, str)
-                else spec_path.parent / "library"
-            )
-            rule_profile = _optional_string(args.get("rule_profile"))
-            rules = (
-                ruleprofile.load_rules(rule_profile, library_dir / "rules")
-                if rule_profile is not None
-                else None
-            )
-            density = cast(
-                landpattern.Density,
-                _literal(
-                    args,
-                    "density",
-                    ("most", "nominal", "least"),
-                    rules.density if rules is not None else "nominal",
-                    context="circuit_land_pattern",
-                ),
-            )
-            result = landpattern.compute_land_pattern(spec, density, rules=rules)
-            output = _output_path(
-                spec_path,
-                _optional_string(args.get("output_path")),
-                "land-pattern",
-            )
-            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
-        elif name == "circuit_library_candidates":
-            spec_path = Path(str(args["part_spec_path"]))
-            spec = partspec.load_part_spec(spec_path)
-            density = cast(
-                landpattern.Density,
-                _literal(
-                    args,
-                    "density",
-                    ("most", "nominal", "least"),
-                    "nominal",
-                    context="circuit_library_candidates",
-                ),
-            )
-            reference = landpattern.compute_land_pattern(spec, density)
-            result = libreuse.find_candidates(
-                spec,
-                roots=libraries.default_roots(),
-                project_library_dir=spec_path.parent / "library",
-                reference=reference,
-                product=_optional_string(args.get("product")),
-            )
-            output = _output_path(
-                spec_path,
-                _optional_string(args.get("output_path")),
-                "library-candidates",
-            )
-            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
-        elif name == "circuit_library_import":
-            source_path = Path(str(args["source_path"]))
-            library_dir = Path(str(args["library_dir"]))
-            license_data = args.get("license")
-            if not isinstance(license_data, dict):
-                raise ValueError("circuit_library_import requires a license object")
-            import_source = libsource.SourceInfoInput.model_validate(
-                {
-                    "origin": args.get("origin"),
-                    "vendor": args.get("vendor"),
-                    "url": args.get("url"),
-                    "retrieved_at": args.get("retrieved_at"),
-                    "license": license_data,
-                }
-            )
-            symbol_names = args.get("symbol_names")
-            members = args.get("members")
-            result = libsource.import_library_item(
-                source_path,
-                library_dir,
-                str(args["nickname"]),
-                source=import_source,
-                symbol_names=cast(list[str], symbol_names)
-                if isinstance(symbol_names, list)
-                else None,
-                members=cast(list[str], members) if isinstance(members, list) else None,
-                replace=bool(args.get("replace", False)),
-            )
-            output = _output_path(
-                library_dir.parent / f"{args['nickname']}.json",
-                None,
-                "library-import",
-            )
-            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
-        elif name == "circuit_library_record":
-            library_dir = Path(str(args["library_dir"]))
-            artifact_path = Path(str(args["artifact_path"]))
-            origin = args.get("origin")
-            source_info: libsource.SourceInfo | None = None
-            source_fields = ("origin", "vendor", "url", "license")
-            if any(args.get(field) is not None for field in source_fields):
-                if origin not in ("generated", "derived"):
-                    raise ValueError(
-                        "source metadata for a new library record requires origin "
-                        "'generated' or 'derived'"
-                    )
-                license_data = args.get("license")
-                if not isinstance(license_data, dict):
-                    raise ValueError("source metadata requires a license object")
-                source_input = libsource.SourceInfoInput.model_validate(
-                    {
-                        "origin": origin,
-                        "vendor": args.get("vendor"),
-                        "url": args.get("url"),
-                        "license": license_data,
-                    }
-                )
-                resolved_artifact = artifact_path.resolve(strict=True)
-                relative_artifact = resolved_artifact.relative_to(library_dir.resolve())
-                source_info = libsource.SourceInfo(
-                    **source_input.model_dump(),
-                    original_path=relative_artifact.as_posix(),
-                    original_sha256=hashlib.sha256(resolved_artifact.read_bytes()).hexdigest(),
-                )
-            part_spec_path = args.get("part_spec_path")
-            result = libsource.record_library_item(
-                library_dir,
-                artifact_path,
-                artifact=_literal(
-                    args,
-                    "artifact",
-                    ("symbol", "footprint", "model3d"),
-                    context="circuit_library_record",
-                ),
-                name=str(args["name"]),
-                source=source_info,
-                transformation=str(args["transformation"]),
-                part_spec_sha256=partspec.part_spec_sha256(Path(str(part_spec_path)))
-                if isinstance(part_spec_path, str)
-                else None,
-                derived_from=cast(list[str], args.get("derived_from", [])),
-            )
-            output = _output_path(
-                library_dir.parent / "library.json",
-                None,
-                "library-record",
-            )
-            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name in _PART_BUILD_TOOL_NAMES:
+            result = _part_build_tool(name, args)
         elif name == "circuit_library_verify":
             spec_path = Path(str(args["part_spec_path"]))
             spec = partspec.load_part_spec(spec_path)
@@ -1943,28 +1987,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 "library-review-apply",
             )
             output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
-        elif name == "circuit_library_metrics":
-            project_path = Path(str(args["project_path"]))
-            result = libmetrics.compute_metrics(project_path)
-            output = Path(
-                _optional_string(args.get("output_path"))
-                or (project_path / "library" / "library-metrics.json")
-            )
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
-        elif name == "circuit_mutation_report":
-            project_path = Path(str(args["project_path"]))
-            report_path = Path(
-                _optional_string(args.get("report_path"))
-                or (project_path / "library" / "mutation-report.json")
-            )
-            report = mutation.MutationReport.model_validate_json(report_path.read_bytes())
-            output_value = _optional_string(args.get("output_path"))
-            if output_value is not None:
-                output = Path(output_value)
-                output.parent.mkdir(parents=True, exist_ok=True)
-                output.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-            result = report
+        elif name in {"circuit_library_metrics", "circuit_mutation_report"}:
+            result = _library_metrics_tool(name, args)
         elif name == "circuit_konnect_call":
             konnect_arguments = args.get("arguments")
             ops = args.get("ops")

@@ -186,9 +186,7 @@ def _project_verification_matches(
             input_symbol_path = input_path(inputs.symbol_lib)
             input_footprint_path = input_path(inputs.footprint_path)
             input_pin_source_path = (
-                input_path(inputs.pin_source_path)
-                if inputs.pin_source_path is not None
-                else None
+                input_path(inputs.pin_source_path) if inputs.pin_source_path is not None else None
             )
             if (
                 input_symbol_path != symbol_path.resolve()
