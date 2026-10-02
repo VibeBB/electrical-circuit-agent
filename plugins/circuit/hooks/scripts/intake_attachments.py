@@ -294,7 +294,6 @@ def main() -> int:
                     record["reason"] = (
                         "non-data-url" if not _DATA_URL.match(url.strip()) else "undecodable"
                     )
-                    record["url_prefix"] = url[:80]
                 else:
                     if decoded_image is not None:
                         data, ext, mime = decoded_image
