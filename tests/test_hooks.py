@@ -213,6 +213,8 @@ def test_protect_blocks_git_and_web_access_to_confidential_artifacts(tmp_path: P
         result = _run_protect_hook(payload)
         assert result.returncode == 2, command
         assert "confidential artifacts" in result.stderr
+        assert "private.pdf" not in result.stderr
+        assert "listed.pdf" not in result.stderr
 
     for tool_name in ("web_search", "fetch_url"):
         payload = {
