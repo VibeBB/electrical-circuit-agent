@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -64,6 +65,9 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_datasheet_extract",
         "circuit_vision_read",
         "circuit_vision_compare",
+        "circuit_model_generate",
+        "circuit_model_inspect",
+        "circuit_model_compare",
         "circuit_vision_answer",
         "circuit_part_author_commit",
         "circuit_part_author_compare",
@@ -135,6 +139,32 @@ def test_mcp_server_lists_expected_tools() -> None:
         "symbol_name",
         "footprint_path",
     } <= set(compare_schema["required"])
+    model_generate_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_model_generate"
+    )
+    assert set(model_generate_schema["required"]) == {"part_spec_path", "footprint_path"}
+    model_inspect_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_model_inspect"
+    )
+    assert set(model_inspect_schema["required"]) == {
+        "part_spec_path",
+        "footprint_path",
+        "model_path",
+    }
+    model_compare_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_model_compare"
+    )
+    assert set(model_compare_schema["required"]) == {
+        "part_spec_path",
+        "footprint_path",
+        "model_path",
+    }
 
 
 def test_vision_compare_dispatch_returns_both_image_paths(
@@ -215,6 +245,138 @@ def test_vision_compare_dispatch_returns_both_image_paths(
     assert result is not None
     assert result["batch_id"] == "comparison"
     assert returned_paths == image_paths
+
+
+def test_model_compare_dispatch_uses_model_vision_builder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out_dir = tmp_path / "vision-reads" / "model"
+    out_dir.mkdir(parents=True)
+    batch = cast(
+        mcp_server.visionread.VisionBatch,
+        SimpleNamespace(
+            batch_id="model-comparison",
+            items=[
+                SimpleNamespace(
+                    read_id="model-read",
+                    kind="compare_model",
+                    prompt="compare model",
+                    bindings={"model_sha256": "a" * 64},
+                    image_path="images/model.png",
+                )
+            ],
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def compare(*args: object, **kwargs: object) -> mcp_server.visionread.VisionBatch:
+        captured["args"] = args
+        captured.update(kwargs)
+        return batch
+
+    monkeypatch.setattr(mcp_server.libraryvision, "compare_model", compare)
+    result, returned_paths = mcp_server._authoring_tool(  # pyright: ignore[reportPrivateUsage]
+        "circuit_model_compare",
+        {
+            "part_spec_path": str(tmp_path / "part.json"),
+            "footprint_path": str(tmp_path / "test.kicad_mod"),
+            "model_path": str(tmp_path / "test.step"),
+            "out_dir": str(out_dir),
+        },
+    ) or (None, [])
+
+    assert captured["args"] == (
+        tmp_path / "part.json",
+        tmp_path / "test.kicad_mod",
+        tmp_path / "test.step",
+    )
+    assert captured["lane"] == "main"
+    assert result is not None
+    assert result["batch_id"] == "model-comparison"
+    assert returned_paths == [out_dir / "images" / "model.png"]
+
+
+def test_model_generate_and_inspect_tools_write_reports(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    spec_path = tmp_path / "part.json"
+    spec_path.write_text(_library_tool_spec().model_dump_json(), encoding="utf-8")
+    footprint_path = tmp_path / "test.kicad_mod"
+    footprint_path.write_text("(footprint TEST)\n", encoding="utf-8")
+    model_path = tmp_path / "test.step"
+    model_path.write_text("STEP fixture", encoding="utf-8")
+    generated: dict[str, object] = {}
+
+    def generate(
+        _spec: PartSpec,
+        selected_footprint: Path,
+        output_dir: Path,
+    ) -> mcp_server.model3d.GeneratedModel:
+        generated["footprint"] = selected_footprint
+        generated["output_dir"] = output_dir
+        return mcp_server.model3d.GeneratedModel(
+            step_path=output_dir / "test.step",
+            manifest_path=output_dir / "test.step.gen.json",
+            step_sha256="a" * 64,
+            spec_sha256="b" * 64,
+            footprint_sha256="c" * 64,
+            generator_version="1",
+            marker="top_left",
+            marker_note=None,
+        )
+
+    def inspect(
+        _spec: PartSpec,
+        selected_footprint: Path,
+        selected_model: Path,
+        *,
+        tolerance_mm: float,
+    ) -> mcp_server.libverify.ModelInspectionReport:
+        assert selected_footprint == footprint_path
+        assert selected_model == model_path
+        assert tolerance_mm == pytest.approx(0.05)
+        return mcp_server.libverify.ModelInspectionReport(
+            verdict="pass",
+            path=selected_model,
+            sha256="d" * 64,
+            facts=None,
+            findings=[],
+        )
+
+    monkeypatch.setattr(mcp_server.model3d, "generate_model", generate)
+    monkeypatch.setattr(mcp_server.libverify, "inspect_model_file", inspect)
+
+    async def exercise() -> None:
+        generated_result = await mcp_server.call_tool(
+            "circuit_model_generate",
+            {
+                "part_spec_path": str(spec_path),
+                "footprint_path": str(footprint_path),
+                "output_dir": str(tmp_path / "generated"),
+            },
+        )
+        assert generated_result.isError is False
+        generated_report = tmp_path / "circuit-reports" / "part.model-generation.json"
+        assert generated_report.is_file()
+        assert generated["footprint"] == footprint_path
+        assert generated["output_dir"] == tmp_path / "generated"
+
+        inspected_result = await mcp_server.call_tool(
+            "circuit_model_inspect",
+            {
+                "part_spec_path": str(spec_path),
+                "footprint_path": str(footprint_path),
+                "model_path": str(model_path),
+                "tolerance_mm": 0.05,
+            },
+        )
+        assert inspected_result.isError is False
+        assert (tmp_path / "circuit-reports" / "test.inspection.json").is_file()
+
+    asyncio.run(exercise())
 
 
 def test_vision_read_mcp_result_contains_only_paths_prompts_and_images(
@@ -794,7 +956,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 41
+            assert len(tools.tools) == 44
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

@@ -12,7 +12,7 @@ import tempfile
 from collections import Counter
 from itertools import pairwise
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -31,6 +31,7 @@ from .libitems import (
     FootprintDef,
     GraphicDef,
     LibItemError,
+    ModelRef,
     PadDef,
     SymbolDef,
     parse_footprint,
@@ -38,6 +39,7 @@ from .libitems import (
 )
 from .libsource import (
     LibrarySourceError,
+    ProvenanceEntry,
     assert_safe_destination,
     load_library_provenance,
 )
@@ -48,6 +50,8 @@ from .lineage import (
     lineage_path_for,
     pad_changes,
 )
+from .model3d import GENERATOR_VERSION, GeneratedModel
+from .modeloracle import ModelExportReport, verify_model_export
 from .partspec import (
     Dimension,
     LandPad,
@@ -59,6 +63,9 @@ from .partspec import (
 from .pinout import PinoutGeometry
 from .ruleprofile import EffectiveRules, load_rules
 
+if TYPE_CHECKING:
+    from .occt import Bounds, Shape, ShapeFacts, SlabRegion
+
 
 class VerifyFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -67,6 +74,7 @@ class VerifyFinding(BaseModel):
     severity: Literal["error", "warning", "info"]
     subject: str
     message: str
+    model_sha256: str | None = None
 
 
 class VerifiedSymbol(BaseModel):
@@ -85,12 +93,67 @@ class VerifiedFootprint(BaseModel):
     sha256: str | None
 
 
+class VerifiedModelInspection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    solid_count: int
+    total_volume_mm3: float
+    bbox_mm: tuple[float, float, float, float, float, float]
+    units: str
+    valid: bool
+    closed_shells: tuple[bool, ...]
+    pin1_marker: str | None
+    pin1_color_marker: str | None
+
+
 class VerifiedModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str
     resolved: bool
     sha256: str | None
+    inspection: VerifiedModelInspection | None = None
+    export_oracle: ModelExportReport | None = None
+
+
+class ModelInspectionReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_kind: Literal["circuit_model_inspection"] = "circuit_model_inspection"
+    verdict: Literal["pass", "fail"]
+    path: Path
+    sha256: str | None
+    facts: VerifiedModelInspection | None
+    findings: list[VerifyFinding]
+
+
+class ModelCrossCheckGeometry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: Path
+    sha256: str
+    body_extents_mm: tuple[float, float, float]
+    terminal_centers_xy_mm: list[tuple[float, float]]
+    pin1_quadrant: str | None
+
+
+class ModelCrossCheckFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: Literal["model_source_disagreement"] = "model_source_disagreement"
+    severity: Literal["error"] = "error"
+    message: str
+
+
+class ModelCrossCheckReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_kind: Literal["circuit_model_cross_check"] = "circuit_model_cross_check"
+    passed: bool
+    generated: ModelCrossCheckGeometry | None
+    imported: ModelCrossCheckGeometry | None
+    imported_provenance: ProvenanceEntry | None
+    findings: list[ModelCrossCheckFinding]
 
 
 class VerificationInputs(BaseModel):
@@ -147,8 +210,18 @@ def _finding(
     severity: Literal["error", "warning", "info"],
     subject: str,
     message: str,
+    *,
+    model_sha256: str | None = None,
 ) -> None:
-    findings.append(VerifyFinding(code=code, severity=severity, subject=subject, message=message))
+    findings.append(
+        VerifyFinding(
+            code=code,
+            severity=severity,
+            subject=subject,
+            message=message,
+            model_sha256=model_sha256,
+        )
+    )
 
 
 def _correction_pointer_key(pointer: str, spec: PartSpec) -> str | None:
@@ -1527,11 +1600,937 @@ def _check_klc(
         _finding(findings, code, violation.severity, str(path), violation.message)
 
 
+def _model_pad_bbox(pad: PadDef) -> tuple[float, float, float, float]:
+    angle = math.radians(pad.rotation)
+    width = abs(pad.width * math.cos(angle)) + abs(pad.height * math.sin(angle))
+    height = abs(pad.width * math.sin(angle)) + abs(pad.height * math.cos(angle))
+    return (
+        pad.x - width / 2,
+        pad.y - height / 2,
+        pad.x + width / 2,
+        pad.y + height / 2,
+    )
+
+
+def _model_bbox(facts: ShapeFacts) -> tuple[float, float, float, float, float, float] | None:
+    solids = facts.solids
+    if not solids:
+        return None
+    return (
+        min(solid.bbox.x_min for solid in solids),
+        min(solid.bbox.y_min for solid in solids),
+        min(solid.bbox.z_min for solid in solids),
+        max(solid.bbox.x_max for solid in solids),
+        max(solid.bbox.y_max for solid in solids),
+        max(solid.bbox.z_max for solid in solids),
+    )
+
+
+def _model_dimension_bounds(
+    dimension: Dimension,
+    tolerance_mm: float,
+) -> tuple[float | None, float | None]:
+    nominal = _dimension_value(dimension)
+    lower = (
+        float(dimension.min)
+        if dimension.min is not None
+        else nominal - tolerance_mm
+        if nominal is not None
+        else None
+    )
+    upper = (
+        float(dimension.max)
+        if dimension.max is not None
+        else nominal + tolerance_mm
+        if nominal is not None
+        else None
+    )
+    return lower, upper
+
+
+def _model_pad_contains(
+    pad_bbox: tuple[float, float, float, float],
+    region_bbox: tuple[float, float, float, float],
+    tolerance: float = 0.0,
+) -> bool:
+    return (
+        pad_bbox[0] <= region_bbox[0] + tolerance
+        and pad_bbox[1] <= region_bbox[1] + tolerance
+        and pad_bbox[2] >= region_bbox[2] - tolerance
+        and pad_bbox[3] >= region_bbox[3] - tolerance
+    )
+
+
+def _model_rectangles_overlap(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> bool:
+    return (
+        min(left[2], right[2]) - max(left[0], right[0]) > 1e-9
+        and min(left[3], right[3]) - max(left[1], right[1]) > 1e-9
+    )
+
+
+def _generated_terminal_bindings(
+    spec: PartSpec,
+    model_path: Path,
+    model_sha256: str,
+    findings: list[VerifyFinding],
+) -> dict[str, tuple[float, float]] | None:
+    manifest_path = Path(f"{model_path}.gen.json")
+    if not manifest_path.is_file():
+        return None
+    try:
+        loaded: object = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            return None
+        manifest = cast(dict[str, object], loaded)
+        if manifest.get("generator_version") != GENERATOR_VERSION:
+            return None
+        spec_sha256 = hashlib.sha256(
+            json.dumps(
+                spec.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            manifest.get("step_sha256") != model_sha256
+            or manifest.get("spec_sha256") != spec_sha256
+        ):
+            raise ValueError("model or PartSpec hash does not match its generation manifest")
+        parameters_value = manifest.get("parameters")
+        parameters = (
+            cast(dict[str, object], parameters_value)
+            if isinstance(parameters_value, dict)
+            else None
+        )
+        entries = parameters.get("terminal_map") if parameters is not None else None
+        if not isinstance(entries, list):
+            raise ValueError("terminal_map is missing from the generation manifest")
+        bindings: dict[str, tuple[float, float]] = {}
+        for entry_value in cast(list[object], entries):
+            if not isinstance(entry_value, dict):
+                raise ValueError("terminal_map contains an invalid entry")
+            entry = cast(dict[str, object], entry_value)
+            number = entry.get("number")
+            center = entry.get("terminal_center_mm")
+            if not isinstance(number, str) or number in bindings:
+                raise ValueError("terminal_map contains an invalid or duplicate terminal")
+            if not isinstance(center, list):
+                raise ValueError("terminal_map contains an invalid terminal center")
+            center_values = cast(list[object], center)
+            if len(center_values) != 2:
+                raise ValueError("terminal_map contains an invalid terminal center")
+            center_x, center_y = center_values
+            if (
+                not isinstance(center_x, (int, float))
+                or isinstance(center_x, bool)
+                or not isinstance(center_y, (int, float))
+                or isinstance(center_y, bool)
+            ):
+                raise ValueError("terminal_map contains an invalid or duplicate terminal")
+            bindings[number] = (float(center_x), float(center_y))
+        if len(bindings) != spec.package.pin_count + int(spec.package.exposed_pad is not None):
+            raise ValueError("terminal_map does not cover the PartSpec terminal set")
+        return bindings
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        _finding(
+            findings,
+            "model_manifest_invalid",
+            "error",
+            f"model.{model_path.name}",
+            f"generation manifest cannot bind model terminals: {exc}",
+            model_sha256=model_sha256,
+        )
+        return None
+
+
+def _check_model_terminals(
+    spec: PartSpec,
+    footprint: FootprintDef,
+    regions: list[SlabRegion],
+    body_bbox: tuple[float, float, float, float, float, float],
+    model_sha256: str,
+    findings: list[VerifyFinding],
+    terminal_bindings: dict[str, tuple[float, float]] | None = None,
+) -> None:
+    pads = [
+        (pad, _model_pad_bbox(pad))
+        for pad in footprint.pads
+        if pad.type != "np_thru_hole" and any(layer.endswith(".Cu") for layer in pad.layers)
+    ]
+    if not pads:
+        return
+    largest_pad_area = max((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) for _, bbox in pads)
+    assigned: dict[int, list[tuple[float, float]]] = {index: [] for index in range(len(pads))}
+    for region in regions:
+        region_bbox = region.bbox_xy
+        center = (
+            (region_bbox[0] + region_bbox[2]) / 2,
+            (region_bbox[1] + region_bbox[3]) / 2,
+        )
+        overlaps = [
+            index
+            for index, (_, pad_bbox) in enumerate(pads)
+            if _model_rectangles_overlap(region_bbox, pad_bbox)
+        ]
+        if len(overlaps) > 1 or region.area > largest_pad_area * 1.1:
+            _finding(
+                findings,
+                "model_terminals_unseparable",
+                "error",
+                "model.terminals",
+                "a terminal region overlaps multiple pads or exceeds the largest pad area",
+                model_sha256=model_sha256,
+            )
+        if terminal_bindings is not None:
+            matched_numbers = [
+                number
+                for number, position in terminal_bindings.items()
+                if math.dist(center, position) <= 0.01
+            ]
+            if len(matched_numbers) != 1:
+                _finding(
+                    findings,
+                    "model_terminal_mismatch",
+                    "error",
+                    "model.terminals",
+                    f"terminal region centered at {center} does not match one PartSpec terminal",
+                    model_sha256=model_sha256,
+                )
+                continue
+            number = matched_numbers[0]
+            targets = [index for index, (pad, _) in enumerate(pads) if pad.number == number]
+            if len(targets) != 1:
+                _finding(
+                    findings,
+                    "model_terminal_mismatch",
+                    "error",
+                    f"model.pad.{number}",
+                    "PartSpec terminal does not map to exactly one copper pad with the same number",
+                    model_sha256=model_sha256,
+                )
+                continue
+            pad_index = targets[0]
+            assigned[pad_index].append(center)
+            pad_bbox = pads[pad_index][1]
+            if not _model_pad_contains(pad_bbox, region_bbox, tolerance=0.025):
+                _finding(
+                    findings,
+                    "model_terminal_outside_pad",
+                    "error",
+                    f"model.pad.{number}",
+                    "terminal region bbox is not contained by its numbered "
+                    "pad bbox within 0.025 mm",
+                    model_sha256=model_sha256,
+                )
+                _finding(
+                    findings,
+                    "model_terminal_mismatch",
+                    "error",
+                    f"model.pad.{number}",
+                    "PartSpec terminal geometry does not match the same-numbered footprint pad",
+                    model_sha256=model_sha256,
+                )
+            continue
+        containing = [
+            index
+            for index, (_, pad_bbox) in enumerate(pads)
+            if _model_pad_contains(pad_bbox, (*center, *center))
+        ]
+        if not containing:
+            _finding(
+                findings,
+                "model_terminal_unmatched",
+                "error",
+                "model.terminals",
+                f"terminal region centered at {center} lies inside no copper pad",
+                model_sha256=model_sha256,
+            )
+            continue
+        if len(containing) > 1:
+            _finding(
+                findings,
+                "model_terminals_unseparable",
+                "error",
+                "model.terminals",
+                f"terminal region center at {center} lies inside multiple copper pads",
+                model_sha256=model_sha256,
+            )
+            continue
+        pad_index = containing[0]
+        assigned[pad_index].append(center)
+        if not _model_pad_contains(pads[pad_index][1], region_bbox, tolerance=0.025):
+            _finding(
+                findings,
+                "model_terminal_outside_pad",
+                "error",
+                f"model.pad.{pads[pad_index][0].number}",
+                "terminal region bbox is not contained by its pad bbox within 0.025 mm",
+                model_sha256=model_sha256,
+            )
+    for index, (pad, _) in enumerate(pads):
+        if not assigned[index]:
+            _finding(
+                findings,
+                "model_pad_unmatched",
+                "error",
+                f"model.pad.{pad.number}",
+                "copper pad contains no terminal region center",
+                model_sha256=model_sha256,
+            )
+        elif len(assigned[index]) > 1:
+            _finding(
+                findings,
+                "model_terminals_unseparable",
+                "error",
+                f"model.pad.{pad.number}",
+                "multiple terminal region centers map to one copper pad",
+                model_sha256=model_sha256,
+            )
+
+    pitch_dimension = spec.package.pitch
+    pitch = None
+    if pitch_dimension is not None:
+        pitch = pitch_dimension.nom
+        if pitch is None and pitch_dimension.min is not None and pitch_dimension.max is not None:
+            pitch = (pitch_dimension.min + pitch_dimension.max) / 2
+    body_width = body_bbox[3] - body_bbox[0]
+    body_length = body_bbox[4] - body_bbox[1]
+    if pitch is None or pitch <= 0:
+        return
+    if terminal_bindings is not None:
+        footprint_rows: dict[tuple[str, float], set[float]] = {}
+        for number in terminal_bindings:
+            numbered_pads = [pad for pad, _ in pads if pad.number == number]
+            if len(numbered_pads) != 1:
+                continue
+            pad = numbered_pads[0]
+            x_distance = abs(pad.x) - body_width / 2
+            y_distance = abs(pad.y) - body_length / 2
+            side, row_position, position = (
+                ("y", pad.y, pad.x) if y_distance >= x_distance else ("x", pad.x, pad.y)
+            )
+            footprint_rows.setdefault((side, round(row_position, 4)), set()).add(round(position, 4))
+        if any(
+            abs((right - left) - pitch) > 0.005
+            for positions in footprint_rows.values()
+            for left, right in pairwise(sorted(positions))
+        ):
+            _finding(
+                findings,
+                "model_pitch",
+                "error",
+                "model.terminals",
+                f"numbered footprint terminal spacing does not match nominal pitch {pitch} mm",
+                model_sha256=model_sha256,
+            )
+    rows: dict[tuple[str, float], set[float]] = {}
+    for index in range(len(pads)):
+        if len(assigned[index]) != 1:
+            continue
+        x, y = assigned[index][0]
+        x_distance = abs(x) - body_width / 2
+        y_distance = abs(y) - body_length / 2
+        side = "y" if y_distance >= x_distance else "x"
+        key, position = ((side, round(y, 4)), x) if side == "y" else ((side, round(x, 4)), y)
+        rows.setdefault(key, set()).add(round(position, 4))
+    for positions in rows.values():
+        ordered = sorted(positions)
+        if any(abs((right - left) - pitch) > 0.01 for left, right in pairwise(ordered)):
+            _finding(
+                findings,
+                "model_pitch",
+                "error",
+                "model.terminals",
+                f"terminal center spacing does not match nominal pitch {pitch} mm",
+                model_sha256=model_sha256,
+            )
+            break
+
+
+def _single_solid_body_bbox(
+    shape: Shape,
+    overall_bbox: tuple[float, float, float, float, float, float],
+) -> Bounds | None:
+    from . import occt
+
+    top = overall_bbox[5]
+    top_regions = occt.slab_regions(shape, top - 0.02, top - 0.01)
+    if not top_regions:
+        return None
+    top_region = max(top_regions, key=lambda region: region.area)
+    body_xy = top_region.bbox_xy
+    body_area = top_region.area
+    body_width = body_xy[2] - body_xy[0]
+    body_length = body_xy[3] - body_xy[1]
+    if body_area <= 0 or body_width <= 0 or body_length <= 0:
+        return None
+
+    bottom: float | None = None
+    cursor = overall_bbox[2]
+    while cursor < top - 0.01:
+        upper = min(cursor + 0.01, top - 0.01)
+        if upper - cursor < 1e-6:
+            break
+        regions = occt.slab_regions(shape, cursor, upper)
+        for region in regions:
+            x_min, y_min, x_max, y_max = region.bbox_xy
+            if (
+                region.area >= body_area * 0.5
+                and x_max - x_min >= body_width * 0.7
+                and y_max - y_min >= body_length * 0.7
+            ):
+                bottom = cursor
+                break
+        if bottom is not None:
+            break
+        cursor = upper
+    if bottom is None:
+        return None
+    return occt.Bounds(
+        body_xy[0],
+        body_xy[1],
+        bottom,
+        body_xy[2],
+        body_xy[3],
+        top,
+    )
+
+
+def _imported_model_provenance(path: Path) -> ProvenanceEntry | None:
+    resolved = path.resolve(strict=True)
+    digest = _sha256(resolved)
+    if digest is None:
+        return None
+    for root in resolved.parents:
+        if not (root / "provenance.json").is_file():
+            continue
+        relative = resolved.relative_to(root).as_posix()
+        provenance = load_library_provenance(root)
+        return next(
+            (
+                entry
+                for entry in provenance.entries
+                if entry.artifact == "model3d" and entry.path == relative and entry.sha256 == digest
+            ),
+            None,
+        )
+    return None
+
+
+def _cross_check_model_geometry(path: Path) -> ModelCrossCheckGeometry:
+    from . import occt
+
+    resolved = path.resolve(strict=True)
+    digest = _sha256(resolved)
+    if digest is None:
+        raise ValueError("model could not be hashed")
+    shape = occt.read_step(resolved)
+    facts = occt.inspect(shape)
+    overall_bbox = _model_bbox(facts)
+    if (
+        not facts.valid
+        or facts.units != "mm"
+        or not facts.solids
+        or overall_bbox is None
+        or any(not solid.closed_shell or solid.volume <= 0 for solid in facts.solids)
+    ):
+        raise ValueError("model must contain valid closed solids in millimetres")
+    body_bbox = max(facts.solids, key=lambda solid: solid.volume).bbox
+    if facts.solid_count == 1:
+        inferred = _single_solid_body_bbox(shape, overall_bbox)
+        if inferred is None:
+            raise ValueError("model body bounds cannot be separated from its terminals")
+        body_bbox = inferred
+    regions = occt.slab_regions(shape, 0.0, 0.02)
+    terminal_centers = sorted(
+        {
+            (
+                round((region.bbox_xy[0] + region.bbox_xy[2]) / 2, 5),
+                round((region.bbox_xy[1] + region.bbox_xy[3]) / 2, 5),
+            )
+            for region in regions
+        }
+    )
+    marker = occt.pin1_marker(shape, body_bbox)
+    pin1_quadrant = marker.quadrant if marker is not None else None
+    if pin1_quadrant is None:
+        pin1_quadrant = occt.face_color_marker(resolved, body_bbox)
+    return ModelCrossCheckGeometry(
+        path=resolved,
+        sha256=digest,
+        body_extents_mm=(
+            body_bbox.x_max - body_bbox.x_min,
+            body_bbox.y_max - body_bbox.y_min,
+            body_bbox.z_max - body_bbox.z_min,
+        ),
+        terminal_centers_xy_mm=terminal_centers,
+        pin1_quadrant=pin1_quadrant,
+    )
+
+
+def _terminal_centers_match(
+    left: list[tuple[float, float]],
+    right: list[tuple[float, float]],
+    tolerance_mm: float,
+) -> bool:
+    if len(left) != len(right):
+        return False
+    neighbors = [
+        [
+            right_index
+            for right_index, (right_x, right_y) in enumerate(right)
+            if math.hypot(left_x - right_x, left_y - right_y) <= tolerance_mm
+        ]
+        for left_x, left_y in left
+    ]
+    matched: dict[int, int] = {}
+
+    def augment(left_index: int, visited: set[int]) -> bool:
+        for right_index in neighbors[left_index]:
+            if right_index in visited:
+                continue
+            visited.add(right_index)
+            previous = matched.get(right_index)
+            if previous is None or augment(previous, visited):
+                matched[right_index] = left_index
+                return True
+        return False
+
+    for left_index in sorted(range(len(left)), key=lambda index: len(neighbors[index])):
+        if not neighbors[left_index] or not augment(left_index, set()):
+            return False
+    return True
+
+
+def cross_check_models(
+    generated: GeneratedModel | Path,
+    imported: Path,
+    spec: PartSpec,
+) -> ModelCrossCheckReport:
+    generated_path = generated.step_path if isinstance(generated, GeneratedModel) else generated
+    findings: list[ModelCrossCheckFinding] = []
+    generated_geometry: ModelCrossCheckGeometry | None = None
+    imported_geometry: ModelCrossCheckGeometry | None = None
+    imported_provenance: ProvenanceEntry | None = None
+    try:
+        generated_geometry = _cross_check_model_geometry(generated_path)
+    except Exception as exc:
+        findings.append(
+            ModelCrossCheckFinding(
+                message=f"generated STEP model could not be inspected: {exc}",
+            )
+        )
+    try:
+        imported_provenance = _imported_model_provenance(imported)
+        if imported_provenance is None:
+            raise ValueError("no matching hash-bound libsource provenance entry")
+        imported_geometry = _cross_check_model_geometry(imported)
+    except Exception as exc:
+        findings.append(
+            ModelCrossCheckFinding(
+                message=f"imported STEP model could not be verified: {exc}",
+            )
+        )
+    if generated_geometry is not None and imported_geometry is not None:
+        if any(
+            abs(left - right) > 0.05
+            for left, right in zip(
+                generated_geometry.body_extents_mm,
+                imported_geometry.body_extents_mm,
+                strict=True,
+            )
+        ):
+            findings.append(
+                ModelCrossCheckFinding(
+                    message="generated and imported body extents differ by more than 0.05 mm",
+                )
+            )
+        if not _terminal_centers_match(
+            generated_geometry.terminal_centers_xy_mm,
+            imported_geometry.terminal_centers_xy_mm,
+            0.05,
+        ):
+            findings.append(
+                ModelCrossCheckFinding(
+                    message=(
+                        "generated and imported terminal center sets differ by more than 0.05 mm"
+                    ),
+                )
+            )
+        if (
+            spec.package.family != "chip"
+            and (
+                generated_geometry.pin1_quadrant is None or imported_geometry.pin1_quadrant is None
+            )
+        ) or generated_geometry.pin1_quadrant != imported_geometry.pin1_quadrant:
+            findings.append(
+                ModelCrossCheckFinding(
+                    message="generated and imported pin-1 quadrants do not agree",
+                )
+            )
+    return ModelCrossCheckReport(
+        passed=not findings,
+        generated=generated_geometry,
+        imported=imported_geometry,
+        imported_provenance=imported_provenance,
+        findings=findings,
+    )
+
+
+def _verify_model_geometry(
+    spec: PartSpec,
+    footprint: FootprintDef,
+    footprint_path: Path,
+    model: ModelRef,
+    resolved: Path | None,
+    model_sha256: str | None,
+    tolerance_mm: float,
+    findings: list[VerifyFinding],
+) -> VerifiedModelInspection | None:
+    path = model.path
+    if Path(path).suffix.casefold() not in {".step", ".stp"}:
+        _finding(
+            findings,
+            "model_format",
+            "error",
+            f"model.{path}",
+            "3D model must use STEP .step or .stp format",
+            model_sha256=model_sha256,
+        )
+    if (
+        model.offset != (0.0, 0.0, 0.0)
+        or model.rotate != (0.0, 0.0, 0.0)
+        or model.scale != (1.0, 1.0, 1.0)
+    ):
+        _finding(
+            findings,
+            "model_transform_not_identity",
+            "error",
+            f"model.{path}",
+            "3D model offset and rotation must be zero and scale must be one",
+            model_sha256=model_sha256,
+        )
+    if resolved is None or model_sha256 is None:
+        return None
+    try:
+        from . import occt
+
+        shape = occt.read_step(resolved)
+        facts = occt.inspect(shape)
+    except Exception as exc:
+        _finding(
+            findings,
+            "model_inspection_unavailable",
+            "error",
+            f"model.{path}",
+            f"STEP inspection failed: {exc}",
+            model_sha256=model_sha256,
+        )
+        return None
+
+    total_volume = sum(solid.volume for solid in facts.solids)
+    overall_bbox = _model_bbox(facts)
+    if (
+        not facts.valid
+        or facts.solid_count == 0
+        or facts.units != "mm"
+        or any(not solid.closed_shell or solid.volume <= 0 for solid in facts.solids)
+    ):
+        _finding(
+            findings,
+            "model_invalid",
+            "error",
+            f"model.{path}",
+            "model must contain valid positive-volume closed solids in millimetres",
+            model_sha256=model_sha256,
+        )
+    try:
+        with tempfile.TemporaryDirectory(prefix="circuit-model-roundtrip-") as directory:
+            roundtrip_path = Path(directory) / "roundtrip.step"
+            occt.write_step(shape, roundtrip_path, product_name=Path(path).stem)
+            roundtrip_shape = occt.read_step(roundtrip_path)
+            roundtrip = occt.inspect(roundtrip_shape)
+            roundtrip_bbox = _model_bbox(roundtrip)
+            original_volume = total_volume
+            roundtrip_volume = sum(solid.volume for solid in roundtrip.solids)
+            volume_changed = (
+                abs(roundtrip_volume - original_volume) / max(abs(original_volume), 1e-12) > 1e-6
+            )
+            bbox_changed = (
+                overall_bbox is None
+                or roundtrip_bbox is None
+                or any(
+                    abs(left - right) > 1e-6
+                    for left, right in zip(overall_bbox, roundtrip_bbox, strict=True)
+                )
+            )
+            if facts.solid_count != roundtrip.solid_count or volume_changed or bbox_changed:
+                raise ValueError("solid count, total volume, or bounding box changed")
+    except Exception as exc:
+        _finding(
+            findings,
+            "model_roundtrip",
+            "error",
+            f"model.{path}",
+            f"STEP write/read roundtrip changed or failed: {exc}",
+            model_sha256=model_sha256,
+        )
+
+    if not facts.solids or overall_bbox is None:
+        return None
+    body_solid = max(facts.solids, key=lambda solid: solid.volume)
+    body_bbox = body_solid.bbox
+    body_inferred = True
+    if facts.solid_count == 1:
+        try:
+            inferred_body_bbox = _single_solid_body_bbox(shape, overall_bbox)
+        except Exception as exc:
+            _finding(
+                findings,
+                "model_inspection_unavailable",
+                "error",
+                f"model.{path}",
+                f"single-solid body inspection failed: {exc}",
+                model_sha256=model_sha256,
+            )
+            return None
+        if inferred_body_bbox is None:
+            body_inferred = False
+        else:
+            body_bbox = inferred_body_bbox
+    body_values = (
+        body_bbox.x_min,
+        body_bbox.y_min,
+        body_bbox.z_min,
+        body_bbox.x_max,
+        body_bbox.y_max,
+        body_bbox.z_max,
+    )
+    body_actual = (
+        body_bbox.x_max - body_bbox.x_min,
+        body_bbox.y_max - body_bbox.y_min,
+    )
+    dimensions = (
+        (
+            (spec.package.body_length, body_actual[0]),
+            (spec.package.body_width, body_actual[1]),
+        )
+        if spec.package.family == "chip"
+        else (
+            (spec.package.body_width, body_actual[0]),
+            (spec.package.body_length, body_actual[1]),
+        )
+    )
+    dimension_mismatch = any(
+        (lower is not None and actual < lower - 1e-6)
+        or (upper is not None and actual > upper + 1e-6)
+        for dimension, actual in dimensions
+        for lower, upper in (_model_dimension_bounds(dimension, tolerance_mm),)
+    )
+    if dimension_mismatch or not body_inferred:
+        _finding(
+            findings,
+            "model_body_dimension",
+            "error",
+            f"model.{path}",
+            "model body X/Y limits fail or the body could not be isolated",
+            model_sha256=model_sha256,
+        )
+    if abs(overall_bbox[2]) > 0.01:
+        _finding(
+            findings,
+            "model_body_dimension",
+            "error",
+            f"model.{path}",
+            "model overall bottom Z must be 0 ±0.01 mm",
+            model_sha256=model_sha256,
+        )
+    height_lower, height_upper = _model_dimension_bounds(spec.package.height, tolerance_mm)
+    if (height_lower is not None and overall_bbox[5] < height_lower - 1e-6) or (
+        height_upper is not None and overall_bbox[5] > height_upper + 1e-6
+    ):
+        _finding(
+            findings,
+            "model_height",
+            "error",
+            f"model.{path}",
+            "model overall z_max is outside the PartSpec seated-height limits",
+            model_sha256=model_sha256,
+        )
+
+    body_bounds = occt.Bounds(*body_values)
+    geometric_marker = occt.pin1_marker(shape, body_bounds)
+    try:
+        color_marker = occt.face_color_marker(resolved, body_bounds)
+    except Exception:
+        color_marker = None
+    marker = geometric_marker.quadrant if geometric_marker is not None else None
+    if spec.package.family != "chip":
+        mismatched_markers = [
+            value
+            for value in (marker, color_marker)
+            if value is not None and value != spec.package.pin1_corner
+        ]
+        if mismatched_markers:
+            _finding(
+                findings,
+                "model_pin1_mismatch",
+                "error",
+                f"model.{path}",
+                f"model pin-1 marker disagrees with {spec.package.pin1_corner}",
+                model_sha256=model_sha256,
+            )
+        elif marker is None and color_marker is None:
+            _finding(
+                findings,
+                "model_pin1_unverifiable",
+                "error",
+                f"model.{path}",
+                "polarized package has no detectable geometric or color pin-1 marker",
+                model_sha256=model_sha256,
+            )
+
+    regions = occt.slab_regions(shape, 0.0, 0.02)
+    terminal_bindings = _generated_terminal_bindings(
+        spec,
+        resolved,
+        model_sha256,
+        findings,
+    )
+    _check_model_terminals(
+        spec,
+        footprint,
+        regions,
+        (
+            body_bbox.x_min,
+            body_bbox.y_min,
+            body_bbox.z_min,
+            body_bbox.x_max,
+            body_bbox.y_max,
+            body_bbox.z_max,
+        ),
+        model_sha256,
+        findings,
+        terminal_bindings,
+    )
+    courtyard = _graphic_box(
+        [graphic for graphic in footprint.graphics if graphic.layer == "F.CrtYd"]
+    )
+    model_xy = (overall_bbox[0], overall_bbox[1], overall_bbox[3], overall_bbox[4])
+    if courtyard is None or not _contains(courtyard, model_xy, 1e-6):
+        _finding(
+            findings,
+            "model_courtyard",
+            "error",
+            f"model.{path}",
+            "F.CrtYd does not enclose the union of model body and terminal bounds",
+            model_sha256=model_sha256,
+        )
+    fab = _graphic_box([graphic for graphic in footprint.graphics if graphic.layer == "F.Fab"])
+    body_xy = (body_bbox.x_min, body_bbox.y_min, body_bbox.x_max, body_bbox.y_max)
+    if fab is None or any(
+        abs(actual - expected) > 0.1 for actual, expected in zip(fab, body_xy, strict=True)
+    ):
+        _finding(
+            findings,
+            "model_fab_outline",
+            "warning",
+            f"model.{path}",
+            "F.Fab outline differs from the inspected model body by more than 0.1 mm",
+            model_sha256=model_sha256,
+        )
+    return VerifiedModelInspection(
+        solid_count=facts.solid_count,
+        total_volume_mm3=total_volume,
+        bbox_mm=overall_bbox,
+        units=facts.units,
+        valid=facts.valid,
+        closed_shells=tuple(solid.closed_shell for solid in facts.solids),
+        pin1_marker=marker,
+        pin1_color_marker=color_marker,
+    )
+
+
+def inspect_model_file(
+    spec: PartSpec,
+    footprint_path: Path,
+    model_path: Path,
+    *,
+    tolerance_mm: float = 0.02,
+) -> ModelInspectionReport:
+    """Inspect one STEP file against its PartSpec and footprint geometry."""
+
+    if not math.isfinite(tolerance_mm) or tolerance_mm < 0:
+        raise ValueError("tolerance_mm must be finite and non-negative")
+    resolved: Path | None = None
+    try:
+        candidate = model_path.resolve(strict=True)
+    except OSError:
+        candidate = None
+    if candidate is not None and candidate.is_file():
+        resolved = candidate
+    model_sha256 = _sha256(resolved) if resolved is not None else None
+    findings: list[VerifyFinding] = []
+    facts: VerifiedModelInspection | None = None
+    try:
+        footprint = parse_footprint(footprint_path)
+    except (LibItemError, OSError) as exc:
+        footprint = None
+        _finding(
+            findings,
+            "model_footprint_unavailable",
+            "error",
+            str(footprint_path),
+            f"footprint inspection failed: {exc}",
+            model_sha256=model_sha256,
+        )
+    if resolved is None:
+        _finding(
+            findings,
+            "model_missing",
+            "error",
+            str(model_path),
+            "STEP model file is missing or unreadable",
+            model_sha256=model_sha256,
+        )
+    elif footprint is not None:
+        model = ModelRef(
+            path=str(model_path),
+            offset=(0.0, 0.0, 0.0),
+            scale=(1.0, 1.0, 1.0),
+            rotate=(0.0, 0.0, 0.0),
+        )
+        facts = _verify_model_geometry(
+            spec,
+            footprint,
+            footprint_path,
+            model,
+            resolved,
+            model_sha256,
+            tolerance_mm,
+            findings,
+        )
+    return ModelInspectionReport(
+        verdict="fail" if any(item.severity == "error" for item in findings) else "pass",
+        path=model_path,
+        sha256=model_sha256,
+        facts=facts,
+        findings=findings,
+    )
+
+
 def _check_models(
+    spec: PartSpec,
     footprint: FootprintDef | None,
     footprint_path: Path,
     library_dir: Path | None,
+    rules: EffectiveRules,
     model_required: bool,
+    tolerance_mm: float,
     findings: list[VerifyFinding],
 ) -> list[VerifiedModel]:
     if footprint is None:
@@ -1564,11 +2563,43 @@ def _check_models(
                 f"model.{path}",
                 f"3D model reference cannot be resolved: {path}",
             )
+        model_sha256 = _sha256(resolved) if resolved is not None else None
+        inspection = _verify_model_geometry(
+            spec,
+            footprint,
+            footprint_path,
+            model,
+            resolved,
+            model_sha256,
+            tolerance_mm,
+            findings,
+        )
+        export_report: ModelExportReport
+        with tempfile.TemporaryDirectory(prefix="circuit-model-export-") as temporary_name:
+            export_report = verify_model_export(
+                spec,
+                footprint_path,
+                model_reference=str(resolved) if resolved is not None else expanded,
+                model_path=resolved,
+                rules=rules,
+                out_dir=Path(temporary_name),
+            )
+        for item in export_report.findings:
+            _finding(
+                findings,
+                item.code,
+                item.severity,
+                f"model.{path}",
+                item.message,
+                model_sha256=model_sha256,
+            )
         result.append(
             VerifiedModel(
                 path=path,
                 resolved=resolved is not None,
-                sha256=_sha256(resolved) if resolved is not None else None,
+                sha256=model_sha256,
+                inspection=inspection,
+                export_oracle=export_report,
             )
         )
     return result
@@ -1896,10 +2927,13 @@ def verify_library_part(
 
     _verify_cli(symbol_lib, symbol_name, footprint_path, footprint_name, findings)
     verified_models = _check_models(
+        spec,
         footprint,
         footprint_path,
         library_dir,
+        rules,
         model_required,
+        tolerance_mm,
         findings,
     )
 

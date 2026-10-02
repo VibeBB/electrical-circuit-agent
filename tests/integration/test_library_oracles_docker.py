@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from circuit import occt
 from circuit.partspec import (
     CellRef,
     DatasheetRef,
@@ -32,6 +33,7 @@ from circuit.klc import run_klc
 from circuit.libtestboard import build_test_board
 from circuit.partspec import PartSpec
 from circuit.ruleprofile import load_rules
+from circuit.modeloracle import verify_model_export
 
 spec_path, symbol_path, footprint_path, out_dir = map(Path, sys.argv[1:])
 spec = PartSpec.model_validate_json(spec_path.read_text(encoding="utf-8"))
@@ -48,6 +50,22 @@ reports = {
         out_dir,
     ).model_dump(mode="json"),
 }
+reports["model_export"] = verify_model_export(
+    spec,
+    footprint_path,
+    model_reference=str(out_dir.parent / "Fixture.step"),
+    model_path=out_dir.parent / "Fixture.step",
+    rules=rules,
+    out_dir=out_dir / "model-export",
+).model_dump(mode="json")
+reports["model_export_missing"] = verify_model_export(
+    spec,
+    footprint_path,
+    model_reference=str(out_dir.parent / "missing.step"),
+    model_path=None,
+    rules=rules,
+    out_dir=out_dir / "model-export-missing",
+).model_dump(mode="json")
 print(json.dumps(reports, ensure_ascii=False))
 """
 
@@ -118,8 +136,8 @@ def _symbol_library() -> str:
 """
 
 
-def _footprint() -> str:
-    return """(footprint "FixtureFootprint" (layer "F.Cu")
+def _footprint(model_path: str) -> str:
+    return f"""(footprint "FixtureFootprint" (layer "F.Cu")
   (attr smd)
   (property "Reference" "REF**" (at 0 -2 0) (layer "F.SilkS")
     (effects (font (size 1 1))))
@@ -130,7 +148,11 @@ def _footprint() -> str:
   (pad "1" smd rect (at -1 0) (size 0.8 1)
     (layers "F.Cu" "F.Paste" "F.Mask"))
   (pad "2" smd rect (at 1 0) (size 0.8 1)
-    (layers "F.Cu" "F.Paste" "F.Mask")))
+    (layers "F.Cu" "F.Paste" "F.Mask"))
+  (model "{model_path}"
+    (offset (xyz 0 0 0))
+    (scale (xyz 1 1 1))
+    (rotate (xyz 0 0 0))))
 """
 
 
@@ -148,8 +170,17 @@ def test_klc_and_test_board_in_tools_image(tmp_path: Path) -> None:
     symbol_path = workdir / "Fixture.kicad_sym"
     symbol_path.write_text(_symbol_library(), encoding="utf-8")
     footprint_path = workdir / "FixtureFootprint.kicad_mod"
-    footprint_path.write_text(_footprint(), encoding="utf-8")
     out_dir = workdir / "output"
+    model_path = workdir / "Fixture.step"
+    shape = occt.compound(
+        [
+            occt.box(-1.5, -1.0, 0.2, 3.0, 2.0, 0.8),
+            occt.box(-1.3, -0.4, 0.0, 0.6, 0.8, 0.2),
+            occt.box(0.7, -0.4, 0.0, 0.6, 0.8, 0.2),
+        ]
+    )
+    occt.write_step(shape, model_path, product_name="Fixture")
+    footprint_path.write_text(_footprint(str(model_path)), encoding="utf-8")
     container_name = f"circuit-library-smoke-{uuid.uuid4().hex}"
     command = [
         "docker",
@@ -196,3 +227,10 @@ def test_klc_and_test_board_in_tools_image(tmp_path: Path) -> None:
         path = test_board[key]
         if path is not None:
             assert Path(path).is_file()
+    model_export: dict[str, Any] = reports["model_export"]
+    assert model_export["verdict"] == "pass", json.dumps(model_export, indent=2)
+    assert [run["rotation_deg"] for run in model_export["runs"]] == [0.0, 90.0]
+    assert all(run["passed"] for run in model_export["runs"])
+    model_export_missing: dict[str, Any] = reports["model_export_missing"]
+    assert model_export_missing["verdict"] == "fail"
+    assert any(item["code"] == "model_export_missing" for item in model_export_missing["findings"])

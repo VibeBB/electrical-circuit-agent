@@ -1,0 +1,478 @@
+"""Deterministic nominal package model generation."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import re
+from itertools import pairwise
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
+
+from . import occt
+from .landpattern import standard_pin_placements
+from .partspec import Dimension, PartSpec
+
+GENERATOR_VERSION = "2"
+_SUPPORTED = {
+    "chip",
+    "gullwing_dual",
+    "gullwing_quad",
+    "no_lead_dual",
+    "no_lead_quad",
+}
+
+
+class Model3dError(ValueError):
+    """Raised when a nominal model cannot be generated."""
+
+
+class GeneratedModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step_path: Path
+    manifest_path: Path
+    step_sha256: str
+    spec_sha256: str
+    footprint_sha256: str
+    generator_version: str
+    marker: str | None
+    marker_note: str | None
+
+
+def _nominal(
+    dimension: Dimension | None,
+    field: str,
+    derived_nominals: dict[str, str],
+    *,
+    allow_zero: bool = False,
+) -> float:
+    if dimension is None:
+        raise Model3dError(f"{field} is unavailable")
+    value = dimension.nom
+    derived = value is None
+    if value is None:
+        if dimension.min is None or dimension.max is None:
+            raise Model3dError(f"{field} requires a nominal value or both min and max")
+        value = (dimension.min + dimension.max) / 2
+    if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
+        requirement = "non-negative" if allow_zero else "positive"
+        raise Model3dError(f"{field} must have a {requirement} nominal value")
+    if derived:
+        derived_nominals[field] = "midpoint"
+    return float(value)
+
+
+def footprint_to_board_xy(
+    x: float,
+    y: float,
+    *,
+    rotation_deg: float,
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
+) -> tuple[float, float]:
+    angle = math.radians(rotation_deg)
+    return (
+        origin_x + math.cos(angle) * x - math.sin(angle) * y,
+        origin_y + math.sin(angle) * x + math.cos(angle) * y,
+    )
+
+
+def _numbered_pin_positions(spec: PartSpec) -> list[tuple[str, str, float]]:
+    positions = standard_pin_placements(spec)
+    corner = spec.package.pin1_corner
+    family = spec.package.family
+    if family == "chip":
+        anchor_side = "left" if corner.endswith("left") else "right"
+        anchor_position = 0.0
+    elif family.endswith("dual"):
+        anchors = {
+            "top_left": ("left", "min"),
+            "bottom_left": ("left", "max"),
+            "top_right": ("right", "min"),
+            "bottom_right": ("right", "max"),
+        }
+        anchor_side, anchor_end = anchors[corner]
+        row_positions = [position for _, side, position in positions if side == anchor_side]
+        anchor_position = min(row_positions) if anchor_end == "min" else max(row_positions)
+    else:
+        anchors = {
+            "top_left": ("left", "min"),
+            "bottom_left": ("bottom", "min"),
+            "bottom_right": ("right", "max"),
+            "top_right": ("top", "max"),
+        }
+        anchor_side, anchor_end = anchors[corner]
+        row_positions = [position for _, side, position in positions if side == anchor_side]
+        anchor_position = min(row_positions) if anchor_end == "min" else max(row_positions)
+    start = next(
+        (
+            index
+            for index, (_, side, position) in enumerate(positions)
+            if side == anchor_side and math.isclose(position, anchor_position, abs_tol=1e-9)
+        ),
+        None,
+    )
+    if start is None:
+        raise Model3dError(f"pin1_corner {corner} does not align with a package terminal row")
+    ordered = positions[start:] + positions[:start]
+    return [(str(index + 1), side, position) for index, (_, side, position) in enumerate(ordered)]
+
+
+def _validate_pitch(
+    spec: PartSpec,
+    positions: list[tuple[str, str, float]],
+    *,
+    body_width: float,
+    body_length: float,
+    pitch: float | None,
+    lead_width: float | None,
+) -> None:
+    if spec.package.family == "chip":
+        if spec.package.pin_count != 2 or len(positions) != 2:
+            raise Model3dError("chip packages must have exactly two terminals")
+        return
+    if pitch is None:
+        raise Model3dError("package.pitch is required for this family")
+    if lead_width is None:
+        raise Model3dError("package.lead_width is required for this family")
+    if lead_width >= pitch:
+        raise Model3dError("package.lead_width must be smaller than package.pitch")
+    if len(positions) != spec.package.pin_count:
+        raise Model3dError("package terminal count does not match pin_count")
+    rows: dict[str, list[float]] = {}
+    for _, side, position in positions:
+        rows.setdefault(side, []).append(position)
+    for side, row in rows.items():
+        ordered = sorted(row)
+        if len(ordered) != len(set(ordered)) or any(
+            not math.isclose(right - left, pitch, abs_tol=1e-9) for left, right in pairwise(ordered)
+        ):
+            raise Model3dError("package terminal rows do not match package.pitch")
+        side_extent = body_length if side in {"left", "right"} else body_width
+        if ordered[-1] - ordered[0] + lead_width > side_extent + 1e-6:
+            raise Model3dError("package.pitch and lead_width exceed the package body extent")
+
+
+def _radial_box(
+    side: str,
+    position: float,
+    *,
+    outer_edge: float,
+    radial_length: float,
+    tangent_width: float,
+    z: float,
+    thickness: float,
+) -> tuple[occt.Shape, tuple[float, float]]:
+    sign = -1.0 if side in {"left", "top"} else 1.0
+    inner_edge = outer_edge - sign * radial_length
+    radial_start = min(outer_edge, inner_edge)
+    if side in {"left", "right"}:
+        shape = occt.box(
+            radial_start,
+            position - tangent_width / 2,
+            z,
+            radial_length,
+            tangent_width,
+            thickness,
+        )
+        center = ((outer_edge + inner_edge) / 2, position)
+    else:
+        shape = occt.box(
+            position - tangent_width / 2,
+            radial_start,
+            z,
+            tangent_width,
+            radial_length,
+            thickness,
+        )
+        center = (position, (outer_edge + inner_edge) / 2)
+    return shape, center
+
+
+def _gullwing_terminal(
+    side: str,
+    position: float,
+    *,
+    lead_span: float,
+    lead_length: float,
+    lead_width: float,
+    body_bottom: float,
+    body_width: float,
+    body_length: float,
+) -> tuple[occt.Shape, tuple[float, float]]:
+    sign = -1.0 if side in {"left", "top"} else 1.0
+    foot_height = min(0.15, body_bottom)
+    foot, center = _radial_box(
+        side,
+        position,
+        outer_edge=sign * lead_span / 2,
+        radial_length=lead_length,
+        tangent_width=lead_width,
+        z=0.0,
+        thickness=foot_height,
+    )
+    if body_bottom <= foot_height:
+        return foot, center
+    body_extent = body_width if side in {"left", "right"} else body_length
+    inner_edge = sign * (lead_span / 2 - lead_length)
+    body_edge = sign * body_extent / 2
+    shoulder_length = abs(inner_edge - body_edge)
+    if shoulder_length <= 1e-9:
+        return foot, center
+    overlap = 1e-4
+    shoulder_edge = inner_edge + sign * overlap
+    shoulder_z = foot_height - overlap
+    if side in {"left", "right"}:
+        shoulder = occt.box(
+            min(shoulder_edge, body_edge),
+            position - lead_width / 2,
+            shoulder_z,
+            abs(shoulder_edge - body_edge),
+            lead_width,
+            body_bottom - shoulder_z,
+        )
+    else:
+        shoulder = occt.box(
+            position - lead_width / 2,
+            min(shoulder_edge, body_edge),
+            shoulder_z,
+            lead_width,
+            abs(shoulder_edge - body_edge),
+            body_bottom - shoulder_z,
+        )
+    return occt.fuse((foot, shoulder)), center
+
+
+def _safe_name(value: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9._+-]+", "_", value).strip("._")
+    return name or "model"
+
+
+def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel:
+    family = spec.package.family
+    if family not in _SUPPORTED:
+        raise Model3dError("unsupported_family")
+    try:
+        derived_nominals: dict[str, str] = {}
+        body_length = _nominal(spec.package.body_length, "body_length", derived_nominals)
+        body_width = _nominal(spec.package.body_width, "body_width", derived_nominals)
+        height = _nominal(spec.package.height, "height", derived_nominals)
+        standoff = (
+            _nominal(
+                spec.package.standoff,
+                "standoff",
+                derived_nominals,
+                allow_zero=True,
+            )
+            if spec.package.standoff is not None
+            else 0.0
+        )
+        pitch = (
+            _nominal(spec.package.pitch, "pitch", derived_nominals)
+            if family != "chip" and spec.package.pitch is not None
+            else None
+        )
+        lead_span = (
+            _nominal(spec.package.lead_span, "lead_span", derived_nominals)
+            if family.startswith("gullwing_") and spec.package.lead_span is not None
+            else None
+        )
+        lead_length = (
+            _nominal(spec.package.lead_length, "lead_length", derived_nominals)
+            if spec.package.lead_length is not None
+            else None
+        )
+        lead_width = (
+            _nominal(spec.package.lead_width, "lead_width", derived_nominals)
+            if family != "chip" and spec.package.lead_width is not None
+            else None
+        )
+        if lead_length is None:
+            raise Model3dError("package.lead_length is required for package terminals")
+        if family != "chip" and lead_width is None:
+            raise Model3dError("package.lead_width is required for this family")
+        if family.startswith("gullwing_") and lead_span is None:
+            raise Model3dError("package.lead_span is required for gullwing terminals")
+        if family == "gullwing_dual" and lead_span is not None and lead_span < body_width:
+            raise Model3dError("package.lead_span must enclose the gullwing body width")
+        if (
+            family == "gullwing_quad"
+            and lead_span is not None
+            and lead_span < max(body_width, body_length)
+        ):
+            raise Model3dError("package.lead_span must enclose the gullwing body extents")
+        numbered_positions = _numbered_pin_positions(spec)
+        _validate_pitch(
+            spec,
+            numbered_positions,
+            body_width=body_width,
+            body_length=body_length,
+            pitch=pitch,
+            lead_width=lead_width,
+        )
+        body_bottom = max(standoff, 0.03)
+        body_top = height
+        if body_top <= body_bottom:
+            raise Model3dError("height must exceed the body bottom")
+        body_x = body_length if family == "chip" else body_width
+        body_y = body_width if family == "chip" else body_length
+        body = occt.box(
+            -body_x / 2,
+            -body_y / 2,
+            body_bottom,
+            body_x,
+            body_y,
+            body_top - body_bottom,
+        )
+        terminals: list[occt.Shape] = []
+        terminal_map: list[dict[str, object]] = []
+        for number, side, position in numbered_positions:
+            solid_index = len(terminals) + 1
+            if family == "chip":
+                sign = -1.0 if side == "left" else 1.0
+                center = (sign * (body_length / 2 + lead_length / 2), 0.0)
+                terminals.append(
+                    occt.box(
+                        center[0] - lead_length / 2,
+                        -body_width / 2,
+                        0.0,
+                        lead_length,
+                        body_width,
+                        height,
+                    )
+                )
+            elif family.startswith("gullwing_"):
+                if lead_span is None or lead_width is None:
+                    raise Model3dError("gullwing lead dimensions are unavailable")
+                terminal, center = _gullwing_terminal(
+                    side,
+                    position,
+                    lead_span=lead_span,
+                    lead_length=lead_length,
+                    lead_width=lead_width,
+                    body_bottom=body_bottom,
+                    body_width=body_width,
+                    body_length=body_length,
+                )
+                terminals.append(terminal)
+            else:
+                if lead_width is None:
+                    raise Model3dError("no-lead terminal width is unavailable")
+                body_extent = body_width if side in {"left", "right"} else body_length
+                sign = -1.0 if side in {"left", "top"} else 1.0
+                terminal, center = _radial_box(
+                    side,
+                    position,
+                    outer_edge=sign * body_extent / 2,
+                    radial_length=lead_length,
+                    tangent_width=lead_width,
+                    z=0.0,
+                    thickness=min(0.2, height),
+                )
+                terminals.append(terminal)
+            terminal_map.append(
+                {
+                    "number": number,
+                    "terminal_center_mm": [center[0], center[1]],
+                    "solid_index": solid_index,
+                }
+            )
+        terminal_numbers = [number for number, _, _ in numbered_positions]
+        exposed = spec.package.exposed_pad
+        if exposed is not None:
+            if exposed.number in terminal_numbers:
+                raise Model3dError("exposed pad number duplicates a package terminal")
+            ep_width = _nominal(exposed.width, "exposed_pad.width", derived_nominals)
+            ep_length = _nominal(exposed.length, "exposed_pad.length", derived_nominals)
+            if ep_width > body_width or ep_length > body_length:
+                raise Model3dError("exposed_pad dimensions exceed the package body extents")
+            solid_index = len(terminals) + 1
+            terminals.append(
+                occt.box(
+                    -ep_width / 2,
+                    -ep_length / 2,
+                    0.0,
+                    ep_width,
+                    ep_length,
+                    min(0.2, height),
+                )
+            )
+            terminal_numbers.append(exposed.number)
+            terminal_map.append(
+                {
+                    "number": exposed.number,
+                    "terminal_center_mm": [0.0, 0.0],
+                    "solid_index": solid_index,
+                }
+            )
+        marker_corner: str | None = None
+        marker_note: str | None = None
+        if family != "chip":
+            marker_corner = spec.package.pin1_corner
+            radius = max(0.15, min(0.5, 0.1 * min(body_width, body_length)))
+            x = -body_width * 0.32 if marker_corner.endswith("left") else body_width * 0.32
+            y = -body_length * 0.32 if marker_corner.startswith("top") else body_length * 0.32
+            body = occt.cylinder_cut(body, x=x, y=y, top_z=body_top, radius=radius, depth=0.05)
+        else:
+            marker_note = "PartSpec has no explicit chip-polarity field; no marker was added."
+        model = occt.compound((body, *terminals))
+        target_dir = out / f"{_safe_name(spec.mpn)}.3dshapes"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        step_path = target_dir / f"{_safe_name(spec.package.drawing_id)}.step"
+        manifest_path = Path(f"{step_path}.gen.json")
+        occt.write_step(model, step_path, product_name=_safe_name(spec.mpn))
+        step_sha = hashlib.sha256(step_path.read_bytes()).hexdigest()
+        spec_sha = hashlib.sha256(
+            json.dumps(
+                spec.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        footprint_sha = hashlib.sha256(footprint.read_bytes()).hexdigest()
+        manifest = {
+            "artifact_kind": "circuit_generated_model",
+            "generator_version": GENERATOR_VERSION,
+            "spec_sha256": spec_sha,
+            "footprint_sha256": footprint_sha,
+            "step_sha256": step_sha,
+            "derived_nominals": derived_nominals,
+            "parameters": {
+                "body_length_mm": body_length,
+                "body_width_mm": body_width,
+                "height_mm": height,
+                "standoff_mm": standoff,
+                "body_bottom_mm": body_bottom,
+                "family": family,
+                "pitch_mm": pitch,
+                "lead_span_mm": lead_span,
+                "lead_length_mm": lead_length,
+                "lead_width_mm": lead_width,
+                "pins_per_side": spec.package.pins_per_side,
+                "terminal_numbers": terminal_numbers,
+                "terminal_map": terminal_map,
+                "marker": marker_corner,
+                "marker_note": marker_note,
+            },
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+        )
+        return GeneratedModel(
+            step_path=step_path,
+            manifest_path=manifest_path,
+            step_sha256=step_sha,
+            spec_sha256=spec_sha,
+            footprint_sha256=footprint_sha,
+            generator_version=GENERATOR_VERSION,
+            marker=marker_corner,
+            marker_note=marker_note,
+        )
+    except Model3dError:
+        raise
+    except Exception as exc:
+        raise Model3dError(str(exc)) from exc

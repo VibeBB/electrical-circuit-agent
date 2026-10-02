@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 from pydantic import ValidationError
 
-from circuit import authoring, visionread
+from circuit import authoring, occt, visionread
 from circuit import libverify as libverify_module
 from circuit.datasheet import DatasheetExtraction
 from circuit.landpattern import LandPatternResult, compute_land_pattern
@@ -21,7 +21,7 @@ from circuit.libsource import (
     SourceInfo,
 )
 from circuit.libtestboard import TestBoard, TestBoardFinding
-from circuit.libverify import LibraryVerification, verify_library_part
+from circuit.libverify import LibraryVerification, inspect_model_file, verify_library_part
 from circuit.lineage import (
     FootprintBase,
     FootprintLineage,
@@ -29,6 +29,8 @@ from circuit.lineage import (
     lineage_path_for,
     pad_changes,
 )
+from circuit.model3d import generate_model
+from circuit.modeloracle import ModelExportReport
 from circuit.partspec import (
     CellRef,
     DatasheetRef,
@@ -137,6 +139,19 @@ def _stub_testboard_builder(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_model_export_oracle(monkeypatch: pytest.MonkeyPatch) -> None:
+    def verify(*_args: object, **_kwargs: object) -> ModelExportReport:
+        return ModelExportReport(
+            verdict="pass",
+            model_sha256=None,
+            runs=[],
+            findings=[],
+        )
+
+    monkeypatch.setattr(libverify_module, "verify_model_export", verify)
+
+
 def _dimension(
     nominal: float,
     *,
@@ -180,7 +195,7 @@ def _dual_spec() -> PartSpec:
         family="gullwing_dual",
         drawing_id="SOIC-4",
         pin_count=4,
-        pitch=_dimension(1.27),
+        pitch=_dimension(1.28),
         body_length=_dimension(4.0),
         body_width=_dimension(2.0),
         height=_dimension(1.0),
@@ -295,7 +310,7 @@ def _vqfn_spec(*, pitch: float = 0.5) -> PartSpec:
         body_length=_dimension(3.0, minimum=2.9, maximum=3.1),
         body_width=_dimension(3.0, minimum=2.9, maximum=3.1),
         height=_dimension(0.8),
-        lead_length=_dimension(0.45),
+        lead_length=_dimension(0.4),
         lead_width=_dimension(0.30, minimum=0.18, maximum=0.30),
         exposed_pad=ExposedPad(
             number="17",
@@ -477,8 +492,31 @@ def _write_case(
     monkeypatch.setenv("TEST_3DMODEL_DIR", str(tmp_path / "models"))
     _fake_cli(tmp_path, monkeypatch)
     symbol_args = cast(dict[str, Any], symbol_kwargs or {})
-    footprint_args = cast(dict[str, Any], footprint_kwargs or {})
+    footprint_args = cast(dict[str, Any], dict(footprint_kwargs or {}))
+    model_reference = f"${{TEST_3DMODEL_DIR}}/{spec.mpn}.3dshapes/{spec.package.drawing_id}.step"
+    generate_fixture_model = "model" not in footprint_args and spec.package.family in {
+        "chip",
+        "gullwing_dual",
+        "gullwing_quad",
+        "no_lead_dual",
+        "no_lead_quad",
+    }
+    footprint_args.setdefault("model", model_reference)
     symbol_path.write_text(_symbol_text(spec, **symbol_args), encoding="utf-8")
+    if generate_fixture_model:
+        source_dir = tmp_path / "model-source" / "Fixture.pretty"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        source_path = source_dir / footprint_path.name
+        source_path.write_text(
+            _footprint_text(
+                spec.package.drawing_id,
+                reference,
+                spec,
+                model=model_reference,
+            ),
+            encoding="utf-8",
+        )
+        generate_model(spec, source_path, tmp_path / "models")
     footprint_path.write_text(
         _footprint_text(
             spec.package.drawing_id,
@@ -735,6 +773,64 @@ def _verify(
 
 def _codes(report: LibraryVerification) -> set[str]:
     return {finding.code for finding in report.findings}
+
+
+def _rewrite_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    spec: PartSpec | None = None,
+    mutation: Callable[[occt.Shape], occt.Shape] | None = None,
+    model_update: dict[str, object] | None = None,
+) -> tuple[LibraryVerification, Path]:
+    case = _write_case(tmp_path, monkeypatch, spec=spec)
+    part_spec, reference, spec_path, _check_path, symbol_path, footprint_path = case
+    model_path = (
+        tmp_path / "models" / f"{part_spec.mpn}.3dshapes" / f"{part_spec.package.drawing_id}.step"
+    )
+    shape = occt.read_step(model_path)
+    if mutation is not None:
+        shape = mutation(shape)
+    occt.write_step(shape, model_path, product_name=model_path.stem)
+    if model_update is not None:
+        parsed = parse_footprint(footprint_path)
+        updated_path = model_update.get("path")
+        if isinstance(updated_path, str) and updated_path.casefold().endswith(
+            (".wrl", ".wrz", ".stpz", ".igs")
+        ):
+            copy_path = Path(updated_path)
+            if not copy_path.is_absolute():
+                copy_path = footprint_path.parent / copy_path
+            copy_path.write_bytes(model_path.read_bytes())
+        updated_model = parsed.models[0].model_copy(update=model_update)
+        updated_footprint = parsed.model_copy(update={"models": [updated_model]})
+
+        def parse_updated_footprint(_path: Path) -> FootprintDef:
+            return updated_footprint
+
+        monkeypatch.setattr(
+            libverify_module,
+            "parse_footprint",
+            parse_updated_footprint,
+        )
+    report = verify_library_part(
+        part_spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=part_spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        model_required=True,
+    )
+    return report, model_path
+
+
+def _model_body_and_terminals(shape: occt.Shape) -> tuple[list[occt.Shape], int]:
+    solids = list(occt.solids(shape))
+    facts = occt.inspect(shape)
+    body_index = max(range(len(solids)), key=lambda index: facts.solids[index].volume)
+    return solids, body_index
 
 
 def test_verify_library_part_includes_testboard_findings(
@@ -1581,6 +1677,18 @@ def test_footprint_and_geometry_rules(
     assert expected_codes <= _codes(report)
 
 
+def test_inspect_model_file_reports_missing_model(tmp_path: Path) -> None:
+    report = inspect_model_file(
+        _dual_spec(),
+        Path(__file__).parent / "data" / "library" / "modern.kicad_mod",
+        tmp_path / "missing.step",
+    )
+
+    assert report.verdict == "fail"
+    assert report.sha256 is None
+    assert [finding.code for finding in report.findings] == ["model_missing"]
+
+
 def test_model_and_tolerance_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     missing_model, _ = _verify(
         tmp_path / "missing-model", monkeypatch, footprint_kwargs={"model": None}
@@ -1720,10 +1828,43 @@ def _vqfn_case(
 ) -> tuple[LibraryVerification, PartSpec]:
     spec = _vqfn_spec(pitch=pitch)
     reference = compute_land_pattern(spec)
+    lead_width_dimension = spec.package.lead_width
+    if lead_width_dimension is None:
+        raise AssertionError("VQFN fixture requires a lead width")
+    lead_width = lead_width_dimension.nom
+    if lead_width is None:
+        raise AssertionError("VQFN fixture requires a nominal lead width")
+    exposed_number = (
+        spec.package.exposed_pad.number if spec.package.exposed_pad is not None else None
+    )
+
+    def terminal_width_pad(pad: LandPad) -> tuple[str, float, float, float, float, float]:
+        if pad.number == exposed_number:
+            return pad.number, pad.x, pad.y, pad.width, pad.height, 0.0
+        if abs(pad.x) > abs(pad.y):
+            width, height = pad.width, max(pad.height, lead_width)
+        else:
+            width, height = max(pad.width, lead_width), pad.height
+        return pad.number, pad.x, pad.y, width, height, 0.0
+
+    reference = reference.model_copy(
+        update={
+            "pads": [
+                pad.model_copy(
+                    update={
+                        "width": terminal_width_pad(pad)[3],
+                        "height": terminal_width_pad(pad)[4],
+                    }
+                )
+                for pad in reference.pads
+            ]
+        }
+    )
     case = _write_case(
         tmp_path,
         monkeypatch,
         spec=spec,
+        pad_transform=terminal_width_pad,
         symbol_kwargs=symbol_kwargs,
     )
     part_spec, _, spec_path, _check_path, symbol_path, footprint_path = case
@@ -1787,7 +1928,10 @@ def _rewrite_footprint(path: Path, footprint: FootprintDef, pads: list[PadDef]) 
             f'(pad "{pad.number}" smd roundrect (at {pad.x} {pad.y}) '
             f'(size {pad.width} {pad.height}) (layers "F.Cu" "F.Mask" "F.Paste"))'
         )
-    lines.append('(model "${TEST_3DMODEL_DIR}/fixture.step")')
+    model_path = (
+        footprint.models[0].path if footprint.models else "${TEST_3DMODEL_DIR}/fixture.step"
+    )
+    lines.append(f'(model "{model_path}")')
     lines.append(")")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -1815,6 +1959,227 @@ def test_correct_vqfn_fixture_and_regression_mutations(
 
     pitch, _ = _vqfn_case(tmp_path / "pitch", monkeypatch, mutation="pitch_065")
     assert "pad_geometry" in _codes(pitch)
+
+
+def test_model_geometry_rejects_mirrored_and_rotated_models(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mirrored, model_path = _rewrite_model(
+        tmp_path / "mirrored",
+        monkeypatch,
+        mutation=lambda shape: occt.transform(shape, mirror_x=True),
+    )
+    assert {"model_pin1_mismatch", "model_terminal_unmatched"} & _codes(mirrored)
+    digest = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    assert any(
+        finding.model_sha256 == digest
+        for finding in mirrored.findings
+        if finding.code.startswith("model_")
+    )
+
+    rotated_90, _ = _rewrite_model(
+        tmp_path / "rotated-90",
+        monkeypatch,
+        mutation=lambda shape: occt.transform(shape, rotation_z_deg=90),
+    )
+    assert {
+        "model_terminal_unmatched",
+        "model_pad_unmatched",
+        "model_pitch",
+    } & _codes(rotated_90)
+
+    rotated_180, _ = _rewrite_model(
+        tmp_path / "rotated-180",
+        monkeypatch,
+        spec=_vqfn_spec(),
+        mutation=lambda shape: occt.transform(shape, rotation_z_deg=180),
+    )
+    assert "model_pin1_mismatch" in _codes(rotated_180)
+
+
+def test_model_geometry_rejects_offset_pitch_and_unit_scale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    offset, _ = _rewrite_model(
+        tmp_path / "offset",
+        monkeypatch,
+        spec=_vqfn_spec(),
+        mutation=lambda shape: occt.transform(shape, translation=(0.1, 0.0, 0.0)),
+    )
+    assert "model_terminal_outside_pad" in _codes(offset)
+
+    def scale_terminals(shape: occt.Shape) -> occt.Shape:
+        parts, body_index = _model_body_and_terminals(shape)
+        return occt.compound(
+            tuple(
+                part if index == body_index else occt.transform(part, scale=1.02)
+                for index, part in enumerate(parts)
+            )
+        )
+
+    pitch, _ = _rewrite_model(
+        tmp_path / "pitch",
+        monkeypatch,
+        spec=_vqfn_spec(),
+        mutation=scale_terminals,
+    )
+    assert "model_pitch" in _codes(pitch)
+
+    scaled, _ = _rewrite_model(
+        tmp_path / "scaled",
+        monkeypatch,
+        mutation=lambda shape: occt.transform(shape, scale=25.4),
+    )
+    assert "model_body_dimension" in _codes(scaled)
+
+
+def test_model_geometry_checks_overall_bottom_and_seated_height(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    translated, _ = _rewrite_model(
+        tmp_path / "translated-z",
+        monkeypatch,
+        spec=_vqfn_spec(),
+        mutation=lambda shape: occt.transform(shape, translation=(0.0, 0.0, 0.2)),
+    )
+    assert "model_body_dimension" in _codes(translated)
+    assert "model_height" in _codes(translated)
+    assert any(
+        item.code == "model_body_dimension" and "bottom Z" in item.message
+        for item in translated.findings
+    )
+    assert any(item.code == "model_height" for item in translated.findings)
+
+    spec = _vqfn_spec()
+    height = spec.package.height
+    height_nominal = height.nom
+    assert height_nominal is not None
+    package = spec.package.model_copy(
+        update={
+            "height": Dimension(
+                min=height_nominal - 0.05,
+                nom=height_nominal,
+                max=height_nominal + 0.02,
+                reading=height.reading,
+            )
+        }
+    )
+    bounded_spec = spec.model_copy(update={"package": package})
+
+    def add_overheight_solid(shape: occt.Shape) -> occt.Shape:
+        return occt.compound(
+            (
+                *occt.solids(shape),
+                occt.box(
+                    -0.01,
+                    -0.01,
+                    height_nominal + 0.01,
+                    0.02,
+                    0.02,
+                    0.05,
+                ),
+            )
+        )
+
+    overheight, _ = _rewrite_model(
+        tmp_path / "overheight",
+        monkeypatch,
+        spec=bounded_spec,
+        mutation=add_overheight_solid,
+    )
+    assert "model_height" in _codes(overheight)
+
+
+def test_model_geometry_requires_pin_marker_and_separate_terminals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def remove_marker(shape: occt.Shape) -> occt.Shape:
+        parts, body_index = _model_body_and_terminals(shape)
+        body_bounds = occt.inspect(parts[body_index]).solids[0].bbox
+        parts[body_index] = occt.box(
+            body_bounds.x_min,
+            body_bounds.y_min,
+            body_bounds.z_min,
+            body_bounds.x_max - body_bounds.x_min,
+            body_bounds.y_max - body_bounds.y_min,
+            body_bounds.z_max - body_bounds.z_min,
+        )
+        return occt.compound(tuple(parts))
+
+    marker, _ = _rewrite_model(
+        tmp_path / "no-marker",
+        monkeypatch,
+        mutation=remove_marker,
+    )
+    assert "model_pin1_unverifiable" in _codes(marker)
+
+    def fuse_terminals(shape: occt.Shape) -> occt.Shape:
+        parts, body_index = _model_body_and_terminals(shape)
+        bounds = [
+            occt.inspect(part).solids[0].bbox
+            for index, part in enumerate(parts)
+            if index != body_index
+        ]
+        fused_bounds = (
+            min(bounds, key=lambda item: item.x_min).x_min,
+            min(bounds, key=lambda item: item.y_min).y_min,
+            min(bounds, key=lambda item: item.z_min).z_min,
+            max(bounds, key=lambda item: item.x_max).x_max,
+            max(bounds, key=lambda item: item.y_max).y_max,
+            max(bounds, key=lambda item: item.z_max).z_max,
+        )
+        terminal_block = occt.box(
+            fused_bounds[0],
+            fused_bounds[1],
+            fused_bounds[2],
+            fused_bounds[3] - fused_bounds[0],
+            fused_bounds[4] - fused_bounds[1],
+            fused_bounds[5] - fused_bounds[2],
+        )
+        return occt.compound((parts[body_index], terminal_block))
+
+    fused, _ = _rewrite_model(
+        tmp_path / "fused",
+        monkeypatch,
+        spec=_vqfn_spec(),
+        mutation=fuse_terminals,
+    )
+    assert "model_terminals_unseparable" in _codes(fused)
+
+
+def test_model_geometry_rejects_nonidentity_transform_and_wrong_format(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transformed, _ = _rewrite_model(
+        tmp_path / "transformed",
+        monkeypatch,
+        model_update={"offset": (0.1, 0.0, 0.0)},
+    )
+    assert "model_transform_not_identity" in _codes(transformed)
+
+    wrong_format, _ = _rewrite_model(
+        tmp_path / "wrong-format",
+        monkeypatch,
+        model_update={"path": "fixture.wrl"},
+    )
+    assert "model_format" in _codes(wrong_format)
+
+
+def test_single_fused_model_recovers_body_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report, _ = _rewrite_model(
+        tmp_path,
+        monkeypatch,
+        mutation=lambda shape: occt.fuse(occt.solids(shape)),
+    )
+    assert "model_body_dimension" not in _codes(report)
 
 
 @pytest.mark.parametrize(

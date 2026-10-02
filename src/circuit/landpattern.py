@@ -245,6 +245,14 @@ def _placements(spec: PartSpec) -> list[_Placement]:
     return placements
 
 
+def standard_pin_placements(spec: PartSpec) -> list[tuple[str, Side, float]]:
+    """Return top-left-anchored counter-clockwise pin placements."""
+
+    return [
+        (placement.number, placement.side, placement.position) for placement in _placements(spec)
+    ]
+
+
 def _metrics(
     length: tuple[float, float],
     terminal_length: tuple[float, float],

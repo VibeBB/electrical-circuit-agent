@@ -8,6 +8,7 @@ dependencies = [
     "pydantic>=2",
     "pdfplumber==0.11.10",
     "pillow==12.3.0",
+    "cadquery-ocp-novtk==8.0.1.0.0",
     "mcp>=1.29,<2",
     "openhands-sdk==1.50.1",
     "openhands-tools==1.50.1",

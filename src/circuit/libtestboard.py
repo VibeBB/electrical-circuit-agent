@@ -298,17 +298,31 @@ def _board_footprint(
     footprint_name: str,
     net_ids: dict[str, int],
     number_to_name: dict[str, str],
+    rotation_deg: float = 0.0,
+    model_reference_override: str | None = None,
 ) -> list[sexpr.SExpr]:
     root = sexpr.parse_text(footprint_path.read_text(encoding="utf-8"))
     if not root or root[0] not in {"footprint", "module"}:
         raise ValueError(f"not a KiCad footprint: {footprint_path}")
     root[0] = "footprint"
     root[1] = sexpr.quoted(f"{_LIBRARY_ALIAS}:{footprint_name}")
+    if model_reference_override is not None:
+        model_nodes = [
+            child for child in root[1:] if isinstance(child, list) and child and child[0] == "model"
+        ]
+        if model_nodes:
+            model_nodes[0][1] = sexpr.quoted(model_reference_override)
+            for model_node in model_nodes[1:]:
+                root.remove(model_node)
+        else:
+            root.append(["model", sexpr.quoted(model_reference_override)])
+    placement_found = False
     for child in root[1:]:
         if not isinstance(child, list) or not child:
             continue
         if child[0] == "at":
-            child[:] = ["at", "0", "0", "0"]
+            child[:] = ["at", "0", "0", _format_number(rotation_deg)]
+            placement_found = True
         elif child[0] == "property" and len(child) >= 3:
             if child[1] == "Reference":
                 child[2] = sexpr.quoted(_BOARD_REFERENCE)
@@ -321,6 +335,8 @@ def _board_footprint(
                 _set_net(child, net_ids[pin_name], pin_name)
             else:
                 _set_net(child, 0, "")
+    if not placement_found:
+        root.insert(2, ["at", "0", "0", _format_number(rotation_deg)])
     if _first(root, "uuid") is None:
         root.append(["uuid", sexpr.quoted(_uuid(f"{footprint_name}:board-footprint"))])
     if _first(root, "path") is None:
@@ -347,6 +363,9 @@ def _write_board(
     footprint_path: Path,
     footprint: FootprintDef,
     rules: EffectiveRules,
+    rotation_deg: float = 0.0,
+    board_thickness_mm: float = 1.6,
+    model_reference_override: str | None = None,
 ) -> tuple[Path, dict[str, str]]:
     copper_pads = [
         pad for pad in footprint.pads if any(layer.endswith(".Cu") for layer in pad.layers)
@@ -363,6 +382,8 @@ def _write_board(
         footprint_name=footprint.name,
         net_ids=net_ids,
         number_to_name=number_to_name,
+        rotation_deg=rotation_deg,
+        model_reference_override=model_reference_override,
     )
     courtyard = [
         graphic for graphic in footprint.graphics if graphic.layer in {"F.CrtYd", "B.CrtYd"}
@@ -424,7 +445,7 @@ def _write_board(
             "kicad_pcb",
             ["version", "20241229"],
             ["generator", "pcbnew"],
-            ["general", ["thickness", "1.6"]],
+            ["general", ["thickness", _format_number(board_thickness_mm)]],
             ["paper", sexpr.quoted("A4")],
             ["layers", *layers],
             ["setup", ["pad_to_mask_clearance", "0"]],
@@ -457,6 +478,31 @@ def _write_board(
     project_path = project_dir / "test-board.kicad_pro"
     project_path.write_text(json.dumps(project, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return board_path, number_to_name
+
+
+def write_model_export_board(
+    project_dir: Path,
+    *,
+    spec: PartSpec,
+    footprint_path: Path,
+    rules: EffectiveRules,
+    rotation_deg: float,
+    model_reference_override: str,
+    board_thickness_mm: float = 1.6,
+) -> Path:
+    project_dir.mkdir(parents=True, exist_ok=True)
+    footprint = parse_footprint(footprint_path)
+    board_path, _ = _write_board(
+        project_dir,
+        spec=spec,
+        footprint_path=footprint_path,
+        footprint=footprint,
+        rules=rules,
+        rotation_deg=rotation_deg,
+        board_thickness_mm=board_thickness_mm,
+        model_reference_override=model_reference_override,
+    )
+    return board_path
 
 
 def _write_local_tables(project_dir: Path, symbol_lib: Path, footprint_path: Path) -> None:
