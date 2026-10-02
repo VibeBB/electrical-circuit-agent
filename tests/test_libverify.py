@@ -310,7 +310,7 @@ def _vqfn_spec(*, pitch: float = 0.5) -> PartSpec:
         body_length=_dimension(3.0, minimum=2.9, maximum=3.1),
         body_width=_dimension(3.0, minimum=2.9, maximum=3.1),
         height=_dimension(0.8),
-        lead_length=_dimension(0.45),
+        lead_length=_dimension(0.4),
         lead_width=_dimension(0.30, minimum=0.18, maximum=0.30),
         exposed_pad=ExposedPad(
             number="17",
@@ -493,7 +493,7 @@ def _write_case(
     _fake_cli(tmp_path, monkeypatch)
     symbol_args = cast(dict[str, Any], symbol_kwargs or {})
     footprint_args = cast(dict[str, Any], dict(footprint_kwargs or {}))
-    model_reference = f"${{TEST_3DMODEL_DIR}}/Fixture.3dshapes/{spec.package.drawing_id}.step"
+    model_reference = f"${{TEST_3DMODEL_DIR}}/{spec.mpn}.3dshapes/{spec.package.drawing_id}.step"
     generate_fixture_model = "model" not in footprint_args and spec.package.family in {
         "chip",
         "gullwing_dual",
@@ -516,10 +516,7 @@ def _write_case(
             ),
             encoding="utf-8",
         )
-        model_spec = spec.model_copy(
-            update={"package": spec.package.model_copy(update={"lead_span": None})}
-        )
-        generate_model(model_spec, source_path, tmp_path / "models")
+        generate_model(spec, source_path, tmp_path / "models")
     footprint_path.write_text(
         _footprint_text(
             spec.package.drawing_id,
@@ -788,7 +785,9 @@ def _rewrite_model(
 ) -> tuple[LibraryVerification, Path]:
     case = _write_case(tmp_path, monkeypatch, spec=spec)
     part_spec, reference, spec_path, _check_path, symbol_path, footprint_path = case
-    model_path = tmp_path / "models" / "Fixture.3dshapes" / f"{part_spec.package.drawing_id}.step"
+    model_path = (
+        tmp_path / "models" / f"{part_spec.mpn}.3dshapes" / f"{part_spec.package.drawing_id}.step"
+    )
     shape = occt.read_step(model_path)
     if mutation is not None:
         shape = mutation(shape)
@@ -1829,10 +1828,43 @@ def _vqfn_case(
 ) -> tuple[LibraryVerification, PartSpec]:
     spec = _vqfn_spec(pitch=pitch)
     reference = compute_land_pattern(spec)
+    lead_width_dimension = spec.package.lead_width
+    if lead_width_dimension is None:
+        raise AssertionError("VQFN fixture requires a lead width")
+    lead_width = lead_width_dimension.nom
+    if lead_width is None:
+        raise AssertionError("VQFN fixture requires a nominal lead width")
+    exposed_number = (
+        spec.package.exposed_pad.number if spec.package.exposed_pad is not None else None
+    )
+
+    def terminal_width_pad(pad: LandPad) -> tuple[str, float, float, float, float, float]:
+        if pad.number == exposed_number:
+            return pad.number, pad.x, pad.y, pad.width, pad.height, 0.0
+        if abs(pad.x) > abs(pad.y):
+            width, height = pad.width, max(pad.height, lead_width)
+        else:
+            width, height = max(pad.width, lead_width), pad.height
+        return pad.number, pad.x, pad.y, width, height, 0.0
+
+    reference = reference.model_copy(
+        update={
+            "pads": [
+                pad.model_copy(
+                    update={
+                        "width": terminal_width_pad(pad)[3],
+                        "height": terminal_width_pad(pad)[4],
+                    }
+                )
+                for pad in reference.pads
+            ]
+        }
+    )
     case = _write_case(
         tmp_path,
         monkeypatch,
         spec=spec,
+        pad_transform=terminal_width_pad,
         symbol_kwargs=symbol_kwargs,
     )
     part_spec, _, spec_path, _check_path, symbol_path, footprint_path = case
@@ -1896,7 +1928,10 @@ def _rewrite_footprint(path: Path, footprint: FootprintDef, pads: list[PadDef]) 
             f'(pad "{pad.number}" smd roundrect (at {pad.x} {pad.y}) '
             f'(size {pad.width} {pad.height}) (layers "F.Cu" "F.Mask" "F.Paste"))'
         )
-    lines.append('(model "${TEST_3DMODEL_DIR}/fixture.step")')
+    model_path = (
+        footprint.models[0].path if footprint.models else "${TEST_3DMODEL_DIR}/fixture.step"
+    )
+    lines.append(f'(model "{model_path}")')
     lines.append(")")
     path.write_text("\n".join(lines), encoding="utf-8")
 

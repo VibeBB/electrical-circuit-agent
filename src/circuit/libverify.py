@@ -50,7 +50,7 @@ from .lineage import (
     lineage_path_for,
     pad_changes,
 )
-from .model3d import GeneratedModel
+from .model3d import GENERATOR_VERSION, GeneratedModel
 from .modeloracle import ModelExportReport, verify_model_export
 from .partspec import (
     Dimension,
@@ -1671,6 +1671,82 @@ def _model_rectangles_overlap(
     )
 
 
+def _generated_terminal_bindings(
+    spec: PartSpec,
+    model_path: Path,
+    model_sha256: str,
+    findings: list[VerifyFinding],
+) -> dict[str, tuple[float, float]] | None:
+    manifest_path = Path(f"{model_path}.gen.json")
+    if not manifest_path.is_file():
+        return None
+    try:
+        loaded: object = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            return None
+        manifest = cast(dict[str, object], loaded)
+        if manifest.get("generator_version") != GENERATOR_VERSION:
+            return None
+        spec_sha256 = hashlib.sha256(
+            json.dumps(
+                spec.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            manifest.get("step_sha256") != model_sha256
+            or manifest.get("spec_sha256") != spec_sha256
+        ):
+            raise ValueError("model or PartSpec hash does not match its generation manifest")
+        parameters_value = manifest.get("parameters")
+        parameters = (
+            cast(dict[str, object], parameters_value)
+            if isinstance(parameters_value, dict)
+            else None
+        )
+        entries = parameters.get("terminal_map") if parameters is not None else None
+        if not isinstance(entries, list):
+            raise ValueError("terminal_map is missing from the generation manifest")
+        bindings: dict[str, tuple[float, float]] = {}
+        for entry_value in cast(list[object], entries):
+            if not isinstance(entry_value, dict):
+                raise ValueError("terminal_map contains an invalid entry")
+            entry = cast(dict[str, object], entry_value)
+            number = entry.get("number")
+            center = entry.get("terminal_center_mm")
+            if not isinstance(number, str) or number in bindings:
+                raise ValueError("terminal_map contains an invalid or duplicate terminal")
+            if not isinstance(center, list):
+                raise ValueError("terminal_map contains an invalid terminal center")
+            center_values = cast(list[object], center)
+            if len(center_values) != 2:
+                raise ValueError("terminal_map contains an invalid terminal center")
+            center_x, center_y = center_values
+            if (
+                not isinstance(center_x, (int, float))
+                or isinstance(center_x, bool)
+                or not isinstance(center_y, (int, float))
+                or isinstance(center_y, bool)
+            ):
+                raise ValueError("terminal_map contains an invalid or duplicate terminal")
+            bindings[number] = (float(center_x), float(center_y))
+        if len(bindings) != spec.package.pin_count + int(spec.package.exposed_pad is not None):
+            raise ValueError("terminal_map does not cover the PartSpec terminal set")
+        return bindings
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        _finding(
+            findings,
+            "model_manifest_invalid",
+            "error",
+            f"model.{model_path.name}",
+            f"generation manifest cannot bind model terminals: {exc}",
+            model_sha256=model_sha256,
+        )
+        return None
+
+
 def _check_model_terminals(
     spec: PartSpec,
     footprint: FootprintDef,
@@ -1678,6 +1754,7 @@ def _check_model_terminals(
     body_bbox: tuple[float, float, float, float, float, float],
     model_sha256: str,
     findings: list[VerifyFinding],
+    terminal_bindings: dict[str, tuple[float, float]] | None = None,
 ) -> None:
     pads = [
         (pad, _model_pad_bbox(pad))
@@ -1708,6 +1785,56 @@ def _check_model_terminals(
                 "a terminal region overlaps multiple pads or exceeds the largest pad area",
                 model_sha256=model_sha256,
             )
+        if terminal_bindings is not None:
+            matched_numbers = [
+                number
+                for number, position in terminal_bindings.items()
+                if math.dist(center, position) <= 0.01
+            ]
+            if len(matched_numbers) != 1:
+                _finding(
+                    findings,
+                    "model_terminal_mismatch",
+                    "error",
+                    "model.terminals",
+                    f"terminal region centered at {center} does not match one PartSpec terminal",
+                    model_sha256=model_sha256,
+                )
+                continue
+            number = matched_numbers[0]
+            targets = [index for index, (pad, _) in enumerate(pads) if pad.number == number]
+            if len(targets) != 1:
+                _finding(
+                    findings,
+                    "model_terminal_mismatch",
+                    "error",
+                    f"model.pad.{number}",
+                    "PartSpec terminal does not map to exactly one copper pad with the same number",
+                    model_sha256=model_sha256,
+                )
+                continue
+            pad_index = targets[0]
+            assigned[pad_index].append(center)
+            pad_bbox = pads[pad_index][1]
+            if not _model_pad_contains(pad_bbox, region_bbox, tolerance=0.025):
+                _finding(
+                    findings,
+                    "model_terminal_outside_pad",
+                    "error",
+                    f"model.pad.{number}",
+                    "terminal region bbox is not contained by its numbered "
+                    "pad bbox within 0.025 mm",
+                    model_sha256=model_sha256,
+                )
+                _finding(
+                    findings,
+                    "model_terminal_mismatch",
+                    "error",
+                    f"model.pad.{number}",
+                    "PartSpec terminal geometry does not match the same-numbered footprint pad",
+                    model_sha256=model_sha256,
+                )
+            continue
         containing = [
             index
             for index, (_, pad_bbox) in enumerate(pads)
@@ -1764,11 +1891,42 @@ def _check_model_terminals(
                 model_sha256=model_sha256,
             )
 
-    pitch = spec.package.pitch.nom if spec.package.pitch is not None else None
+    pitch_dimension = spec.package.pitch
+    pitch = None
+    if pitch_dimension is not None:
+        pitch = pitch_dimension.nom
+        if pitch is None and pitch_dimension.min is not None and pitch_dimension.max is not None:
+            pitch = (pitch_dimension.min + pitch_dimension.max) / 2
     body_width = body_bbox[3] - body_bbox[0]
     body_length = body_bbox[4] - body_bbox[1]
     if pitch is None or pitch <= 0:
         return
+    if terminal_bindings is not None:
+        footprint_rows: dict[tuple[str, float], set[float]] = {}
+        for number in terminal_bindings:
+            numbered_pads = [pad for pad, _ in pads if pad.number == number]
+            if len(numbered_pads) != 1:
+                continue
+            pad = numbered_pads[0]
+            x_distance = abs(pad.x) - body_width / 2
+            y_distance = abs(pad.y) - body_length / 2
+            side, row_position, position = (
+                ("y", pad.y, pad.x) if y_distance >= x_distance else ("x", pad.x, pad.y)
+            )
+            footprint_rows.setdefault((side, round(row_position, 4)), set()).add(round(position, 4))
+        if any(
+            abs((right - left) - pitch) > 0.005
+            for positions in footprint_rows.values()
+            for left, right in pairwise(sorted(positions))
+        ):
+            _finding(
+                findings,
+                "model_pitch",
+                "error",
+                "model.terminals",
+                f"numbered footprint terminal spacing does not match nominal pitch {pitch} mm",
+                model_sha256=model_sha256,
+            )
     rows: dict[tuple[str, float], set[float]] = {}
     for index in range(len(pads)):
         if len(assigned[index]) != 1:
@@ -2157,8 +2315,15 @@ def _verify_model_geometry(
         body_bbox.y_max - body_bbox.y_min,
     )
     dimensions = (
-        (spec.package.body_width, body_actual[0]),
-        (spec.package.body_length, body_actual[1]),
+        (
+            (spec.package.body_length, body_actual[0]),
+            (spec.package.body_width, body_actual[1]),
+        )
+        if spec.package.family == "chip"
+        else (
+            (spec.package.body_width, body_actual[0]),
+            (spec.package.body_length, body_actual[1]),
+        )
     )
     dimension_mismatch = any(
         (lower is not None and actual < lower - 1e-6)
@@ -2230,6 +2395,12 @@ def _verify_model_geometry(
             )
 
     regions = occt.slab_regions(shape, 0.0, 0.02)
+    terminal_bindings = _generated_terminal_bindings(
+        spec,
+        resolved,
+        model_sha256,
+        findings,
+    )
     _check_model_terminals(
         spec,
         footprint,
@@ -2244,6 +2415,7 @@ def _verify_model_geometry(
         ),
         model_sha256,
         findings,
+        terminal_bindings,
     )
     courtyard = _graphic_box(
         [graphic for graphic in footprint.graphics if graphic.layer == "F.CrtYd"]

@@ -172,7 +172,11 @@ def write_step(shape: Shape, path: Path, *, product_name: str) -> None:
             count=1,
         )
         escaped_name = product_name.replace("'", "''")
-        product = re.compile(r"(PRODUCT\()'[^']*(?:''[^']*)*',\s*'[^']*(?:''[^']*)*'")
+        product = re.compile(
+            r"PRODUCT\(\s*'(?:''|[^'])*'\s*,\s*'(?:''|[^'])*'\s*,\s*"
+            r"'(?P<identifier>(?:''|[^'])*)'\s*,\s*\((?P<refs>[^()]*)\)\s*\)",
+            re.DOTALL,
+        )
         product_index = 0
 
         def normalize_product(match: re.Match[str]) -> str:
@@ -181,7 +185,9 @@ def write_step(shape: Shape, path: Path, *, product_name: str) -> None:
             name = (
                 escaped_name if product_index == 1 else f"{escaped_name} solid {product_index - 1}"
             )
-            return f"{match.group(1)}'{name}','{name}'"
+            refs = ",".join(item.strip() for item in match.group("refs").split(",") if item.strip())
+            identifier = match.group("identifier").strip()
+            return f"PRODUCT('{name}','{name}','{identifier}',({refs}))"
 
         content = product.sub(normalize_product, content)
         occurrence = re.compile(r"(NEXT_ASSEMBLY_USAGE_OCCURRENCE\()'[^']*'")
