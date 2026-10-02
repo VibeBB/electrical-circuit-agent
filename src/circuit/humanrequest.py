@@ -164,19 +164,18 @@ class LibraryReviewDetails(_StrictModel):
     finding_codes: list[_NonEmpty] = Field(default_factory=list)
 
 
-RequestDetails = Annotated[
+RequestDetails = (
     DatasheetAcquisitionDetails
     | SubstitutePermissionDetails
     | AlternativeEvidenceDetails
-    | LibraryReviewDetails,
-    Field(discriminator="kind"),
-]
+    | LibraryReviewDetails
+)
 
 
 class _HumanRequestFields(_StrictModel):
     artifact_kind: Literal["circuit_human_request"] = "circuit_human_request"
     kind: HumanRequestKind
-    created_at: datetime
+    created_at: datetime = Field(strict=False)
     subject: RequestSubject
     reason: _NonEmpty
     evidence: list[RequestEvidence] = Field(min_length=1)

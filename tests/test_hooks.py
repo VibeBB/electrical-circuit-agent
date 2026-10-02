@@ -1061,7 +1061,9 @@ def _human_request_for_hook() -> HumanRequest:
         agent_assessment=(
             "This request presents source evidence and deterministic findings for review. "
             "Compare each package and pin claim with the cited material before deciding. "
-            "Hash agreement does not prove that the underlying library content is correct."
+            "Hash agreement does not prove that the underlying library content is correct. "
+            "Every unresolved field remains explicit, and approval requires independent "
+            "human review of the evidence."
         ),
         recommendation="Approve only after review.",
         recommendation_rationale="Approval remains an independent human decision.",
@@ -1080,12 +1082,16 @@ def _human_request_for_hook() -> HumanRequest:
     )
 
 
-def test_record_human_response_pointer_is_user_only_and_hash_bound(tmp_path: Path) -> None:
+def test_record_human_response_pointer_is_user_only_and_hash_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     project = tmp_path / "project"
     request = _human_request_for_hook()
     write_request(request, project)
     events = tmp_path / "events"
     events.mkdir()
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(events))
     response_text = (
         f"CIRCUIT-HUMAN-RESPONSE {request.request_id}\n"
         "decision: approve\nreviewer: Human Reviewer\n"
@@ -1119,12 +1125,16 @@ def test_record_human_response_pointer_is_user_only_and_hash_bound(tmp_path: Pat
     assert responses[0].decision == "approve"
 
 
-def test_human_response_event_hash_tampering_is_not_trusted(tmp_path: Path) -> None:
+def test_human_response_event_hash_tampering_is_not_trusted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     project = tmp_path / "project"
     request = _human_request_for_hook()
     write_request(request, project)
     events = tmp_path / "events"
     events.mkdir()
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(events))
     event_path = _write_review_event(
         events,
         "event-1.json",
@@ -1151,12 +1161,16 @@ def test_human_response_event_hash_tampering_is_not_trusted(tmp_path: Path) -> N
     assert "response event hash mismatch" in responses[0].reasons
 
 
-def test_human_response_is_invalid_after_request_changes(tmp_path: Path) -> None:
+def test_human_response_is_invalid_after_request_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     project = tmp_path / "project"
     request = _human_request_for_hook()
     request_path, _ = write_request(request, project)
     events = tmp_path / "events"
     events.mkdir()
+    monkeypatch.setenv("CIRCUIT_AGENT_EVENTS_DIR", str(events))
     _write_review_event(
         events,
         "event-1.json",

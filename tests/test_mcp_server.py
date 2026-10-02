@@ -232,7 +232,9 @@ def test_human_request_mcp_create_and_status(
         "agent_assessment": (
             "This request presents source evidence and deterministic findings for review. "
             "Compare each package and pin claim with the cited material before deciding. "
-            "Hash agreement does not prove that the underlying library content is correct."
+            "Hash agreement does not prove that the underlying library content is correct. "
+            "Every unresolved field remains explicit, and approval requires independent "
+            "human review of the evidence."
         ),
         "recommendation": "Approve only after review.",
         "recommendation_rationale": "Approval remains an independent human decision.",
@@ -1318,7 +1320,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 47
+            assert len(tools.tools) == 49
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title
