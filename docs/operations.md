@@ -166,9 +166,47 @@ blocks normal agent writes to the event store. This is a policy barrier, not a
 cryptographic identity mechanism: arbitrary code execution under the same
 account can forge event files. Deterministic verification failures cannot be
 overridden by human approval. Three-dimensional visual review is not included.
-Human review remains mandatory until escape rates are measured; mismatch-only
-mode is not implemented and requires at least 299 accepted parts with zero
-escapes before it may be reconsidered (ADR-0026).
+Human review remains mandatory unless the metrics-backed relaxation gate
+described in [ADR-0032](adr/ADR-0032-library-release-evidence.md) explicitly
+supports it. Configure `--review-scope relaxed` or the corresponding MCP
+`review_scope` only after `circuit_library_metrics` has written a fresh,
+hash-bound `library/library-metrics.json`; otherwise the review gate returns
+`review_relaxation_not_supported_by_metrics`. The current default scope is
+`full`.
+
+## Golden corpus, mutation gate, and escape metrics
+
+The sealed golden corpus lives at `library/corpus/corpus.json`; a project-local
+`<project>/library/corpus/corpus.json` takes precedence when present. Truth
+files and approvals are separately hash-bound. New entries start unconfirmed,
+and corpus truth is not available to authoring lanes. Score with
+`circuit_corpus_score`; a missing PDF or unconfirmed truth is not a pass.
+
+Seeded critical mutations exercise symbols, footprints, PartSpecs, and STEP
+models against the deterministic verification stack. A critical mutation is
+detected only when at least two independent, non-vision oracle families report
+it. A `single_oracle` or undetected critical mutation fails the mutation gate;
+neither review approval nor metrics may waive that result. Metamorphic checks
+cover PDF DPI, rotation, bottom-view mirroring, and export invariants. The
+PartSpec unit-conversion relation is explicitly skipped because PartSpec has no
+unit field to transform. Pin validation compares Class A (cell-bound PartSpec)
+with Class B (an independent machine-readable pin source such as IBIS or BSDL);
+the two sources are not interchangeable or merged.
+
+`circuit_library_metrics` computes the accepted human-confirmed sample size,
+critical correction escapes, the exact one-sided 95% Clopper–Pearson upper
+bound, family detection rates, and per-operator mutation outcomes.
+`circuit_mutation_report` reads and validates the latest seeded mutation
+report. The metrics snapshot binds the corpus manifest and mutation report
+SHA-256 values and is recomputed against current inputs at the review gate.
+Human review may be relaxed only when at least 299 accepted parts have an
+upper bound below 0.01, the bound report has no critical `single_oracle`
+mutation, and the metrics snapshot remains bound to the current corpus and
+mutation report. Until all conditions hold, the review gate fails closed with
+`review_relaxation_not_supported_by_metrics`.
+
+See [ADR-0032](adr/ADR-0032-library-release-evidence.md) for the evidence and
+release policy.
 
 ## Command line
 
