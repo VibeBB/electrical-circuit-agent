@@ -13,13 +13,14 @@ from collections import Counter
 from collections.abc import Sequence
 from contextlib import ExitStack
 from contextvars import ContextVar, Token
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from . import advisory, confidential, datasheet, visionread
+from . import advisory, confidential, datasheet, humanrequest, visionread
 from . import pinout as pinout_oracle
 from .datasheet import (
     DatasheetError,
@@ -64,13 +65,25 @@ class CellRef(BaseModel):
 class Reading(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    page: int = Field(ge=1)
+    page: int | None = Field(default=None, ge=1)
     bbox: tuple[float, float, float, float] | None = None
     cells: dict[CellKey, CellRef] | None = None
     mechanical: str | None = None
-    vision: str = Field(min_length=1)
-    vision_record: str = Field(min_length=1)
+    vision: str | None = Field(default=None, min_length=1)
+    vision_record: str | None = Field(default=None, min_length=1)
     vision_read: str | None = None
+    alternative_evidence: str | None = Field(default=None, pattern=r"^[0-9a-f]{16}$")
+
+    @model_validator(mode="after")
+    def validate_source(self) -> Reading:
+        if self.alternative_evidence is None and (
+            self.page is None or self.vision is None or self.vision_record is None
+        ):
+            raise ValueError(
+                "readings require page, vision, and vision_record unless alternative "
+                "evidence is cited"
+            )
+        return self
 
 
 class Dimension(BaseModel):
@@ -88,7 +101,7 @@ class Dimension(BaseModel):
     def validate_values(self) -> Dimension:
         if self.min is None and self.nom is None and self.max is None:
             raise ValueError("at least one of min, nom, or max is required")
-        if self.reading.bbox is None:
+        if self.reading.bbox is None and self.reading.alternative_evidence is None:
             raise ValueError("dimension reading requires a bounding box")
         values = [value for value in (self.min, self.nom, self.max) if value is not None]
         if values != sorted(values):
@@ -143,7 +156,7 @@ class PackageSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_pins_per_side_family(self) -> PackageSpec:
-        if self.pin1_reading.bbox is None:
+        if self.pin1_reading.bbox is None and self.pin1_reading.alternative_evidence is None:
             raise ValueError("pin-1 reading requires a bounding box")
         if self.pins_per_side is not None and self.family not in (
             "no_lead_quad",
@@ -228,9 +241,9 @@ class PinoutDrawing(BaseModel):
 
     @model_validator(mode="after")
     def validate_view_reading(self) -> PinoutDrawing:
-        if self.view_reading.bbox is None:
+        if self.view_reading.bbox is None and self.view_reading.alternative_evidence is None:
             raise ValueError("pinout view reading requires a bounding box")
-        if self.view_reading.page != self.page:
+        if self.view_reading.alternative_evidence is None and self.view_reading.page != self.page:
             raise ValueError("pinout view reading page must match the pinout page")
         return self
 
@@ -258,6 +271,24 @@ class DatasheetRef(BaseModel):
     origin: Literal["web", "user_provided"] = "web"
 
 
+class SubstitutionRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    substitute_mpn: str = Field(min_length=1)
+    scope: list[humanrequest.SubstituteScope] = Field(min_length=1)
+
+    @field_validator("scope")
+    @classmethod
+    def require_unique_scope(
+        cls,
+        value: list[humanrequest.SubstituteScope],
+    ) -> list[humanrequest.SubstituteScope]:
+        if len(value) != len(set(value)):
+            raise ValueError("substitution scope entries must be unique")
+        return value
+
+
 class PartSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -265,6 +296,7 @@ class PartSpec(BaseModel):
     mpn: str
     manufacturer: str
     datasheet: DatasheetRef
+    substitution: SubstitutionRef | None = None
     package: PackageSpec
     land_pattern: LandPattern | None = None
     pinout: PinoutDrawing | None = None
@@ -309,6 +341,7 @@ class PartSpecReport(BaseModel):
     checked_readings: int
     findings: list[SpecFinding]
     pinout: PinoutGeometry | None = None
+    substitute_permit: humanrequest.SubstitutePermit | None = None
 
 
 def _decimal_string(value: str) -> str:
@@ -581,6 +614,17 @@ def _pin1_corner_findings(
     field: str,
     findings: list[SpecFinding],
 ) -> None:
+    if reading.vision is None:
+        findings.append(
+            SpecFinding(
+                code="evidence_missing",
+                severity="error",
+                field=field,
+                message="pin-1 reading has no vision transcription",
+                page=reading.page,
+            )
+        )
+        return
     matches = list(_PIN1_CORNER.finditer(reading.vision))
     if len(matches) != 1:
         findings.append(
@@ -619,6 +663,17 @@ def _read_vision(
     field: str,
     findings: list[SpecFinding],
 ) -> None:
+    if reading.page is None or reading.vision_record is None:
+        findings.append(
+            SpecFinding(
+                code="evidence_missing",
+                severity="error",
+                field=field,
+                message="reading has no datasheet page or visual review record",
+                page=reading.page,
+            )
+        )
+        return
     _vision_record_check(
         reading.vision_record,
         reading.page,
@@ -1089,6 +1144,17 @@ def _dimension_checks(
     extraction_dir: Path,
     findings: list[SpecFinding],
 ) -> None:
+    if reading.page is None or reading.vision is None:
+        findings.append(
+            SpecFinding(
+                code="evidence_missing",
+                severity="error",
+                field=field,
+                message="dimension reading has no datasheet page or transcription",
+                page=reading.page,
+            )
+        )
+        return
     _read_vision(reading, spec_dir, stored_page, field, findings)
     _bbox_findings(reading, mechanical_page, field, findings)
     try:
@@ -1318,6 +1384,17 @@ def _pin_checks(
 ) -> None:
     field = f"pins[{index}]"
     reading = pin.reading
+    if reading.page is None or reading.vision is None:
+        findings.append(
+            SpecFinding(
+                code="evidence_missing",
+                severity="error",
+                field=field,
+                message="pin reading has no datasheet page or transcription",
+                page=reading.page,
+            )
+        )
+        return
     _read_vision(reading, spec_dir, stored_page, field, findings)
     if reading.page != spec.pin_table.page:
         findings.append(
@@ -1368,7 +1445,7 @@ def _reading_cells_bbox(
     extraction: DatasheetExtraction,
     extraction_dir: Path,
 ) -> tuple[float, float, float, float] | None:
-    if reading.cells is None:
+    if reading.cells is None or reading.page is None:
         return None
     boxes: list[tuple[float, float, float, float]] = []
     for reference in reading.cells.values():
@@ -1653,6 +1730,9 @@ def _pin_table_vision_checks(
     observed_hashes: set[str],
     findings: list[SpecFinding],
 ) -> None:
+    ordinary_pins = [pin for pin in spec.pins if pin.reading.alternative_evidence is None]
+    if not ordinary_pins:
+        return
     table_ref = spec.pin_table
     if table_ref.vision_read is None:
         _vision_read_binding(
@@ -1675,7 +1755,7 @@ def _pin_table_vision_checks(
     citations: dict[int, list[CellRef]] = {}
     boxes: list[tuple[float, float, float, float]] = []
     valid_citations = True
-    for pin in spec.pins:
+    for pin in ordinary_pins:
         references = list(pin.reading.cells.values()) if pin.reading.cells is not None else []
         if not references:
             valid_citations = False
@@ -1758,12 +1838,17 @@ def _pin_table_vision_checks(
         number_text = rows[row_index][table_ref.number_col] or ""
         name = rows[row_index][table_ref.name_col] or ""
         mechanical_pairs.extend((number, name) for number in _pin_tokens(number_text))
-    vision_pairs = _table_pairs(
-        vision_rows,
-        table_ref.number_col,
-        table_ref.name_col,
-        table_ref.header_rows,
-    )
+    ordinary_numbers = {pin.number for pin in ordinary_pins}
+    vision_pairs = [
+        pair
+        for pair in _table_pairs(
+            vision_rows,
+            table_ref.number_col,
+            table_ref.name_col,
+            table_ref.header_rows,
+        )
+        if pair[0] in ordinary_numbers
+    ]
     equal, missing, extra = _table_pairs_equal(mechanical_pairs, vision_pairs)
     if equal:
         return
@@ -1771,7 +1856,16 @@ def _pin_table_vision_checks(
     column_shift = any(
         _table_pairs_equal(
             mechanical_pairs,
-            _table_pairs(vision_rows, table_ref.number_col, column, table_ref.header_rows),
+            [
+                pair
+                for pair in _table_pairs(
+                    vision_rows,
+                    table_ref.number_col,
+                    column,
+                    table_ref.header_rows,
+                )
+                if pair[0] in ordinary_numbers
+            ],
         )[0]
         for column in range(max_columns)
         if column not in (table_ref.number_col, table_ref.name_col)
@@ -1799,13 +1893,29 @@ def _orderable_vision_checks(
     observed_hashes: set[str],
     findings: list[SpecFinding],
 ) -> None:
+    variants = [
+        variant for variant in spec.orderable if variant.reading.alternative_evidence is None
+    ]
+    if not variants:
+        return
     if spec.orderable_vision_read is None:
+        page = variants[0].reading.page
+        if page is None:
+            findings.append(
+                SpecFinding(
+                    code="orderable_mpn_mismatch",
+                    severity="error",
+                    field="orderable",
+                    message="orderable table reading has no source page",
+                )
+            )
+            return
         _vision_read_binding(
             spec_dir,
             None,
             field="orderable",
             expected_kind="table",
-            page=spec.orderable[0].reading.page,
+            page=page,
             bbox=None,
             reading=None,
             extraction=extraction,
@@ -1816,10 +1926,13 @@ def _orderable_vision_checks(
         )
         return
     boxes: list[tuple[float, float, float, float]] = []
-    pages = {variant.reading.page for variant in spec.orderable}
+    pages = {variant.reading.page for variant in variants}
     valid = len(pages) == 1
-    page_number = next(iter(pages)) if pages else spec.pin_table.page
-    for variant in spec.orderable:
+    page_number = next((page for page in pages if page is not None), spec.pin_table.page)
+    for variant in variants:
+        if variant.reading.page is None:
+            valid = False
+            continue
         if variant.reading.page != page_number:
             valid = False
             continue
@@ -2098,7 +2211,7 @@ def _dimension_cell_checks(
     page: PageExtraction,
     findings: list[SpecFinding],
 ) -> None:
-    if reading.cells is None:
+    if reading.cells is None or reading.page is None:
         return
     label = dimension.label
     for key, cell_ref in reading.cells.items():
@@ -2250,6 +2363,8 @@ def _pin_table_checks(
     page: PageExtraction | None,
     findings: list[SpecFinding],
 ) -> None:
+    if not any(pin.reading.alternative_evidence is None for pin in spec.pins):
+        return
     field = "pin_table"
     table_ref = spec.pin_table
     table = _table_record(extraction, extraction_dir, table_ref.page, table_ref.table)
@@ -2410,7 +2525,14 @@ def _pin_table_checks(
                 page=table_ref.page,
             )
         )
-    expected_pairs = Counter((pin.number, pin.name) for pin in spec.pins)
+    alternative_numbers = {
+        pin.number for pin in spec.pins if pin.reading.alternative_evidence is not None
+    }
+    table_pairs = Counter(
+        {pair: count for pair, count in table_pairs.items() if pair[0] not in alternative_numbers}
+    )
+    ordinary_pins = [pin for pin in spec.pins if pin.reading.alternative_evidence is None]
+    expected_pairs = Counter((pin.number, pin.name) for pin in ordinary_pins)
     if table_pairs != expected_pairs:
         missing = sorted((expected_pairs - table_pairs).elements())
         extra = sorted((table_pairs - expected_pairs).elements())
@@ -2431,12 +2553,18 @@ def _pin_table_checks(
     }
     spec_signal_numbers = [
         pin.number
-        for pin in spec.pins
+        for pin in ordinary_pins
         if pin.number != (spec.package.exposed_pad.number if spec.package.exposed_pad else None)
     ]
-    if all(number.isdigit() for number in spec_signal_numbers) and signal_numbers != {
-        str(number) for number in range(1, spec.package.pin_count + 1)
-    }:
+    expected_signal_numbers = (
+        {str(number) for number in range(1, spec.package.pin_count + 1)}
+        if not alternative_numbers
+        else set(spec_signal_numbers)
+    )
+    if (
+        all(number.isdigit() for number in spec_signal_numbers)
+        and signal_numbers != expected_signal_numbers
+    ):
         findings.append(
             SpecFinding(
                 code="pin_numbering_incomplete",
@@ -2458,6 +2586,17 @@ def _orderable_row_checks(
     findings: list[SpecFinding],
 ) -> None:
     field = f"orderable[{index}]"
+    page_number = variant.reading.page
+    if page_number is None:
+        findings.append(
+            SpecFinding(
+                code="orderable_mpn_mismatch",
+                severity="error",
+                field=field,
+                message="orderable row has no source page",
+            )
+        )
+        return
     if page is None:
         findings.append(
             SpecFinding(
@@ -2465,11 +2604,11 @@ def _orderable_row_checks(
                 severity="error",
                 field=field,
                 message="orderable table page is unavailable",
-                page=variant.reading.page,
+                page=page_number,
             )
         )
         return
-    table = _table_record(extraction, extraction_dir, variant.reading.page, variant.row.table)
+    table = _table_record(extraction, extraction_dir, page_number, variant.row.table)
     if table is None or (rows := _table_rows(table)) is None or variant.row.row >= len(rows):
         findings.append(
             SpecFinding(
@@ -2477,7 +2616,7 @@ def _orderable_row_checks(
                 severity="error",
                 field=field,
                 message="bound re-derived orderable row is missing or unreadable",
-                page=variant.reading.page,
+                page=page_number,
             )
         )
         return
@@ -2506,7 +2645,7 @@ def _orderable_row_checks(
                 severity="error",
                 field=field,
                 message="exact orderable MPN is absent from the bound row",
-                page=variant.reading.page,
+                page=page_number,
             )
         )
     package_pin_cell = re.compile(
@@ -2525,7 +2664,7 @@ def _orderable_row_checks(
                 severity="error",
                 field=field,
                 message="exact package designator is absent from the bound row",
-                page=variant.reading.page,
+                page=page_number,
             )
         )
     if (
@@ -2545,9 +2684,421 @@ def _orderable_row_checks(
                 severity="error",
                 field=field,
                 message="pin count is absent from the bound row or differs from PackageSpec",
-                page=variant.reading.page,
+                page=page_number,
             )
         )
+
+
+def _latest_valid_response(
+    responses: list[humanrequest.HumanResponse],
+) -> humanrequest.HumanResponse | None:
+    valid = [response for response in responses if response.valid]
+    return max(
+        valid,
+        key=lambda response: (
+            response.recorded_at.isoformat() if response.recorded_at is not None else "",
+            response.event_sha256 or "",
+        ),
+        default=None,
+    )
+
+
+def _has_stale_response(responses: list[humanrequest.HumanResponse]) -> bool:
+    stale_reasons = (
+        "event hash mismatch",
+        "filename hash mismatch",
+        "request hash changed",
+        "stored request hash is missing or changed",
+        "pointer timestamp is invalid",
+    )
+    return any(
+        any(marker in reason for marker in stale_reasons)
+        for response in responses
+        for reason in response.reasons
+    )
+
+
+def _substitute_permission(
+    spec: PartSpec,
+    spec_path: Path,
+    findings: list[SpecFinding],
+) -> humanrequest.SubstitutePermit | None:
+    substitution = spec.substitution
+    if substitution is None:
+        return None
+    project_root = confidential.project_root_for(spec_path)
+    request_path = humanrequest.find_request_path(project_root, substitution.request_id)
+    if not request_path.is_file():
+        findings.append(
+            SpecFinding(
+                code="substitute_permission_missing",
+                severity="error",
+                field="substitution",
+                message="the referenced substitute permission request is missing",
+            )
+        )
+        return None
+    try:
+        request = humanrequest.load_request(request_path)
+    except humanrequest.HumanRequestError as exc:
+        findings.append(
+            SpecFinding(
+                code="substitute_permission_stale",
+                severity="error",
+                field="substitution",
+                message=f"the substitute permission request is invalid: {exc}",
+            )
+        )
+        return None
+    details = request.details
+    if request.kind != "substitute_permission" or not isinstance(
+        details, humanrequest.SubstitutePermissionDetails
+    ):
+        findings.append(
+            SpecFinding(
+                code="substitute_permission_missing",
+                severity="error",
+                field="substitution",
+                message="the referenced HumanRequest is not a substitute permission request",
+            )
+        )
+        return None
+    if (
+        request.subject.mpn.casefold() != spec.mpn.casefold()
+        or details.target_mpn.casefold() != spec.mpn.casefold()
+        or details.substitute_mpn.casefold() != substitution.substitute_mpn.casefold()
+    ):
+        findings.append(
+            SpecFinding(
+                code="substitute_permission_stale",
+                severity="error",
+                field="substitution",
+                message="substitute permission target or substitute MPN no longer matches",
+            )
+        )
+        return None
+    if details.substitute_datasheet_sha256 != spec.datasheet.sha256:
+        findings.append(
+            SpecFinding(
+                code="substitute_permission_stale",
+                severity="error",
+                field="datasheet.sha256",
+                message="substitute datasheet SHA-256 differs from the permission request",
+            )
+        )
+        return None
+    responses = humanrequest.load_responses(project_root, request)
+    response = _latest_valid_response(responses)
+    if response is None or response.decision != "grant":
+        code = (
+            "substitute_permission_stale"
+            if _has_stale_response(responses)
+            else "substitute_permission_missing"
+        )
+        findings.append(
+            SpecFinding(
+                code=code,
+                severity="error",
+                field="substitution",
+                message="no current trusted substitute permission grant is available",
+            )
+        )
+        return None
+    event_path = response.event_path
+    event_sha256 = response.event_sha256
+    granted_at = response.recorded_at
+    if granted_at is None and event_path is not None:
+        try:
+            granted_at = datetime.fromtimestamp(event_path.stat().st_mtime, UTC)
+        except OSError:
+            granted_at = None
+    if event_path is None or event_sha256 is None or granted_at is None:
+        findings.append(
+            SpecFinding(
+                code="substitute_permission_stale",
+                severity="error",
+                field="substitution",
+                message="the substitute permission response is missing its trusted event binding",
+            )
+        )
+        return None
+    granted_scope = cast(
+        list[humanrequest.SubstituteScope],
+        [item.strip() for item in response.fields.get("scope", "").split(",") if item.strip()],
+    )
+    try:
+        return humanrequest.SubstitutePermit(
+            request_id=request.request_id,
+            request_sha256=request.request_sha256,
+            target_mpn=details.target_mpn,
+            substitute_mpn=details.substitute_mpn,
+            target_source_sha256=details.target_source_sha256,
+            substitute_datasheet_sha256=details.substitute_datasheet_sha256,
+            granted_scope=granted_scope,
+            unverifiable_fields=details.unverifiable_fields,
+            reviewer=response.reviewer,
+            event_path=event_path,
+            event_sha256=event_sha256,
+            granted_at=granted_at,
+        )
+    except ValueError as exc:
+        findings.append(
+            SpecFinding(
+                code="substitute_permission_stale",
+                severity="error",
+                field="substitution",
+                message=f"the substitute permission grant cannot be derived: {exc}",
+            )
+        )
+        return None
+
+
+def _scope_for_field(field: str) -> humanrequest.SubstituteScope | None:
+    if field.startswith("package."):
+        return "package_dimensions"
+    if field.startswith("land_pattern."):
+        return "land_pattern"
+    if field.startswith("pinout."):
+        return "pinout"
+    if field.startswith("pins[") or field == "pin_table":
+        return "pin_table"
+    if field.startswith("orderable["):
+        return "orderable"
+    return None
+
+
+def _pointer_for_field(field: str) -> str:
+    if field == "package.pin1_reading":
+        return "/package/pin1_corner"
+    if field.startswith("pinout."):
+        return "/pinout"
+    if field.startswith("pins["):
+        index = field.removeprefix("pins[").split("]", 1)[0]
+        return f"/pins/{index}"
+    if field.startswith("orderable["):
+        index = field.removeprefix("orderable[").split("]", 1)[0]
+        return f"/orderable/{index}"
+    tokens = field.removesuffix(".reading").split(".")
+    escaped = [token.replace("~", "~0").replace("/", "~1") for token in tokens]
+    return "/" + "/".join(escaped)
+
+
+def _pointer_is_covered(pointer: str, covers: set[str]) -> bool:
+    return any(pointer == item or pointer.startswith(item.rstrip("/") + "/") for item in covers)
+
+
+def _photo_alternative_has_vision(
+    reading: Reading,
+    field: str,
+    spec_dir: Path,
+    file_hashes: set[str],
+    findings: list[SpecFinding],
+) -> bool:
+    if reading.vision is None or reading.vision_record is None or reading.vision_read is None:
+        findings.append(
+            SpecFinding(
+                code="alternative_evidence_missing",
+                severity="error",
+                field=field,
+                message="photo evidence requires a hash-bound vision read and impression",
+                page=reading.page,
+            )
+        )
+        return False
+    record_path = _resolved(spec_dir, reading.vision_record)
+    try:
+        record = advisory.AdvisoryResult.model_validate(
+            json.loads(record_path.read_text(encoding="utf-8"))
+        )
+        detail = advisory.parse_visual_review(record)
+        batch, item, answers = visionread.load_vision_read(spec_dir, reading.vision_read)
+    except (OSError, json.JSONDecodeError, ValueError):
+        detail = None
+        item = None
+        answers = None
+        batch = None
+    if (
+        detail is None
+        or item is None
+        or answers is None
+        or batch is None
+        or detail.image_sha256 not in file_hashes
+        or item.image_sha256 not in file_hashes
+        or item.control
+        or not answers.control_passed
+        or answers.status.get(item.read_id) != "ok"
+        or not advisory.impression_is_prose(detail.impression)
+        or not advisory.impression_is_prose(answers.impressions.get(item.read_id, ""))
+    ):
+        findings.append(
+            SpecFinding(
+                code="alternative_evidence_missing",
+                severity="error",
+                field=field,
+                message="photo evidence lacks a valid impression bound to the cited image",
+                page=reading.page,
+            )
+        )
+        return False
+    normalized = answers.normalized.get(item.read_id)
+    if not isinstance(normalized, str) or not _vision_transcription_matches(
+        reading.vision,
+        normalized,
+    ):
+        findings.append(
+            SpecFinding(
+                code="alternative_evidence_scope_exceeded",
+                severity="error",
+                field=field,
+                message="photo vision answer does not support the authored reading",
+                page=reading.page,
+            )
+        )
+        return False
+    return True
+
+
+def _alternative_evidence_check(
+    reading: Reading,
+    field: str,
+    spec_dir: Path,
+    project_root: Path,
+    pointer: str,
+    findings: list[SpecFinding],
+    *,
+    confidential_data: bool,
+) -> bool:
+    request_id = reading.alternative_evidence
+    if request_id is None:
+        return False
+    request_path = humanrequest.find_request_path(project_root, request_id)
+    if not request_path.is_file():
+        findings.append(
+            SpecFinding(
+                code="alternative_evidence_missing",
+                severity="error",
+                field=field,
+                message="the cited alternative evidence request is missing",
+                page=reading.page,
+            )
+        )
+        return False
+    try:
+        request = humanrequest.load_request(request_path)
+    except humanrequest.HumanRequestError as exc:
+        findings.append(
+            SpecFinding(
+                code="alternative_evidence_stale",
+                severity="error",
+                field=field,
+                message=f"the alternative evidence request is invalid: {exc}",
+                page=reading.page,
+            )
+        )
+        return False
+    details = request.details
+    if request.kind != "alternative_evidence" or not isinstance(
+        details, humanrequest.AlternativeEvidenceDetails
+    ):
+        findings.append(
+            SpecFinding(
+                code="alternative_evidence_missing",
+                severity="error",
+                field=field,
+                message="the cited request is not an alternative evidence request",
+                page=reading.page,
+            )
+        )
+        return False
+    responses = humanrequest.load_responses(project_root, request)
+    response = _latest_valid_response(responses)
+    if response is None or response.decision != "grant":
+        code = (
+            "alternative_evidence_stale"
+            if _has_stale_response(responses)
+            else "alternative_evidence_missing"
+        )
+        findings.append(
+            SpecFinding(
+                code=code,
+                severity="error",
+                field=field,
+                message="no current trusted alternative evidence grant is available",
+                page=reading.page,
+            )
+        )
+        return False
+    granted_covers = {
+        item.strip() for item in response.fields.get("covers", "").split(",") if item.strip()
+    }
+    if not _pointer_is_covered(pointer, set(details.covers)) or not _pointer_is_covered(
+        pointer,
+        granted_covers,
+    ):
+        findings.append(
+            SpecFinding(
+                code="alternative_evidence_scope_exceeded",
+                severity="error",
+                field=field,
+                message=f"alternative evidence does not grant coverage for {pointer}",
+                page=reading.page,
+            )
+        )
+        return False
+    file_hashes: set[str] = set()
+    for item in details.files:
+        path = Path(item.path)
+        if not path.is_absolute():
+            path = project_root / path
+        try:
+            actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            actual_hash = ""
+        if actual_hash != item.sha256:
+            findings.append(
+                SpecFinding(
+                    code="alternative_evidence_stale",
+                    severity="error",
+                    field=field,
+                    message=f"alternative evidence file is missing or changed: {item.path}",
+                    page=reading.page,
+                )
+            )
+            return False
+        file_hashes.add(actual_hash)
+        if confidential_data:
+            private_root = confidential.ensure_confidential_store(project_root)
+            try:
+                path.resolve().relative_to(private_root.resolve())
+            except ValueError:
+                findings.append(
+                    SpecFinding(
+                        code="confidential_artifact_outside_store",
+                        severity="error",
+                        field=field,
+                        message="confidential alternative evidence is outside .confidential/",
+                        page=reading.page,
+                    )
+                )
+                return False
+    if details.evidence_kind == "photo" and not _photo_alternative_has_vision(
+        reading,
+        field,
+        spec_dir,
+        file_hashes,
+        findings,
+    ):
+        return False
+    findings.append(
+        SpecFinding(
+            code="alternative_evidence_used",
+            severity="warning",
+            field=field,
+            message=f"alternative evidence supports {pointer}; it is not deterministic",
+            page=reading.page,
+        )
+    )
+    return True
 
 
 def _dimension_upper(dimension: Dimension) -> float | None:
@@ -2587,8 +3138,9 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
                 message="exposed pad number is not present in the pin list",
             )
         )
+    expected_mpn = spec.substitution.substitute_mpn if spec.substitution is not None else spec.mpn
     matching_mpn = [
-        variant for variant in spec.orderable if variant.mpn.casefold() == spec.mpn.casefold()
+        variant for variant in spec.orderable if variant.mpn.casefold() == expected_mpn.casefold()
     ]
     if len(matching_mpn) != 1:
         findings.append(
@@ -2737,6 +3289,7 @@ def check_part_spec(
         )
     spec_dir = spec_path.resolve().parent
     extraction_dir = extraction_path.resolve().parent
+    project_root = confidential.project_root_for(spec_path)
     pdf_path = _resolved(spec_dir, spec.datasheet.path)
     stored_extraction_path = _resolved(spec_dir, spec.datasheet.extraction_path)
     actual_spec_sha = part_spec_sha256(spec_path)
@@ -2820,9 +3373,57 @@ def check_part_spec(
         f"orderable[{index}]": (index, variant) for index, variant in enumerate(spec.orderable)
     }
     pin_by_field = {f"pins[{index}]": (index, pin) for index, pin in enumerate(spec.pins)}
-    cited_pages = {reading.page for _, reading, _ in readings}
+    substitute_permit = _substitute_permission(spec, spec_path, findings)
+    alternative_fields: set[str] = set()
+    alternative_reading_fields = {
+        field for field, reading, _ in readings if reading.alternative_evidence is not None
+    }
+    for field, reading, _ in readings:
+        if reading.alternative_evidence is None:
+            continue
+        if _alternative_evidence_check(
+            reading,
+            field,
+            spec_dir,
+            project_root,
+            _pointer_for_field(field),
+            findings,
+            confidential_data=spec.datasheet.confidential,
+        ):
+            alternative_fields.add(field)
+    if spec.substitution is not None and substitute_permit is not None:
+        granted_scope = set(substitute_permit.granted_scope)
+        if not set(spec.substitution.scope).issubset(granted_scope):
+            findings.append(
+                SpecFinding(
+                    code="substitute_scope_exceeded",
+                    severity="error",
+                    field="substitution.scope",
+                    message="PartSpec substitution scope exceeds the granted permission",
+                )
+            )
+        for field, reading, _ in readings:
+            scope = _scope_for_field(field)
+            if scope is not None and scope not in granted_scope and field not in alternative_fields:
+                findings.append(
+                    SpecFinding(
+                        code="substitute_scope_exceeded",
+                        severity="error",
+                        field=field,
+                        message=(
+                            f"{scope} is outside the substitute permission and lacks "
+                            "granted alternative evidence"
+                        ),
+                        page=reading.page,
+                    )
+                )
+    cited_pages = {
+        reading.page
+        for _, reading, _ in readings
+        if reading.page is not None and reading.alternative_evidence is None
+    }
     cited_pages.add(spec.pin_table.page)
-    if spec.pinout is not None:
+    if spec.pinout is not None and "pinout.view_reading" not in alternative_reading_fields:
         cited_pages.add(spec.pinout.page)
     for page_number in cited_pages:
         page = stored_pages.get(page_number)
@@ -2944,6 +3545,10 @@ def check_part_spec(
                     )
 
             for field, reading, dimension in readings:
+                if reading.alternative_evidence is not None:
+                    continue
+                if reading.page is None:
+                    continue
                 stored_page = stored_pages.get(reading.page)
                 derived_page = derived_pages.get(reading.page)
                 if dimension is not None:
@@ -2988,14 +3593,16 @@ def check_part_spec(
                     index, pin = pin_by_field[field]
                     _pin_checks(spec, spec_dir, pin, index, stored_page, findings)
 
-            _pin_table_checks(
-                spec,
-                derived_extraction,
-                derived_dir,
-                derived_pages.get(spec.pin_table.page),
-                findings,
-            )
-            if spec.pinout is not None:
+            pin_reading_fields = set(pin_by_field)
+            if not pin_reading_fields.issubset(alternative_fields):
+                _pin_table_checks(
+                    spec,
+                    derived_extraction,
+                    derived_dir,
+                    derived_pages.get(spec.pin_table.page),
+                    findings,
+                )
+            if spec.pinout is not None and "pinout.view_reading" not in alternative_reading_fields:
                 pinout_geometry = _pinout_fresh_checks(
                     spec,
                     spec_dir,
@@ -3010,8 +3617,14 @@ def check_part_spec(
                 dimension.reading.page
                 for field, dimension in _dimensions(spec)
                 if field.startswith("package.") or field.startswith("land_pattern.")
+                if dimension.reading.page is not None
+                and dimension.reading.alternative_evidence is None
             }
-            drawing_pages.add(spec.package.pin1_reading.page)
+            if (
+                spec.package.pin1_reading.page is not None
+                and spec.package.pin1_reading.alternative_evidence is None
+            ):
+                drawing_pages.add(spec.package.pin1_reading.page)
             for page_number in sorted(drawing_pages):
                 page = derived_pages.get(page_number)
                 if page is None:
@@ -3073,6 +3686,10 @@ def check_part_spec(
                     )
         else:
             for field, reading, dimension in readings:
+                if reading.alternative_evidence is not None:
+                    continue
+                if reading.page is None:
+                    continue
                 stored_page = stored_pages.get(reading.page)
                 if dimension is not None:
                     _read_vision(reading, spec_dir, stored_page, field, findings)
@@ -3086,7 +3703,7 @@ def check_part_spec(
                     _pin_checks(spec, spec_dir, pin, index, stored_page, findings)
                 elif field == "pinout.view_reading":
                     _read_vision(reading, spec_dir, stored_page, field, findings)
-            if spec.pinout is not None:
+            if spec.pinout is not None and "pinout.view_reading" not in alternative_reading_fields:
                 _vision_record_check(
                     spec.pinout.vision_record,
                     spec.pinout.page,
@@ -3111,6 +3728,10 @@ def check_part_spec(
             tuple[visionread.VisionBatch, visionread.VisionReadItem, object] | None
         ) = None
         for field, reading, _ in readings:
+            if reading.alternative_evidence is not None or reading.page is None:
+                continue
+            if reading.vision is None:
+                continue
             expected_kind: visionread.VisionKind = (
                 "pin1_corner"
                 if field == "package.pin1_reading"
@@ -3162,15 +3783,16 @@ def check_part_spec(
                     )
                 )
 
-        _pin_table_vision_checks(
-            spec,
-            spec_dir,
-            vision_extraction,
-            vision_extraction_dir,
-            observation_log,
-            observed_hashes,
-            findings,
-        )
+        if not set(pin_by_field).issubset(alternative_fields):
+            _pin_table_vision_checks(
+                spec,
+                spec_dir,
+                vision_extraction,
+                vision_extraction_dir,
+                observation_log,
+                observed_hashes,
+                findings,
+            )
         _orderable_vision_checks(
             spec,
             spec_dir,
@@ -3180,7 +3802,7 @@ def check_part_spec(
             observed_hashes,
             findings,
         )
-        if spec.pinout is not None:
+        if spec.pinout is not None and "pinout.view_reading" not in alternative_reading_fields:
             pinout_labels_binding = _vision_read_binding(
                 spec_dir,
                 spec.pinout.labels_vision_read,
@@ -3237,4 +3859,5 @@ def check_part_spec(
             checked_readings=len(readings),
             findings=findings,
             pinout=pinout_geometry,
+            substitute_permit=substitute_permit,
         )

@@ -660,6 +660,52 @@ def test_review_html_lists_warnings_and_information_after_errors() -> None:
     assert "A mismatch could be overlooked." in rendered
 
 
+def test_review_html_surfaces_substitution_and_alternative_evidence_first() -> None:
+    review: dict[str, Any] = {
+        "packet_id": "a" * 16,
+        "findings": [],
+        "substitution": {
+            "target_mpn": "TARGET-1",
+            "substitute_mpn": "SUBSTITUTE-2",
+            "granted_scope": ["package_dimensions", "pinout"],
+            "unverifiable_fields": ["electrical limits"],
+        },
+        "alternative_evidence_fields": ["package.body_length"],
+        "alternative_evidence_unknown_fields": ["body taper"],
+    }
+    private_api: Any = libreview
+
+    rendered = private_api._review_html(review)
+
+    assert rendered.index("Substitution authorization") < rendered.index(
+        "Alternative evidence and unknowns"
+    )
+    assert rendered.index("Alternative evidence and unknowns") < rendered.index("<h1>Review packet")
+    assert "TARGET-1" in rendered
+    assert "SUBSTITUTE-2" in rendered
+    assert "electrical limits" in rendered
+    assert "package.body_length" in rendered
+    assert "body taper" in rendered
+
+
+def test_alternative_evidence_questions_follow_spec_array_pointers() -> None:
+    spec = _spec()
+    private_api: Any = libreview
+
+    page, bbox, field = private_api._authoring_question_region(spec, "/pins/0")
+    assert (page, bbox, field) == (1, (10, 10, 30, 20), "pins.1.reading")
+
+    page, bbox, field = private_api._authoring_question_region(spec, "/orderable/0")
+    assert (page, bbox, field) == (1, (10, 10, 30, 20), "orderable.0.row")
+
+    assert spec.pinout is not None
+    spec.pinout.view_reading = Reading(alternative_evidence="a" * 16)
+    question_ids = {
+        question.question_id for question in private_api.blind_questions(spec, "b" * 16)
+    }
+    assert "pinout.view" not in question_ids
+
+
 def test_review_html_renders_inline_evidence_renders_and_mismatch_cells() -> None:
     review: dict[str, Any] = {
         "packet_id": "a" * 16,

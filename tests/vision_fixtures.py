@@ -112,6 +112,8 @@ def _reading_bbox(
     extraction: DatasheetExtraction,
     extraction_dir: Path,
 ) -> tuple[float, float, float, float]:
+    if reading.page is None:
+        raise ValueError("fixture reading has no source page")
     if reading.bbox is not None:
         return reading.bbox
     boxes: list[tuple[float, float, float, float]] = []
@@ -182,6 +184,8 @@ def _pin_table_answer(
     rows = cast(list[object], raw_rows)
     boxes: list[tuple[float, float, float, float]] = []
     for pin in spec.pins:
+        if pin.reading.alternative_evidence is not None:
+            continue
         references = list((pin.reading.cells or {}).values())
         if not references:
             target_row = None
@@ -220,7 +224,12 @@ def _orderable_table_answer(
     boxes: list[tuple[float, float, float, float]] = []
     selected_rows: list[list[str]] = []
     for variant in spec.orderable:
-        table = _table(extraction, extraction_dir, variant.reading.page, variant.row.table)
+        if variant.reading.alternative_evidence is not None:
+            continue
+        page = variant.reading.page
+        if page is None:
+            raise ValueError(f"fixture orderable row has no source page for {variant.mpn}")
+        table = _table(extraction, extraction_dir, page, variant.row.table)
         raw_rows = table.get("rows")
         if not isinstance(raw_rows, list):
             raise ValueError(f"fixture orderable row is unavailable for {variant.mpn}")
@@ -317,10 +326,28 @@ def attach_vision_reads(
         seen_readings.add(id(reading))
     _write_render_stub(monkeypatch, lane)
 
-    pin_bbox, pin_table_answer = _pin_table_answer(spec, extraction, extraction_dir)
-    orderable_bbox, orderable_answer = _orderable_table_answer(spec, extraction, extraction_dir)
+    ordinary_pins = [pin for pin in spec.pins if pin.reading.alternative_evidence is None]
+    if ordinary_pins:
+        pin_bbox, pin_table_answer = _pin_table_answer(spec, extraction, extraction_dir)
+    else:
+        pin_bbox, pin_table_answer = None, ""
+    ordinary_variants = [
+        variant for variant in spec.orderable if variant.reading.alternative_evidence is None
+    ]
+    if ordinary_variants:
+        orderable_bbox, orderable_answer = _orderable_table_answer(
+            spec,
+            extraction,
+            extraction_dir,
+        )
+    else:
+        orderable_bbox, orderable_answer = None, ""
     requests: list[tuple[VisionReadRequest, str, Callable[[str], None]]] = []
     for field, reading, _ in _all_readings(spec):
+        if reading.alternative_evidence is not None:
+            continue
+        if reading.page is None or reading.vision is None:
+            raise ValueError(f"fixture reading has no datasheet-backed value for {field}")
         if field == "package.pin1_reading":
             match = re.search(r"\b(?:top|bottom)[\s_-]+(?:left|right)\b", reading.vision, re.I)
             answer = match.group(0) if match is not None else reading.vision
@@ -340,31 +367,38 @@ def attach_vision_reads(
             )
         )
 
-    requests.append(
-        (
-            VisionReadRequest(
-                field="pin_table",
-                page=spec.pin_table.page,
-                bbox=pin_bbox,
-                kind="table",
-            ),
-            pin_table_answer,
-            lambda ref: setattr(spec.pin_table, "vision_read", ref),
+    if ordinary_pins:
+        assert pin_bbox is not None
+        requests.append(
+            (
+                VisionReadRequest(
+                    field="pin_table",
+                    page=spec.pin_table.page,
+                    bbox=pin_bbox,
+                    kind="table",
+                ),
+                pin_table_answer,
+                lambda ref: setattr(spec.pin_table, "vision_read", ref),
+            )
         )
-    )
-    requests.append(
-        (
-            VisionReadRequest(
-                field="orderable",
-                page=spec.orderable[0].reading.page,
-                bbox=orderable_bbox,
-                kind="table",
-            ),
-            orderable_answer,
-            lambda ref: setattr(spec, "orderable_vision_read", ref),
+    if ordinary_variants:
+        assert orderable_bbox is not None
+        orderable_page = ordinary_variants[0].reading.page
+        if orderable_page is None:
+            raise ValueError("fixture orderable row has no source page")
+        requests.append(
+            (
+                VisionReadRequest(
+                    field="orderable",
+                    page=orderable_page,
+                    bbox=orderable_bbox,
+                    kind="table",
+                ),
+                orderable_answer,
+                lambda ref: setattr(spec, "orderable_vision_read", ref),
+            )
         )
-    )
-    if spec.pinout is not None:
+    if spec.pinout is not None and spec.pinout.view_reading.alternative_evidence is None:
         requests.append(
             (
                 VisionReadRequest(

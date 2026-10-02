@@ -141,6 +141,16 @@ class SubstitutePermissionDetails(_StrictModel):
     unverifiable_fields: list[_NonEmpty]
     similarity_evidence: list[_NonEmpty] = Field(min_length=1)
 
+    @field_validator("requested_scope")
+    @classmethod
+    def require_unique_requested_scope(
+        cls,
+        value: list[SubstituteScope],
+    ) -> list[SubstituteScope]:
+        if len(value) != len(set(value)):
+            raise ValueError("requested substitute scope entries must be unique")
+        return value
+
 
 class AlternativeEvidenceFile(_StrictModel):
     path: _NonEmpty
@@ -160,6 +170,18 @@ class AlternativeEvidenceDetails(_StrictModel):
     covers: list[_NonEmpty] = Field(min_length=1)
     unknown_fields: list[_NonEmpty] = Field(default_factory=list)
     measurement_method: _NonEmpty | None = None
+
+    @field_validator("covers")
+    @classmethod
+    def require_json_pointers(cls, value: list[str]) -> list[str]:
+        if any(
+            not pointer.startswith("/") or re.search(r"~(?![01])", pointer) is not None
+            for pointer in value
+        ):
+            raise ValueError("alternative evidence covers must be JSON pointers")
+        if len(value) != len(set(value)):
+            raise ValueError("alternative evidence covers must be unique")
+        return value
 
 
 class LibraryReviewDetails(_StrictModel):
@@ -246,8 +268,26 @@ class HumanResponse(BaseModel):
     fields: dict[str, str] = Field(default_factory=dict)
     event_path: Path | None = None
     event_sha256: str | None = None
+    recorded_at: datetime | None = None
     valid: bool
     reasons: list[str]
+
+
+class SubstitutePermit(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target_mpn: str = Field(min_length=1)
+    substitute_mpn: str = Field(min_length=1)
+    target_source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    substitute_datasheet_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    granted_scope: list[SubstituteScope] = Field(min_length=1)
+    unverifiable_fields: list[str]
+    reviewer: str = Field(min_length=1)
+    event_path: Path
+    event_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    granted_at: datetime
 
 
 def _canonical_json(value: dict[str, Any]) -> bytes:
@@ -487,6 +527,7 @@ def _response_from_event(
     pointer_request_sha256: str | None,
     error: str | None,
     has_pdf_attachment: bool = False,
+    recorded_at: datetime | None = None,
 ) -> HumanResponse:
     reasons: list[str] = []
     if error is not None:
@@ -546,12 +587,43 @@ def _response_from_event(
             for required in ("scope", "target", "substitute", "substitute_sha256"):
                 if not fields.get(required):
                     reasons.append(f"substitute grant requires {required}")
+            details = request.details
+            if isinstance(details, SubstitutePermissionDetails):
+                granted_scope = [item.strip() for item in fields.get("scope", "").split(",")]
+                if (
+                    not granted_scope
+                    or any(not item for item in granted_scope)
+                    or len(granted_scope) != len(set(granted_scope))
+                ):
+                    reasons.append("substitute grant scope must be a unique comma-separated list")
+                elif not set(granted_scope).issubset(set(details.requested_scope)):
+                    reasons.append("substitute grant scope exceeds the requested scope")
+                if fields.get("target") != details.target_mpn:
+                    reasons.append("substitute grant target does not match the request")
+                if fields.get("substitute") != details.substitute_mpn:
+                    reasons.append("substitute grant MPN does not match the request")
+                if fields.get("substitute_sha256") != details.substitute_datasheet_sha256:
+                    reasons.append("substitute grant datasheet hash does not match the request")
         if (
             request.kind == "alternative_evidence"
             and decision == "grant"
             and not fields.get("covers")
         ):
             reasons.append("alternative-evidence grant requires covers")
+        if request.kind == "alternative_evidence" and decision == "grant":
+            details = request.details
+            if isinstance(details, AlternativeEvidenceDetails):
+                granted_covers = [item.strip() for item in fields.get("covers", "").split(",")]
+                if (
+                    not granted_covers
+                    or any(not item for item in granted_covers)
+                    or len(granted_covers) != len(set(granted_covers))
+                ):
+                    reasons.append(
+                        "alternative-evidence covers must be a unique comma-separated list"
+                    )
+                elif not set(granted_covers).issubset(set(details.covers)):
+                    reasons.append("alternative-evidence grant exceeds the requested covers")
     if pointer_request_sha256 != request.request_sha256:
         reasons.append("request hash changed after the response was recorded")
     return HumanResponse(
@@ -562,6 +634,7 @@ def _response_from_event(
         fields=fields,
         event_path=event_path,
         event_sha256=event_sha256,
+        recorded_at=recorded_at,
         valid=not reasons,
         reasons=reasons,
     )
@@ -581,6 +654,7 @@ def load_responses(project: Path, request: HumanRequest) -> list[HumanResponse]:
     for pointer_path in sorted(directory.glob(f"{request.request_id}.*.json")):
         event_path: Path | None = None
         event_sha256: str | None = None
+        recorded_at: datetime | None = None
         pointer_request_sha256: str | None = None
         text: str | None = None
         has_pdf_attachment = False
@@ -597,6 +671,15 @@ def load_responses(project: Path, request: HumanRequest) -> list[HumanResponse]:
             event_path = Path(str(pointer_record["event_path"])).resolve()
             event_sha256 = str(pointer_record["event_sha256"])
             pointer_request_sha256 = str(pointer_record["request_sha256"])
+            recorded_value = pointer_record.get("recorded_at")
+            if isinstance(recorded_value, str):
+                try:
+                    recorded_at = datetime.fromisoformat(recorded_value)
+                except ValueError as exc:
+                    raise ValueError("response pointer timestamp is invalid") from exc
+                if recorded_at.tzinfo is None or recorded_at.utcoffset() is None:
+                    raise ValueError("response pointer timestamp must include a timezone")
+                recorded_at = recorded_at.astimezone(UTC)
             events_root = _events_root()
             override = os.environ.get(_EVENTS_DIR_ENV)
             if override:
@@ -639,6 +722,7 @@ def load_responses(project: Path, request: HumanRequest) -> list[HumanResponse]:
                 pointer_request_sha256,
                 error,
                 has_pdf_attachment,
+                recorded_at,
             )
         )
     return responses
