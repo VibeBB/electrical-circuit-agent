@@ -32,12 +32,21 @@ from circuit.visionread import (
 from vision_fixtures import FIXTURE_CONTROL, FIXTURE_IMPRESSION
 
 
-def _synthetic_pdf(path: Path) -> None:
-    stream = b"0 0 0 rg\n20 30 10 10 re f\n"
+def _synthetic_pdf(
+    path: Path,
+    *,
+    page_size: tuple[int, int] = (100, 100),
+    rectangle: tuple[int, int, int, int] = (20, 30, 10, 10),
+) -> bytes:
+    x, y, width, height = rectangle
+    stream = f"0 0 0 rg\n{x} {y} {width} {height} re f\n".encode()
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> /Contents 4 0 R >>",
+        (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_size[0]} {page_size[1]}] "
+            "/Resources << >> /Contents 4 0 R >>"
+        ).encode(),
         b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"endstream",
     ]
     document = bytearray(b"%PDF-1.4\n")
@@ -56,6 +65,7 @@ def _synthetic_pdf(path: Path) -> None:
         f"startxref\n{xref_offset}\n%%EOF\n".encode()
     )
     path.write_bytes(document)
+    return stream
 
 
 def _extraction(tmp_path: Path) -> Path:

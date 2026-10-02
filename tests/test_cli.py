@@ -39,6 +39,11 @@ def test_cli_library_review_exposes_packet_and_status(capsys: pytest.CaptureFixt
     assert "packet" in help_text
     assert "status" in help_text
 
+    with pytest.raises(SystemExit) as packet_error:
+        cli.main(["library-review", "packet", "--help"])
+    assert packet_error.value.code == 0
+    assert "--pin-source" in capsys.readouterr().out
+
 
 def test_cli_intake_ready(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code, payload = _run(

@@ -26,6 +26,7 @@ from .libitems import (
     parse_footprint,
     parse_symbol,
 )
+from .model3d import Model3dError, expected_terminals
 from .netlist import parse_netlist
 from .partspec import PartSpec
 from .ruleprofile import EffectiveRules
@@ -299,6 +300,7 @@ def _board_footprint(
     net_ids: dict[str, int],
     number_to_name: dict[str, str],
     rotation_deg: float = 0.0,
+    placement_xy_mm: tuple[float, float] = (0.0, 0.0),
     model_reference_override: str | None = None,
 ) -> list[sexpr.SExpr]:
     root = sexpr.parse_text(footprint_path.read_text(encoding="utf-8"))
@@ -321,7 +323,12 @@ def _board_footprint(
         if not isinstance(child, list) or not child:
             continue
         if child[0] == "at":
-            child[:] = ["at", "0", "0", _format_number(rotation_deg)]
+            child[:] = [
+                "at",
+                _format_number(placement_xy_mm[0]),
+                _format_number(placement_xy_mm[1]),
+                _format_number(rotation_deg),
+            ]
             placement_found = True
         elif child[0] == "property" and len(child) >= 3:
             if child[1] == "Reference":
@@ -336,7 +343,15 @@ def _board_footprint(
             else:
                 _set_net(child, 0, "")
     if not placement_found:
-        root.insert(2, ["at", "0", "0", _format_number(rotation_deg)])
+        root.insert(
+            2,
+            [
+                "at",
+                _format_number(placement_xy_mm[0]),
+                _format_number(placement_xy_mm[1]),
+                _format_number(rotation_deg),
+            ],
+        )
     if _first(root, "uuid") is None:
         root.append(["uuid", sexpr.quoted(_uuid(f"{footprint_name}:board-footprint"))])
     if _first(root, "path") is None:
@@ -364,6 +379,7 @@ def _write_board(
     footprint: FootprintDef,
     rules: EffectiveRules,
     rotation_deg: float = 0.0,
+    placement_xy_mm: tuple[float, float] = (0.0, 0.0),
     board_thickness_mm: float = 1.6,
     model_reference_override: str | None = None,
 ) -> tuple[Path, dict[str, str]]:
@@ -383,6 +399,7 @@ def _write_board(
         net_ids=net_ids,
         number_to_name=number_to_name,
         rotation_deg=rotation_deg,
+        placement_xy_mm=placement_xy_mm,
         model_reference_override=model_reference_override,
     )
     courtyard = [
@@ -487,6 +504,7 @@ def write_model_export_board(
     footprint_path: Path,
     rules: EffectiveRules,
     rotation_deg: float,
+    placement_xy_mm: tuple[float, float] = (0.0, 0.0),
     model_reference_override: str,
     board_thickness_mm: float = 1.6,
 ) -> Path:
@@ -499,6 +517,7 @@ def write_model_export_board(
         footprint=footprint,
         rules=rules,
         rotation_deg=rotation_deg,
+        placement_xy_mm=placement_xy_mm,
         board_thickness_mm=board_thickness_mm,
         model_reference_override=model_reference_override,
     )
@@ -804,6 +823,51 @@ def _compare_pad_readback(
     return not errors, "; ".join(errors)
 
 
+def _check_terminal_readback(
+    spec: PartSpec,
+    footprint: FootprintDef,
+    path: Path,
+) -> tuple[bool, str]:
+    records = [item for item in _parse_ipcd356(path) if item[2] == _BOARD_REFERENCE]
+    try:
+        terminals = expected_terminals(spec)
+    except Model3dError as error:
+        if str(error) == "unsupported_family":
+            return True, ""
+        return False, str(error)
+    errors: list[str] = []
+    for terminal in terminals:
+        contained = False
+        for record in records:
+            if record[1] != terminal.number:
+                continue
+            pad_center = (record[3], -record[4])
+            pads = [
+                pad
+                for pad in footprint.pads
+                if pad.number == terminal.number
+                and math.hypot(pad.x - pad_center[0], pad.y - pad_center[1]) <= 0.01
+            ]
+            for pad in pads:
+                angle = math.radians(pad.rotation)
+                dx = terminal.center_xy[0] - pad_center[0]
+                dy = terminal.center_xy[1] - pad_center[1]
+                local_x = math.cos(angle) * dx + math.sin(angle) * dy
+                local_y = -math.sin(angle) * dx + math.cos(angle) * dy
+                if abs(local_x) <= pad.width / 2 + 1e-6 and abs(local_y) <= pad.height / 2 + 1e-6:
+                    contained = True
+                    break
+            if contained:
+                break
+        if not contained:
+            errors.append(
+                f"PartSpec terminal {terminal.number} at "
+                f"({terminal.center_xy[0]:.4f}, {terminal.center_xy[1]:.4f}) mm "
+                "lies outside every corresponding IPC-D-356 pad"
+            )
+    return not errors, "; ".join(errors)
+
+
 def _check_pinmap(
     spec: PartSpec,
     netlist_path: Path,
@@ -1021,6 +1085,19 @@ def build_test_board(
                     passed=passed,
                     details=details,
                     code="testboard_pad_readback",
+                )
+                terminal_passed, terminal_details = _check_terminal_readback(
+                    spec,
+                    footprint,
+                    ipcd356_path,
+                )
+                _add_result(
+                    checks,
+                    findings,
+                    name="testboard_terminal_containment",
+                    passed=terminal_passed,
+                    details=terminal_details,
+                    code="testboard_terminal_outside_pad",
                 )
                 testboard_files["ipcd356_path"] = ipcd356_path
             except (kicad_cli.KicadCliError, OSError, ValueError) as error:

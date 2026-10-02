@@ -21,6 +21,7 @@ from circuit.partspec import (
     PinTable,
     Reading,
 )
+from test_mutation import _known_good_library_fixture  # pyright: ignore[reportPrivateUsage]
 
 pytestmark = pytest.mark.docker
 
@@ -81,12 +82,13 @@ def _reading(text: str) -> Reading:
 
 def _spec() -> PartSpec:
     package = PackageSpec(
-        family="custom",
+        family="chip",
         drawing_id="FixturePackage",
         pin_count=2,
-        body_length=Dimension(nom=4.0, reading=_reading("4")),
-        body_width=Dimension(nom=3.0, reading=_reading("3")),
+        body_length=Dimension(nom=1.4, reading=_reading("1.4")),
+        body_width=Dimension(nom=0.8, reading=_reading("0.8")),
         height=Dimension(nom=1.0, reading=_reading("1")),
+        lead_length=Dimension(nom=0.6, reading=_reading("0.6")),
         drawing_view="top",
         pin1_corner="top_left",
         pin1_reading=_reading("pin 1 at top left"),
@@ -174,7 +176,7 @@ def test_klc_and_test_board_in_tools_image(tmp_path: Path) -> None:
     model_path = workdir / "Fixture.step"
     shape = occt.compound(
         [
-            occt.box(-1.5, -1.0, 0.2, 3.0, 2.0, 0.8),
+            occt.box(-0.7, -0.4, 0.2, 1.4, 0.8, 0.8),
             occt.box(-1.3, -0.4, 0.0, 0.6, 0.8, 0.2),
             occt.box(0.7, -0.4, 0.0, 0.6, 0.8, 0.2),
         ]
@@ -234,3 +236,107 @@ def test_klc_and_test_board_in_tools_image(tmp_path: Path) -> None:
     model_export_missing: dict[str, Any] = reports["model_export_missing"]
     assert model_export_missing["verdict"] == "fail"
     assert any(item["code"] == "model_export_missing" for item in model_export_missing["findings"])
+
+
+def test_real_mutation_matrix_passes_in_tools_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = os.environ.get("CIRCUIT_TOOLS_IMAGE")
+    if not image:
+        pytest.skip("CIRCUIT_TOOLS_IMAGE is not set")
+
+    repo = Path(__file__).parents[2].resolve()
+    tmp_path.chmod(0o777)
+    workdir = tmp_path / "mutation-matrix"
+    workdir.mkdir()
+    workdir.chmod(0o777)
+    fixture = _known_good_library_fixture(
+        workdir,
+        monkeypatch,
+        seed=32032,
+    )
+    for path in (tmp_path, *tmp_path.rglob("*")):
+        path.chmod(0o777 if path.is_dir() else 0o666)
+    spec = fixture.artifacts.spec
+    spec_path = fixture.artifacts.source_spec_path
+    assert spec_path is not None
+    symbol_lib = workdir / "library" / "Fixture.kicad_sym"
+    footprint_path = workdir / "library" / "Fixture.pretty" / f"{spec.package.drawing_id}.kicad_mod"
+    model_path = next((workdir / "models").rglob(f"{spec.package.drawing_id}.step"))
+    output_path = workdir / "mutation-report.json"
+    container_name = f"circuit-mutation-matrix-{uuid.uuid4().hex}"
+    command = [
+        "docker",
+        "run",
+        "--name",
+        container_name,
+        "--rm",
+        "--user",
+        "circuit",
+        "-e",
+        f"PYTHONPATH={repo / 'src'}",
+        "-v",
+        f"{repo}:{repo}",
+        "-v",
+        f"{tmp_path}:{tmp_path}",
+        "-w",
+        str(repo),
+        image,
+        "python3",
+        "scripts/run_mutation_matrix.py",
+        "--spec",
+        str(spec_path),
+        "--symbol-lib",
+        str(symbol_lib),
+        "--symbol-name",
+        spec.mpn,
+        "--footprint",
+        str(footprint_path),
+        "--model",
+        str(model_path),
+        "--out",
+        str(output_path),
+        "--export-oracle",
+        "--seed",
+        "32032",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode in {0, 1}, result.stderr + result.stdout
+    assert output_path.is_file(), result.stderr + result.stdout
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert set(report["baseline_findings"]) <= {
+        "extraction_stale",
+        "part_spec_unchecked",
+        "pin_source_single",
+        "reading_order_divergence",
+        "testboard_erc_endpoint_off_grid",
+        "testboard_erc_multiple_net_names",
+        "vision_compare_missing",
+    }
+    assert result.returncode == (0 if report["passed"] else 1), result.stderr + result.stdout
+    assert report["baseline_findings"].count("pin_source_single") == 1
+    assert report["passed"] is False
+    assert report["single_oracle"] == ["partspec_sibling_package_mpn"]
+    assert report["undetected"] == []
+    assert report["excluded_vision_findings"] > 0
+    assert report["export_oracle_run"] is True
+    name_swap = next(
+        outcome
+        for outcome in report["outcomes"]
+        if outcome["mutation"]["operator"] == "symbol_pin_name_swap"
+    )
+    first_name = next(
+        pin.name for pin in spec.pins if pin.number == name_swap["mutation"]["params"]["first_pin"]
+    )
+    second_name = next(
+        pin.name for pin in spec.pins if pin.number == name_swap["mutation"]["params"]["second_pin"]
+    )
+    assert first_name != second_name
+    sibling = next(
+        outcome
+        for outcome in report["outcomes"]
+        if outcome["mutation"]["operator"] == "partspec_sibling_package_mpn"
+    )
+    assert sibling["counting_family_count"] == 1
+    assert set(sibling["families"]).intersection({"vision", "integrity"}) == {"integrity"}

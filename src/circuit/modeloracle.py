@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from . import kicad_cli, occt, sexpr
 from .libitems import parse_footprint
 from .libtestboard import write_model_export_board
-from .model3d import footprint_to_board_xy
+from .model3d import ExpectedTerminal, expected_terminals, footprint_to_board_xy
 from .partspec import PartSpec
 from .ruleprofile import EffectiveRules
 
@@ -21,7 +21,12 @@ from .ruleprofile import EffectiveRules
 class ModelExportFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    code: Literal["model_export_missing", "model_export_mismatch", "model_export_unavailable"]
+    code: Literal[
+        "model_export_missing",
+        "model_export_mismatch",
+        "model_export_unavailable",
+        "model_export_pin1",
+    ]
     severity: Literal["error"] = "error"
     message: str
     rotation_deg: float | None = None
@@ -37,6 +42,8 @@ class ModelExportRun(BaseModel):
     expected_terminal_count: int
     exported_terminal_count: int
     terminal_centers_xy: list[tuple[float, float]]
+    expected_pin1: str | None
+    exported_pin1: str | None
     passed: bool
 
 
@@ -94,38 +101,59 @@ def _model_load_failure(message: str) -> bool:
     )
 
 
-def _expected_terminal_centers(
-    shape: occt.Shape,
+def _expected_terminal_regions(
+    terminals: list[ExpectedTerminal],
     rotation_deg: float,
-) -> list[tuple[float, float]]:
+    placement_xy_mm: tuple[float, float],
+) -> list[tuple[float, float, float, float]]:
+    swaps_axes = round(rotation_deg / 90.0) % 2 == 1
+    regions: list[tuple[float, float, float, float]] = []
+    for terminal in terminals:
+        center = footprint_to_board_xy(
+            terminal.center_xy[0],
+            terminal.center_xy[1],
+            rotation_deg=rotation_deg,
+            origin_x=placement_xy_mm[0],
+            origin_y=placement_xy_mm[1],
+        )
+        width, height = terminal.size_xy
+        if swaps_axes:
+            width, height = height, width
+        regions.append((center[0], center[1], width, height))
+    return regions
+
+
+def _terminal_regions(
+    shape: occt.Shape,
+    board_top_z_mm: float,
+) -> list[tuple[float, float, float, float]]:
     return [
-        footprint_to_board_xy(
+        (
             (region.bbox_xy[0] + region.bbox_xy[2]) / 2,
             (region.bbox_xy[1] + region.bbox_xy[3]) / 2,
-            rotation_deg=rotation_deg,
+            region.bbox_xy[2] - region.bbox_xy[0],
+            region.bbox_xy[3] - region.bbox_xy[1],
         )
-        for region in occt.slab_regions(shape, 0.0, 0.02)
-    ]
-
-
-def _terminal_centers(shape: occt.Shape, board_top_z_mm: float) -> list[tuple[float, float]]:
-    return [
-        ((region.bbox_xy[0] + region.bbox_xy[2]) / 2, (region.bbox_xy[1] + region.bbox_xy[3]) / 2)
         for region in occt.slab_regions(shape, board_top_z_mm - 0.005, board_top_z_mm + 0.015)
     ]
 
 
-def _match_terminal_centers(
-    expected: list[tuple[float, float]],
-    actual: list[tuple[float, float]],
+def _match_terminal_regions(
+    expected: list[tuple[float, float, float, float]],
+    actual: list[tuple[float, float, float, float]],
 ) -> bool:
     remaining = list(expected)
-    for x, y in actual:
+    for x, y, width, height in actual:
         match = next(
             (
                 index
-                for index, (expected_x, expected_y) in enumerate(remaining)
-                if abs(expected_x - x) <= 0.02 and abs(expected_y - y) <= 0.02
+                for index, (expected_x, expected_y, expected_width, expected_height) in enumerate(
+                    remaining
+                )
+                if abs(expected_x - x) <= 0.02
+                and abs(expected_y - y) <= 0.02
+                and abs(expected_width - width) <= 0.02
+                and abs(expected_height - height) <= 0.02
             ),
             None,
         )
@@ -133,6 +161,33 @@ def _match_terminal_centers(
             return False
         remaining.pop(match)
     return not remaining
+
+
+def _rotated_pin1_corner(spec: PartSpec, rotation_deg: float) -> str | None:
+    if spec.package.family == "chip":
+        return None
+    signs = {
+        "top_left": (-1, -1),
+        "top_right": (1, -1),
+        "bottom_right": (1, 1),
+        "bottom_left": (-1, 1),
+    }
+    x, y = signs[spec.package.pin1_corner]
+    angle = math.radians(rotation_deg)
+    rotated_x = math.cos(angle) * x - math.sin(angle) * y
+    rotated_y = math.sin(angle) * x + math.cos(angle) * y
+    horizontal = "left" if rotated_x < 0 else "right"
+    vertical = "top" if rotated_y < 0 else "bottom"
+    return f"{vertical}_{horizontal}"
+
+
+def _exported_pin1(shape: occt.Shape) -> str | None:
+    facts = occt.inspect(shape)
+    if not facts.solids:
+        return None
+    body = max(facts.solids, key=lambda solid: solid.volume).bbox
+    marker = occt.pin1_marker(shape, body)
+    return marker.quadrant if marker is not None else None
 
 
 def verify_model_export(
@@ -143,18 +198,27 @@ def verify_model_export(
     model_path: Path | None,
     rules: EffectiveRules,
     out_dir: Path,
+    placement_xy_mm: tuple[float, float] = (0.0, 0.0),
 ) -> ModelExportReport:
     """Compare KiCad's board STEP export with the referenced model placement."""
     findings: list[ModelExportFinding] = []
     runs: list[ModelExportRun] = []
     model_sha256: str | None = None
     expected_volume: float | None = None
-    source_shape: occt.Shape | None = None
+    terminals: list[ExpectedTerminal] = []
+    try:
+        terminals = expected_terminals(spec)
+    except ValueError as error:
+        findings.append(
+            ModelExportFinding(
+                code="model_export_unavailable",
+                message=f"PartSpec terminals could not be derived: {error}",
+            )
+        )
     if model_path is not None and model_path.is_file():
         model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
         try:
-            source_shape = occt.read_step(model_path)
-            source_facts = occt.inspect(source_shape)
+            source_facts = occt.inspect(occt.read_step(model_path))
             if source_facts.valid and source_facts.units == "mm" and source_facts.solid_count > 0:
                 expected_volume = sum(solid.volume for solid in source_facts.solids)
         except (OSError, ValueError) as error:
@@ -191,6 +255,7 @@ def verify_model_export(
                 footprint_path=footprint_path,
                 rules=rules,
                 rotation_deg=rotation_deg,
+                placement_xy_mm=placement_xy_mm,
                 model_reference_override=model_reference,
             )
             board_top_z_mm = _board_thickness_mm(board_path) - 0.005
@@ -279,13 +344,9 @@ def verify_model_export(
             continue
 
         exported_volume = sum(solid.volume for solid in exported_facts.solids)
-        expected_centers = (
-            _expected_terminal_centers(source_shape, rotation_deg)
-            if source_shape is not None
-            else []
-        )
+        expected_regions = _expected_terminal_regions(terminals, rotation_deg, placement_xy_mm)
         try:
-            actual_centers = _terminal_centers(exported_shape, board_top_z_mm)
+            actual_regions = _terminal_regions(exported_shape, board_top_z_mm)
         except ValueError as error:
             findings.append(
                 ModelExportFinding(
@@ -295,26 +356,32 @@ def verify_model_export(
                 )
             )
             continue
+        actual_centers = [(region[0], region[1]) for region in actual_regions]
         volume_matches = (
             expected_volume is not None
             and exported_facts.valid
             and exported_facts.units == "mm"
             and _relative_volume_match(expected_volume, exported_volume)
         )
-        terminals_match = bool(expected_centers) and _match_terminal_centers(
-            expected_centers,
-            actual_centers,
+        terminals_match = bool(expected_regions) and _match_terminal_regions(
+            expected_regions,
+            actual_regions,
         )
-        passed = volume_matches and terminals_match
+        expected_pin1 = _rotated_pin1_corner(spec, rotation_deg)
+        exported_pin1 = _exported_pin1(exported_shape)
+        pin1_matches = expected_pin1 is None or exported_pin1 == expected_pin1
+        passed = volume_matches and terminals_match and pin1_matches
         runs.append(
             ModelExportRun(
                 rotation_deg=rotation_deg,
                 board_top_z_mm=board_top_z_mm,
                 expected_volume_mm3=expected_volume,
                 exported_volume_mm3=exported_volume,
-                expected_terminal_count=len(expected_centers),
+                expected_terminal_count=len(expected_regions),
                 exported_terminal_count=len(actual_centers),
                 terminal_centers_xy=actual_centers,
+                expected_pin1=expected_pin1,
+                exported_pin1=exported_pin1,
                 passed=passed,
             )
         )
@@ -328,7 +395,7 @@ def verify_model_export(
             if not terminals_match:
                 details_parts.append(
                     f"exported terminal regions ({len(actual_centers)}) do not match "
-                    f"board pads ({len(expected_centers)}) within 0.02 mm"
+                    f"PartSpec terminal regions ({len(expected_regions)}) within 0.02 mm"
                 )
             findings.append(
                 ModelExportFinding(
@@ -337,12 +404,44 @@ def verify_model_export(
                     rotation_deg=rotation_deg,
                 )
             )
+        if not pin1_matches:
+            findings.append(
+                ModelExportFinding(
+                    code="model_export_pin1",
+                    message=(
+                        f"exported pin-1 marker {exported_pin1!r} does not match "
+                        f"PartSpec corner {expected_pin1!r}"
+                    ),
+                    rotation_deg=rotation_deg,
+                )
+            )
 
     zero_run = next((run for run in runs if run.rotation_deg == 0.0), None)
     ninety_run = next((run for run in runs if run.rotation_deg == 90.0), None)
     if zero_run is not None and ninety_run is not None and zero_run.passed and ninety_run.passed:
-        rotated_zero_centers = [(-y, x) for x, y in zero_run.terminal_centers_xy]
-        if not _match_terminal_centers(rotated_zero_centers, ninety_run.terminal_centers_xy):
+        zero_shape = occt.read_step(out_dir / "rotation-0" / "model-export.step")
+        ninety_shape = occt.read_step(out_dir / "rotation-90" / "model-export.step")
+        rotated_zero_regions = [
+            (
+                *footprint_to_board_xy(
+                    x - placement_xy_mm[0],
+                    y - placement_xy_mm[1],
+                    rotation_deg=90.0,
+                    origin_x=placement_xy_mm[0],
+                    origin_y=placement_xy_mm[1],
+                ),
+                height,
+                width,
+            )
+            for x, y, width, height in _terminal_regions(
+                zero_shape,
+                zero_run.board_top_z_mm,
+            )
+        ]
+        if not _match_terminal_regions(
+            rotated_zero_regions,
+            _terminal_regions(ninety_shape, ninety_run.board_top_z_mm),
+        ):
             findings.append(
                 ModelExportFinding(
                     code="model_export_mismatch",

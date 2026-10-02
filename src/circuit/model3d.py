@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 
@@ -40,6 +41,13 @@ class GeneratedModel(BaseModel):
     generator_version: str
     marker: str | None
     marker_note: str | None
+
+
+@dataclass(frozen=True)
+class ExpectedTerminal:
+    number: str
+    center_xy: tuple[float, float]
+    size_xy: tuple[float, float]
 
 
 def _nominal(
@@ -121,6 +129,48 @@ def _numbered_pin_positions(spec: PartSpec) -> list[tuple[str, str, float]]:
     return [(str(index + 1), side, position) for index, (_, side, position) in enumerate(ordered)]
 
 
+def expected_terminals(spec: PartSpec) -> list[ExpectedTerminal]:
+    family = spec.package.family
+    if family not in _SUPPORTED:
+        raise Model3dError("unsupported_family")
+    derived_nominals: dict[str, str] = {}
+    body_length = _nominal(spec.package.body_length, "body_length", derived_nominals)
+    body_width = _nominal(spec.package.body_width, "body_width", derived_nominals)
+    lead_length = _nominal(spec.package.lead_length, "lead_length", derived_nominals)
+    lead_width = (
+        _nominal(spec.package.lead_width, "lead_width", derived_nominals)
+        if family != "chip"
+        else body_width
+    )
+    lead_span = (
+        _nominal(spec.package.lead_span, "lead_span", derived_nominals)
+        if family.startswith("gullwing_")
+        else None
+    )
+    terminals: list[ExpectedTerminal] = []
+    for number, side, position in _numbered_pin_positions(spec):
+        sign = -1.0 if side in {"left", "top"} else 1.0
+        if family == "chip":
+            center = (sign * (body_length / 2 + lead_length / 2), 0.0)
+            size = (lead_length, body_width)
+        else:
+            if side in {"left", "right"}:
+                radial_extent = lead_span if lead_span is not None else body_width
+                center = (sign * (radial_extent / 2 - lead_length / 2), position)
+                size = (lead_length, lead_width)
+            else:
+                radial_extent = lead_span if lead_span is not None else body_length
+                center = (position, sign * (radial_extent / 2 - lead_length / 2))
+                size = (lead_width, lead_length)
+        terminals.append(ExpectedTerminal(number, center, size))
+    exposed = spec.package.exposed_pad
+    if exposed is not None:
+        ep_width = _nominal(exposed.width, "exposed_pad.width", derived_nominals)
+        ep_length = _nominal(exposed.length, "exposed_pad.length", derived_nominals)
+        terminals.append(ExpectedTerminal(exposed.number, (0.0, 0.0), (ep_width, ep_length)))
+    return terminals
+
+
 def _validate_pitch(
     spec: PartSpec,
     positions: list[tuple[str, str, float]],
@@ -194,21 +244,27 @@ def _radial_box(
 
 def _gullwing_terminal(
     side: str,
-    position: float,
+    terminal: ExpectedTerminal,
     *,
-    lead_span: float,
-    lead_length: float,
-    lead_width: float,
     body_bottom: float,
     body_width: float,
     body_length: float,
+    lead_span: float,
 ) -> tuple[occt.Shape, tuple[float, float]]:
     sign = -1.0 if side in {"left", "top"} else 1.0
+    lead_length = terminal.size_xy[0] if side in {"left", "right"} else terminal.size_xy[1]
+    lead_width = terminal.size_xy[1] if side in {"left", "right"} else terminal.size_xy[0]
+    position = terminal.center_xy[1] if side in {"left", "right"} else terminal.center_xy[0]
+    outer_edge = (
+        terminal.center_xy[0] + sign * lead_length / 2
+        if side in {"left", "right"}
+        else terminal.center_xy[1] + sign * lead_length / 2
+    )
     foot_height = min(0.15, body_bottom)
     foot, center = _radial_box(
         side,
         position,
-        outer_edge=sign * lead_span / 2,
+        outer_edge=outer_edge,
         radial_length=lead_length,
         tangent_width=lead_width,
         z=0.0,
@@ -305,6 +361,7 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
         ):
             raise Model3dError("package.lead_span must enclose the gullwing body extents")
         numbered_positions = _numbered_pin_positions(spec)
+        expected_by_number = {item.number: item for item in expected_terminals(spec)}
         _validate_pitch(
             spec,
             numbered_positions,
@@ -329,18 +386,19 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
         )
         terminals: list[occt.Shape] = []
         terminal_map: list[dict[str, object]] = []
-        for number, side, position in numbered_positions:
+        for number, side, _position in numbered_positions:
+            expected = expected_by_number[number]
             solid_index = len(terminals) + 1
             if family == "chip":
-                sign = -1.0 if side == "left" else 1.0
-                center = (sign * (body_length / 2 + lead_length / 2), 0.0)
+                center = expected.center_xy
+                size_x, size_y = expected.size_xy
                 terminals.append(
                     occt.box(
-                        center[0] - lead_length / 2,
-                        -body_width / 2,
+                        center[0] - size_x / 2,
+                        center[1] - size_y / 2,
                         0.0,
-                        lead_length,
-                        body_width,
+                        size_x,
+                        size_y,
                         height,
                     )
                 )
@@ -349,34 +407,31 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
                     raise Model3dError("gullwing lead dimensions are unavailable")
                 terminal, center = _gullwing_terminal(
                     side,
-                    position,
-                    lead_span=lead_span,
-                    lead_length=lead_length,
-                    lead_width=lead_width,
+                    expected,
                     body_bottom=body_bottom,
                     body_width=body_width,
                     body_length=body_length,
+                    lead_span=lead_span,
                 )
+                center = expected.center_xy
                 terminals.append(terminal)
             else:
-                if lead_width is None:
-                    raise Model3dError("no-lead terminal width is unavailable")
-                body_extent = body_width if side in {"left", "right"} else body_length
-                sign = -1.0 if side in {"left", "top"} else 1.0
-                terminal, center = _radial_box(
-                    side,
-                    position,
-                    outer_edge=sign * body_extent / 2,
-                    radial_length=lead_length,
-                    tangent_width=lead_width,
-                    z=0.0,
-                    thickness=min(0.2, height),
+                center = expected.center_xy
+                size_x, size_y = expected.size_xy
+                terminal = occt.box(
+                    center[0] - size_x / 2,
+                    center[1] - size_y / 2,
+                    0.0,
+                    size_x,
+                    size_y,
+                    min(0.2, height),
                 )
                 terminals.append(terminal)
             terminal_map.append(
                 {
                     "number": number,
                     "terminal_center_mm": [center[0], center[1]],
+                    "terminal_size_mm": list(expected.size_xy),
                     "solid_index": solid_index,
                 }
             )
@@ -385,8 +440,8 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
         if exposed is not None:
             if exposed.number in terminal_numbers:
                 raise Model3dError("exposed pad number duplicates a package terminal")
-            ep_width = _nominal(exposed.width, "exposed_pad.width", derived_nominals)
-            ep_length = _nominal(exposed.length, "exposed_pad.length", derived_nominals)
+            ep_terminal = expected_by_number[exposed.number]
+            ep_width, ep_length = ep_terminal.size_xy
             if ep_width > body_width or ep_length > body_length:
                 raise Model3dError("exposed_pad dimensions exceed the package body extents")
             solid_index = len(terminals) + 1
@@ -404,7 +459,8 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
             terminal_map.append(
                 {
                     "number": exposed.number,
-                    "terminal_center_mm": [0.0, 0.0],
+                    "terminal_center_mm": list(ep_terminal.center_xy),
+                    "terminal_size_mm": list(ep_terminal.size_xy),
                     "solid_index": solid_index,
                 }
             )

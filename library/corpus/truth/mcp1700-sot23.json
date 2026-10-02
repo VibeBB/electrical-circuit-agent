@@ -1,0 +1,27 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "mcp1700-sot23",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "GND",
+    "2": "VOUT",
+    "3": "VIN"
+  },
+  "pin1_corner": "bottom_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": null,
+    "body_width": null,
+    "height": null,
+    "pitch": null,
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [],
+  "canary": "CIRCUIT-CORPUS-CANARY-a211ae12-91d1-41c7-9cc0-3990d8a9267b",
+  "notes": "Datasheet page 1 gives the SOT-23 pinout with pin 1 at bottom-left. The supplied revision has no SOT-23 mechanical outline or land pattern; geometry remains unavailable."
+}

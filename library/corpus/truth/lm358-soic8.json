@@ -1,0 +1,41 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "lm358-soic8",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "OUT1",
+    "2": "IN1-",
+    "3": "IN1+",
+    "4": "V-",
+    "5": "IN2+",
+    "6": "IN2-",
+    "7": "OUT2",
+    "8": "V+"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {"min": 4.81, "nom": null, "max": 5.0},
+    "body_width": {"min": 3.81, "nom": null, "max": 3.98},
+    "height": {"min": null, "nom": null, "max": 1.75},
+    "pitch": {"min": null, "nom": 1.27, "max": null},
+    "lead_span": {"min": 5.8, "nom": null, "max": 6.19},
+    "lead_length": {"min": 0.41, "nom": null, "max": 1.27},
+    "lead_width": {"min": 0.31, "nom": null, "max": 0.51},
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {"number": "1", "center": [-2.7, -1.905], "size": [1.55, 0.6]},
+    {"number": "2", "center": [-2.7, -0.635], "size": [1.55, 0.6]},
+    {"number": "3", "center": [-2.7, 0.635], "size": [1.55, 0.6]},
+    {"number": "4", "center": [-2.7, 1.905], "size": [1.55, 0.6]},
+    {"number": "5", "center": [2.7, 1.905], "size": [1.55, 0.6]},
+    {"number": "6", "center": [2.7, 0.635], "size": [1.55, 0.6]},
+    {"number": "7", "center": [2.7, -0.635], "size": [1.55, 0.6]},
+    {"number": "8", "center": [2.7, -1.905], "size": [1.55, 0.6]}
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-c12088eb-98bf-44fd-a192-1b3ae4575b59",
+  "notes": "Body dimensions and pin pitch are from the D0008A package outline; pad dimensions and centers are from the example board layout, pages 54-55. Overall height is a maximum-only value."
+}

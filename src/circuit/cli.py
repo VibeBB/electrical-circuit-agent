@@ -155,6 +155,7 @@ def cmd_library_review(args: argparse.Namespace) -> int:
     library_dir = Path(args.library_dir)
     symbol_lib = Path(args.symbol_lib)
     footprint_path = Path(args.footprint)
+    pin_source_path = Path(args.pin_source) if args.pin_source else None
     try:
         spec = partspec.load_part_spec(spec_path)
         if args.action == "packet":
@@ -167,6 +168,7 @@ def cmd_library_review(args: argparse.Namespace) -> int:
                 density=args.density,
                 tolerance_mm=args.tolerance_mm,
                 model_required=args.model_required,
+                pin_source_path=pin_source_path,
                 out_dir=Path(args.out_dir) if args.out_dir else library_dir / "reviews",
             )
         else:
@@ -179,12 +181,14 @@ def cmd_library_review(args: argparse.Namespace) -> int:
                 density=args.density,
                 tolerance_mm=args.tolerance_mm,
                 model_required=args.model_required,
+                pin_source_path=pin_source_path,
             )
             result = libreview.review_status(
                 library_dir,
                 spec,
                 current_id,
                 spec_path=spec_path,
+                review_scope=args.review_scope,
             )
     except (OSError, ValueError) as exc:
         return _fail("library-review", str(exc))
@@ -350,6 +354,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--density", choices=("most", "nominal", "least"), default="nominal"
         )
         action_parser.add_argument("--tolerance-mm", type=float, default=0.02)
+        action_parser.add_argument("--pin-source", default=None)
         action_parser.add_argument(
             "--model-required",
             action=argparse.BooleanOptionalAction,
@@ -357,6 +362,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if action == "packet":
             action_parser.add_argument("--out-dir", default=None)
+        else:
+            action_parser.add_argument(
+                "--review-scope",
+                choices=("full", "relaxed"),
+                default="full",
+            )
         action_parser.set_defaults(handler=cmd_library_review)
 
     connectivity_parser = subparsers.add_parser(

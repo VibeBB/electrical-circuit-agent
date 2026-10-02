@@ -26,6 +26,7 @@ from .landpattern import (
     Rect,
     compute_land_pattern,
     lead_rects,
+    standard_pin_placements,
 )
 from .libitems import (
     FootprintDef,
@@ -61,6 +62,12 @@ from .partspec import (
     part_spec_sha256,
 )
 from .pinout import PinoutGeometry
+from .pinsource import (
+    PinSourceComparison,
+    compare_pin_sources,
+    parse_pin_source,
+    source_from_part_spec,
+)
 from .ruleprofile import EffectiveRules, load_rules
 
 if TYPE_CHECKING:
@@ -168,6 +175,8 @@ class VerificationInputs(BaseModel):
     model_required: bool
     klc: bool = False
     test_board: bool = True
+    pin_source_path: Path | None = None
+    pin_source_sha256: str | None = None
 
 
 class LibraryVerification(BaseModel):
@@ -182,6 +191,7 @@ class LibraryVerification(BaseModel):
     models: list[VerifiedModel]
     findings: list[VerifyFinding]
     test_board: TestBoard | None = None
+    pin_source_comparison: PinSourceComparison | None = None
 
 
 _SYMBOL_TYPE_ALIASES = {
@@ -613,7 +623,10 @@ def _check_pinout_geometry(
     if geometry is None:
         return
 
-    drawing_positions = {label.number: (label.x, label.y) for label in geometry.labels}
+    drawing_positions = pinout_oracle.to_top_view(
+        {label.number: (label.x, label.y) for label in geometry.labels},
+        geometry.view,
+    )
     pin_numbers = {str(number) for number in range(1, spec.package.pin_count + 1)}
     if footprint is not None:
         pad_positions: dict[str, list[tuple[float, float]]] = {}
@@ -956,9 +969,12 @@ def _reference_boxes(
 
 
 def _check_pad_geometry(
+    spec: PartSpec,
     footprint: FootprintDef,
     reference: LandPatternResult,
     tolerance_mm: float,
+    fabrication_tolerance_mm: float,
+    lineage_valid: bool,
     findings: list[VerifyFinding],
 ) -> dict[str, tuple[float, float, float, float]]:
     expected_boxes = _reference_boxes(reference.pads)
@@ -987,6 +1003,76 @@ def _check_pad_geometry(
             f"pad center delta {center_delta:.4f} mm and size delta "
             f"{size_delta:.4f} mm exceed {tolerance_mm:.4f} mm",
         )
+    if not lineage_valid:
+        for number in expected_boxes.keys() & actual_boxes.keys():
+            ex0, ey0, ex1, ey1 = expected_boxes[number]
+            ax0, ay0, ax1, ay1 = actual_boxes[number]
+            center_delta = math.hypot(
+                (ex0 + ex1 - ax0 - ax1) / 2,
+                (ey0 + ey1 - ay0 - ay1) / 2,
+            )
+            if center_delta > fabrication_tolerance_mm:
+                _finding(
+                    findings,
+                    "pad_position",
+                    "error",
+                    f"pad.{number}",
+                    f"pad center deviates {center_delta:.4f} mm from the PartSpec-derived "
+                    f"reference, beyond fabrication tolerance {fabrication_tolerance_mm:.4f} mm",
+                )
+
+        exposed = spec.package.exposed_pad
+        if (
+            exposed is not None
+            and exposed.number in expected_boxes
+            and exposed.number in actual_boxes
+        ):
+            expected = expected_boxes[exposed.number]
+            actual = actual_boxes[exposed.number]
+            width_delta = abs((expected[2] - expected[0]) - (actual[2] - actual[0]))
+            height_delta = abs((expected[3] - expected[1]) - (actual[3] - actual[1]))
+            if max(width_delta, height_delta) > fabrication_tolerance_mm:
+                _finding(
+                    findings,
+                    "ep_size",
+                    "error",
+                    f"pad.{exposed.number}",
+                    f"EP size differs from the PartSpec-derived reference by "
+                    f"{max(width_delta, height_delta):.4f} mm, beyond fabrication "
+                    f"tolerance {fabrication_tolerance_mm:.4f} mm",
+                )
+
+        pitch = _dimension_value(spec.package.pitch) if spec.package.pitch is not None else None
+        if pitch is not None and spec.package.family in (
+            "no_lead_dual",
+            "no_lead_quad",
+            "gullwing_dual",
+            "gullwing_quad",
+            "chip",
+        ):
+            centers = {
+                number: ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+                for number, box in actual_boxes.items()
+            }
+            placements = {number: side for number, side, _ in standard_pin_placements(spec)}
+            rows: dict[str, list[float]] = {}
+            for number, side in placements.items():
+                center = centers.get(number)
+                if center is None:
+                    continue
+                tangent = center[0] if side in {"top", "bottom"} else center[1]
+                rows.setdefault(side, []).append(tangent)
+            for side, positions in rows.items():
+                ordered = sorted(positions)
+                if any(abs((right - left) - pitch) > 0.005 for left, right in pairwise(ordered)):
+                    _finding(
+                        findings,
+                        "footprint_pitch",
+                        "error",
+                        f"footprint.{side}",
+                        f"adjacent pad pitch differs from PartSpec nominal {pitch:.4f} mm "
+                        "by more than 0.005 mm",
+                    )
     return actual_boxes
 
 
@@ -2530,6 +2616,7 @@ def _check_models(
     library_dir: Path | None,
     rules: EffectiveRules,
     model_required: bool,
+    run_export_oracle: bool,
     tolerance_mm: float,
     findings: list[VerifyFinding],
 ) -> list[VerifiedModel]:
@@ -2574,25 +2661,26 @@ def _check_models(
             tolerance_mm,
             findings,
         )
-        export_report: ModelExportReport
-        with tempfile.TemporaryDirectory(prefix="circuit-model-export-") as temporary_name:
-            export_report = verify_model_export(
-                spec,
-                footprint_path,
-                model_reference=str(resolved) if resolved is not None else expanded,
-                model_path=resolved,
-                rules=rules,
-                out_dir=Path(temporary_name),
-            )
-        for item in export_report.findings:
-            _finding(
-                findings,
-                item.code,
-                item.severity,
-                f"model.{path}",
-                item.message,
-                model_sha256=model_sha256,
-            )
+        export_report: ModelExportReport | None = None
+        if run_export_oracle:
+            with tempfile.TemporaryDirectory(prefix="circuit-model-export-") as temporary_name:
+                export_report = verify_model_export(
+                    spec,
+                    footprint_path,
+                    model_reference=str(resolved) if resolved is not None else expanded,
+                    model_path=resolved,
+                    rules=rules,
+                    out_dir=Path(temporary_name),
+                )
+            for item in export_report.findings:
+                _finding(
+                    findings,
+                    item.code,
+                    item.severity,
+                    f"model.{path}",
+                    item.message,
+                    model_sha256=model_sha256,
+                )
         result.append(
             VerifiedModel(
                 path=path,
@@ -2759,8 +2847,10 @@ def verify_library_part(
     rules: EffectiveRules | None = None,
     tolerance_mm: float = 0.02,
     model_required: bool = True,
+    run_export_oracle: bool = True,
     klc: bool = False,
     test_board: bool = True,
+    pin_source_path: Path | None = None,
     output_path: Path | None = None,
 ) -> LibraryVerification:
     """Verify a library part against its current PartSpec and generated land pattern."""
@@ -2770,7 +2860,46 @@ def verify_library_part(
     rules = rules or load_rules("builtin:ipc7351b", Path("."))
     findings: list[VerifyFinding] = []
     spec_hash = part_spec_sha256(spec_path) if spec_path.is_file() else ""
+    pin_source_comparison: PinSourceComparison | None = None
+    pin_source_sha256: str | None = None
+    if pin_source_path is None:
+        _finding(
+            findings,
+            "pin_source_single",
+            "warning",
+            "pin_sources",
+            "only the PartSpec cell-bound pin source is available",
+        )
+    else:
+        try:
+            class_a = source_from_part_spec(
+                spec,
+                spec_sha256=spec_hash,
+                spec_path=spec_path,
+            )
+            class_b = parse_pin_source(pin_source_path)
+        except (OSError, ValueError) as exc:
+            pin_source_sha256 = _sha256(pin_source_path)
+            _finding(
+                findings,
+                "pin_source_invalid",
+                "error",
+                str(pin_source_path),
+                f"Class B pin source could not be parsed: {exc}",
+            )
+        else:
+            pin_source_sha256 = class_b.sha256
+            pin_source_comparison = compare_pin_sources(class_a, class_b)
+            for item in pin_source_comparison.findings:
+                _finding(
+                    findings,
+                    item.code,
+                    "error",
+                    f"pin {item.number}",
+                    item.message,
+                )
     check: PartSpecReport | None = None
+    check_matches_spec = False
     try:
         if spec_check_path is not None:
             check = PartSpecReport.model_validate_json(spec_check_path.read_text(encoding="utf-8"))
@@ -2785,11 +2914,18 @@ def verify_library_part(
                 spec_path=spec_path,
                 extraction_path=extraction_path,
             )
-        check_ok = check.verdict == "pass" and check.part_spec_sha256 == spec_hash
+        check_matches_spec = check.part_spec_sha256 == spec_hash
+        check_ok = check.verdict == "pass" and check_matches_spec
         check_detail = "" if check_ok else "fresh PartSpec check failed or is stale"
     except Exception as exc:
         check_ok = False
         check_detail = str(exc)
+    if check is not None and check_matches_spec:
+        for item in check.findings:
+            subject = item.field
+            if item.page is not None:
+                subject = f"{subject} (page {item.page})"
+            _finding(findings, item.code, item.severity, subject, item.message)
     if not check_ok:
         _finding(
             findings,
@@ -2873,9 +3009,12 @@ def verify_library_part(
     else:
         findings.extend(functional_findings(spec, footprint, rules))
         _check_pad_geometry(
+            spec,
             footprint,
             reference,
             tolerance_mm,
+            rules.fabrication_tolerance,
+            lineage_valid,
             findings,
         )
         if lineage_valid and lineage is not None and lineage_base is not None:
@@ -2933,6 +3072,7 @@ def verify_library_part(
         library_dir,
         rules,
         model_required,
+        run_export_oracle,
         tolerance_mm,
         findings,
     )
@@ -3006,6 +3146,17 @@ def verify_library_part(
             model_required=model_required,
             klc=klc,
             test_board=test_board,
+            pin_source_path=(
+                Path(
+                    os.path.relpath(
+                        pin_source_path.resolve(),
+                        (library_dir or footprint_path.parent.parent).resolve(),
+                    )
+                )
+                if pin_source_path is not None
+                else None
+            ),
+            pin_source_sha256=pin_source_sha256,
         ),
         symbol=VerifiedSymbol(
             lib_path=symbol_lib,
@@ -3020,6 +3171,7 @@ def verify_library_part(
         models=verified_models,
         findings=findings,
         test_board=test_board_report,
+        pin_source_comparison=pin_source_comparison,
     )
     try:
         assert_safe_destination(target.parent)

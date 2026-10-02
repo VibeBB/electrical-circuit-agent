@@ -45,6 +45,7 @@ from circuit.partspec import (
     PinSpec,
     PinTable,
     Reading,
+    SpecFinding,
     part_spec_sha256,
 )
 from circuit.ruleprofile import EffectiveRules, EvidenceRef, load_rules
@@ -382,11 +383,11 @@ def _symbol_text(
     }
     property_text = "\n".join(f'(property "{key}" "{value}")' for key, value in properties.items())
     pins: list[str] = []
-    for number in pin_numbers:
+    for index, number in enumerate(pin_numbers):
         spec_pin = next((pin for pin in spec.pins if pin.number == number), None)
         name = name_overrides.get(number, spec_pin.name if spec_pin is not None else f"PIN{number}")
         pin_type = type_overrides.get(number, spec_pin.electrical_type if spec_pin else "passive")
-        x = x_overrides.get(number, 0.0)
+        x = x_overrides.get(number, float(index) * 2.54)
         pins.append(
             f'(pin {pin_type} line (at {x} 0 0) (length 2.54) (name "{name}") (number "{number}"))'
         )
@@ -475,6 +476,8 @@ def _write_case(
     pad_transform: PadTransform | None = None,
     symbol_kwargs: dict[str, object] | None = None,
     footprint_kwargs: dict[str, object] | None = None,
+    stub_cli: bool = True,
+    record_authoring: bool = True,
 ) -> tuple[PartSpec, LandPatternResult, Path, Path, Path, Path]:
     spec = _dual_spec() if spec is None else spec
     authoring_ref = Path("authoring") / "part" / "run-1"
@@ -490,7 +493,8 @@ def _write_case(
     (tmp_path / "models" / "fixture.step").write_text("ISO-10303-21;", encoding="utf-8")
     monkeypatch.setenv("TEST_3D_MODEL_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("TEST_3DMODEL_DIR", str(tmp_path / "models"))
-    _fake_cli(tmp_path, monkeypatch)
+    if stub_cli:
+        _fake_cli(tmp_path, monkeypatch)
     symbol_args = cast(dict[str, Any], symbol_kwargs or {})
     footprint_args = cast(dict[str, Any], dict(footprint_kwargs or {}))
     model_reference = f"${{TEST_3DMODEL_DIR}}/{spec.mpn}.3dshapes/{spec.package.drawing_id}.step"
@@ -531,24 +535,46 @@ def _write_case(
     spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     run_dir = tmp_path / authoring_ref
     run_dir.mkdir(parents=True)
-    for lane, model in (("a", "model-a"), ("b", "model-b")):
-        lane_dir = run_dir / lane
-        lane_dir.mkdir()
-        lane_spec_path = lane_dir / "part-spec.json"
-        lane_spec = spec.model_copy(deep=True, update={"authoring": None})
-        _attach_authoring_read(lane_spec, lane_dir, lane)
-        lane_spec_path.write_text(
-            lane_spec.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("CIRCUIT_AUTHORING_LANE", lane)
-        authoring.commit_lane(
-            run_dir,
-            lane_spec_path,
-            profile=f"profile-{lane}",
-            model=model,
-            impression=FIXTURE_IMPRESSION,
-        )
+    if record_authoring:
+        for lane, model in (("a", "model-a"), ("b", "model-b")):
+            lane_dir = run_dir / lane
+            lane_dir.mkdir()
+            lane_spec_path = lane_dir / "part-spec.json"
+            lane_spec_data = spec.model_dump(mode="python")
+
+            def clear_vision_reads(value: Any) -> None:
+                if isinstance(value, dict):
+                    mapping = cast(dict[str, Any], value)
+                    for key, child in mapping.items():
+                        if key in {
+                            "vision_read",
+                            "labels_vision_read",
+                            "orderable_vision_read",
+                        }:
+                            mapping[key] = None
+                        else:
+                            clear_vision_reads(child)
+                elif isinstance(value, list):
+                    for child in cast(list[Any], value):
+                        clear_vision_reads(child)
+
+            clear_vision_reads(lane_spec_data)
+            lane_spec = PartSpec.model_validate(lane_spec_data).model_copy(
+                update={"authoring": None}
+            )
+            _attach_authoring_read(lane_spec, lane_dir, lane)
+            lane_spec_path.write_text(
+                lane_spec.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            monkeypatch.setenv("CIRCUIT_AUTHORING_LANE", lane)
+            authoring.commit_lane(
+                run_dir,
+                lane_spec_path,
+                profile=f"profile-{lane}",
+                model=model,
+                impression=FIXTURE_IMPRESSION,
+            )
     _write_comparison_records(spec, spec_path, symbol_path, footprint_path)
     report_path = tmp_path / "part-spec-check.json"
     return spec, reference, spec_path, report_path, symbol_path, footprint_path
@@ -1456,6 +1482,45 @@ def test_part_spec_must_pass_fresh_check(
     assert "pinout_unverified" in _codes(report)
 
 
+def test_fresh_part_spec_findings_are_included_in_library_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, case = _verify(tmp_path, monkeypatch)
+    spec, reference, spec_path, check_path, symbol_path, footprint_path = case
+    failed_check = PartSpecReport(
+        artifact_kind="circuit_part_spec_check",
+        verdict="fail",
+        part_spec_sha256=part_spec_sha256(spec_path),
+        extraction_sha256="c" * 64,
+        pdf_sha256=spec.datasheet.sha256,
+        checked_readings=1,
+        findings=[
+            SpecFinding(
+                code="package_variant_unbound",
+                severity="error",
+                field="orderable",
+                message="the PartSpec MPN must match exactly one orderable variant",
+            )
+        ],
+    )
+    check_path.write_text(failed_check.model_dump_json(indent=2), encoding="utf-8")
+
+    report = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        spec_check_path=check_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+    )
+
+    assert "package_variant_unbound" in _codes(report)
+    assert "part_spec_unchecked" in _codes(report)
+
+
 def test_supplied_part_spec_check_is_bound_to_current_spec(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1505,6 +1570,73 @@ def test_supplied_part_spec_check_is_bound_to_current_spec(
         reference=reference,
     )
     assert "part_spec_unchecked" in _codes(stale)
+
+
+def test_independent_pin_source_comparison_and_single_source_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing_source, case = _verify(tmp_path, monkeypatch)
+    spec, reference, spec_path, _check_path, symbol_path, footprint_path = case
+    assert any(
+        item.code == "pin_source_single" and item.severity == "warning"
+        for item in missing_source.findings
+    )
+
+    pin_source_path = tmp_path / "part.ibs"
+    good_rows = [f"{pin.number} {pin.name} MODEL" for pin in spec.pins]
+    pin_source_path.write_text("[Pin]\n" + "\n".join(good_rows) + "\n", encoding="utf-8")
+    matched = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        pin_source_path=pin_source_path,
+    )
+    assert matched.pin_source_comparison is not None
+    assert matched.pin_source_comparison.passed
+    assert not {
+        "pin_source_missing",
+        "pin_source_name_mismatch",
+        "pin_source_invalid",
+        "pin_source_single",
+    } & _codes(matched)
+    assert matched.inputs.pin_source_path is not None
+    assert (
+        matched.inputs.pin_source_sha256 == hashlib.sha256(pin_source_path.read_bytes()).hexdigest()
+    )
+
+    bad_rows = [f"{spec.pins[0].number} WRONG MODEL"]
+    pin_source_path.write_text("[Pin]\n" + "\n".join(bad_rows) + "\n", encoding="utf-8")
+    mismatched = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        pin_source_path=pin_source_path,
+    )
+    assert {"pin_source_missing", "pin_source_name_mismatch"} <= _codes(mismatched)
+    assert mismatched.verdict == "fail"
+
+    pin_source_path.write_text("not a recognized pin source\n", encoding="utf-8")
+    invalid = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        pin_source_path=pin_source_path,
+    )
+    assert "pin_source_invalid" in _codes(invalid)
+    assert invalid.verdict == "fail"
 
 
 def test_kicad_cli_failures_are_errors(

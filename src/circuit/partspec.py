@@ -849,6 +849,7 @@ def _pinout_view_check(
     problems: list[str] = []
     mechanical = _normalise_text(pinout.view_reading.mechanical or "").casefold()
     mechanical_match = phrase.search(mechanical)
+    label_disagrees = mechanical_match is not None and mechanical_match.group(1) != expected
     if mechanical_match is None or mechanical_match.group(1) != expected:
         problems.append("mechanical reading does not confirm the declared view")
     if page is None:
@@ -860,8 +861,20 @@ def _pinout_view_check(
             bounded = _words_in_bbox(visible, pinout.view_reading.bbox)
             text = _normalise_text(" ".join(word.text for word in bounded)).casefold()
             lane_match = phrase.search(text)
+            if lane_match is not None and lane_match.group(1) != expected:
+                label_disagrees = True
             if lane_match is None or lane_match.group(1) != expected:
                 problems.append(f"{lane_name} lane does not show the declared view")
+    if label_disagrees:
+        findings.append(
+            SpecFinding(
+                code="view_label_mismatch",
+                severity="error",
+                field="pinout.view_reading",
+                message="the datasheet view label differs from the declared pinout view",
+                page=pinout.page,
+            )
+        )
     if problems:
         findings.append(
             SpecFinding(
@@ -2102,30 +2115,23 @@ def _dimension_cell_checks(
                 )
             )
             continue
-        table_bbox = _numeric_bbox(table.get("bbox"))
-        if table_bbox is None:
-            findings.append(
-                SpecFinding(
-                    code="cell_value_mismatch",
-                    severity="error",
-                    field=field,
-                    message="re-derived table bounds are unreadable",
-                    page=reading.page,
-                )
+        cell_bbox = _table_cell_bbox(table, cell_ref.row, cell_ref.col)
+        if (
+            cell_bbox is None
+            or reading.bbox is None
+            or not (
+                reading.bbox[0] <= cell_bbox[0]
+                and reading.bbox[1] <= cell_bbox[1]
+                and reading.bbox[2] >= cell_bbox[2]
+                and reading.bbox[3] >= cell_bbox[3]
             )
-            continue
-        if reading.bbox is None or not (
-            reading.bbox[0] <= table_bbox[0]
-            and reading.bbox[1] <= table_bbox[1]
-            and reading.bbox[2] >= table_bbox[2]
-            and reading.bbox[3] >= table_bbox[3]
         ):
             findings.append(
                 SpecFinding(
                     code="cell_value_mismatch",
                     severity="error",
                     field=field,
-                    message="reading bounding box does not cover the referenced table",
+                    message="reading bounding box does not cover the referenced table cell",
                     page=reading.page,
                 )
             )

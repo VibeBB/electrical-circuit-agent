@@ -202,6 +202,8 @@ def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
         "authoring_sha256s": ["f" * 64, "e" * 64],
         "lineage_sha256": None,
         "rule_chain_sha256": "0" * 64,
+        "pin_source_sha256": None,
+        "pin_source_kind": None,
     }
 
     def packet_for(fields: dict[str, Any]) -> str:
@@ -218,6 +220,8 @@ def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
             authoring_sha256s=cast(list[str], fields["authoring_sha256s"]),
             lineage_sha256=cast(str | None, fields["lineage_sha256"]),
             rule_chain_sha256=cast(str | None, fields["rule_chain_sha256"]),
+            pin_source_sha256=cast(str | None, fields["pin_source_sha256"]),
+            pin_source_kind=cast(str | None, fields["pin_source_kind"]),
         )
 
     first = packet_for(values)
@@ -237,6 +241,7 @@ def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
         ("authoring_sha256s", ["0" * 64]),
         ("lineage_sha256", "1" * 64),
         ("rule_chain_sha256", "2" * 64),
+        ("pin_source_sha256", "3" * 64),
     ):
         assert packet_for({**values, field: changed}) != first
 
@@ -889,6 +894,18 @@ def test_overlay_scale_uses_pdf_vector_size_and_pitch(tmp_path: Path) -> None:
     assert private_api._overlay_unknown_codes(mismatched_geometry) == ["overlay_scale_unknown"]
 
 
+def test_relaxed_review_scope_fails_closed_without_metrics(tmp_path: Path) -> None:
+    status = libreview.review_status(
+        tmp_path / "library",
+        _spec(),
+        "a" * 16,
+        review_scope="relaxed",
+    )
+
+    assert status.state == "invalid"
+    assert status.reasons == ["review_relaxation_not_supported_by_metrics"]
+
+
 def test_review_status_approves_normalized_answers_and_rejects_corrections(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1418,6 +1435,13 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     pdf_path.write_bytes(b"pdf")
     spec_path = tmp_path / "part-spec.json"
     spec_path.write_text(spec.model_dump_json(), encoding="utf-8")
+    pin_source_path = tmp_path / "part.ibs"
+    pin_source_path.write_text(
+        "[Pin]\n"
+        + "\n".join(f"{pin.number} {''.join(pin.name.split())} MODEL" for pin in spec.pins)
+        + "\n",
+        encoding="utf-8",
+    )
     library_dir = tmp_path / "library"
     library_dir.mkdir()
     footprint_path = library_dir / "Modern.kicad_mod"
@@ -1532,12 +1556,14 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
         tolerance_mm: float,
         model_required: bool,
         rules: Any,
+        pin_source_path: Path | None,
         output_path: Path,
     ) -> LibraryVerification:
         assert json.loads(spec_check_path.read_text(encoding="utf-8"))["verdict"] == fresh_verdict
         assert reference.source == "datasheet"
         assert reference.rule_chain == rules.chain == ["builtin:kicad-generator"]
         del library_dir, model_required
+        assert pin_source_path is not None
         return LibraryVerification(
             artifact_kind="circuit_library_verification",
             verdict=fresh_verdict,
@@ -1624,6 +1650,7 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
         footprint_path=footprint_path,
         library_dir=library_dir,
         density="nominal",
+        pin_source_path=pin_source_path,
         out_dir=library_dir / "reviews",
     )
 
@@ -1642,6 +1669,14 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert review["footprint_tuning"]["evidence"][0]["sha256"] == lineage.evidence[0].sha256
     assert review["footprint_tuning"]["intentional_deviations"][0]["pad"] == "1"
     assert review["inputs"]["authoring_sha256s"] == sorted(comparison.sealed.values())
+    assert (
+        review["inputs"]["pin_source_sha256"]
+        == hashlib.sha256(pin_source_path.read_bytes()).hexdigest()
+    )
+    assert review["pin_sources"]["single_source"] is False
+    assert review["pin_sources"]["class_a"]["sha256"] == review["inputs"]["part_spec_sha256"]
+    assert review["pin_sources"]["class_b"]["sha256"] == review["inputs"]["pin_source_sha256"]
+    assert review["artifact_hashes"]["pin_source_sha256"] == review["inputs"]["pin_source_sha256"]
     assert review["artifact_hashes"]["authoring:a"] == comparison.sealed["a"]
     if regressed:
         assert any(item["code"] == "correction_regressed" for item in review["findings"])
@@ -1688,6 +1723,17 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert "&lt;script&gt;production tweak&lt;/script&gt;" in review_html
     assert "&lt;script&gt;reviewed&lt;/script&gt;" in review_html
     assert "Intentional deviations from standard" in review_html
+    assert "Class A:" in review_html
+    assert "Class B:" in review_html
+    single_source_review = dict(review)
+    single_source_review["pin_sources"] = {
+        **review["pin_sources"],
+        "single_source": True,
+        "class_b": None,
+        "class_b_input": None,
+        "comparison": None,
+    }
+    assert "Single pin source" in libreview._review_html(single_source_review)  # pyright: ignore[reportPrivateUsage]
     assert "Legible &amp; clear." in review_html
     assert "Land-pattern drawing-view crop" not in review_html
     assert "Pinout name-at-position" in review_html

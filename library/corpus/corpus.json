@@ -1,0 +1,54 @@
+{
+  "schema": "circuit_golden_corpus",
+  "version": 1,
+  "entries": [
+    {
+      "id": "tps62130-vqfn16",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TPS62130RGTR",
+      "package_family": "no_lead_quad",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tps62130.pdf",
+        "sha256": "f9b1af285622c0cf1a5991f9641a6e64c5e6d899e52cc0b1632808742019579f",
+        "revision": "F (SLVSAG7F)"
+      },
+      "truth_path": "truth/tps62130-vqfn16.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Package outline RGT0016C and example board layout on datasheet pages 40-41; EP number 17."
+    },
+    {
+      "id": "mcp1700-sot23",
+      "manufacturer": "Microchip Technology",
+      "mpn": "MCP1700T-3302E/TT",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://ww1.microchip.com/downloads/aemDocuments/documents/APID/ProductDocuments/DataSheets/MCP1700-Low-Quiescent-Current-LDO-20001826E.pdf",
+        "sha256": "808bac85cf4d3fea97938d2d4ea5f3384d26e1f0dd8e3191ad2d5dae3ed18ee4",
+        "revision": "E (DS20001826E)"
+      },
+      "truth_path": "truth/mcp1700-sot23.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "The supplied datasheet gives the pinout but has no SOT-23 package outline or recommended board-layout drawing; mechanical dimensions and expected pads are intentionally unpopulated."
+    },
+    {
+      "id": "lm358-soic8",
+      "manufacturer": "Texas Instruments",
+      "mpn": "LM358DR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/lm358.pdf",
+        "sha256": "618a685fe56ee7318e0a07cd2f98cd87d0d9549ccd1c828d6d4174875554ca97",
+        "revision": "AB (SLOS068AB)"
+      },
+      "truth_path": "truth/lm358-soic8.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "SOIC D0008A package outline and example board layout on datasheet pages 54-55."
+    }
+  ]
+}

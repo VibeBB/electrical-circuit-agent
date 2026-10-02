@@ -155,9 +155,10 @@ def _fake_project_verifier(
     reference: LandPatternResult,
     tolerance_mm: float = 0.02,
     model_required: bool = True,
+    pin_source_path: Path | None = None,
     output_path: Path | None = None,
 ) -> LibraryVerification:
-    del spec, spec_check_path, library_dir, reference
+    del spec, spec_check_path, library_dir, reference, pin_source_path
     footprint = parse_footprint(footprint_path)
     text = footprint_path.read_text(encoding="utf-8")
     verdict = "fail" if "(at 0.1 0)" in text else "pass"

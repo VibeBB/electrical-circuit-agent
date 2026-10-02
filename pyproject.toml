@@ -64,5 +64,5 @@ fail_under = 83
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q -n auto --dist loadgroup"
-pythonpath = ["."]
+pythonpath = [".", "tests"]
 markers = ["docker: tests requiring the circuit-tools Docker image"]

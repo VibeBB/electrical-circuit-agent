@@ -15,7 +15,7 @@ from PIL import Image
 
 from circuit import mcp_server
 from circuit.advisory import AdvisoryResult
-from circuit.datasheet import DatasheetExtraction, PageExtraction
+from circuit.datasheet import DatasheetExtraction, PageExtraction, load_extraction
 from circuit.kicad_cli import DiffReport, JobsetResult
 from circuit.landpattern import Density
 from circuit.libsource import ImportReport, SourceInfoInput
@@ -31,10 +31,12 @@ from circuit.partspec import (
     PinSpec,
     PinTable,
     Reading,
+    check_part_spec,
 )
 from circuit.report import DesignReport
 from circuit.sch_lint import SchLintReport
 from pinout_fixtures import pinout_drawing
+from test_mutation import _known_good_library_fixture  # pyright: ignore[reportPrivateUsage]
 
 
 def test_mcp_server_lists_expected_tools() -> None:
@@ -80,6 +82,9 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_library_review_packet",
         "circuit_library_review_status",
         "circuit_library_review_apply",
+        "circuit_library_metrics",
+        "circuit_mutation_report",
+        "circuit_corpus_score",
         "circuit_konnect_call",
         "circuit_kicad_version",
         "circuit_sch_lint",
@@ -93,6 +98,40 @@ def test_mcp_server_lists_expected_tools() -> None:
     assert "part_spec_check_path" not in verification_schema["properties"]
     assert verification_schema["properties"]["test_board"]["default"] is True
     assert verification_schema["properties"]["rule_profile"]["type"] == "string"
+    assert verification_schema["properties"]["pin_source_path"]["type"] == "string"
+    for tool_name in ("circuit_library_review_packet", "circuit_library_review_status"):
+        schema = next(
+            schema
+            for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+            if name == tool_name
+        )
+        assert schema["properties"]["pin_source_path"]["type"] == "string"
+    status_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_library_review_status"
+    )
+    assert status_schema["properties"]["review_scope"]["enum"] == ["full", "relaxed"]
+    assert {
+        name
+        for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name.startswith("circuit_library_review_")
+    } == {
+        "circuit_library_review_packet",
+        "circuit_library_review_status",
+        "circuit_library_review_apply",
+    }
+    assert {
+        name
+        for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name in {"circuit_library_metrics", "circuit_mutation_report"}
+    } == {"circuit_library_metrics", "circuit_mutation_report"}
+    mutation_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_mutation_report"
+    )
+    assert mutation_schema["properties"]["run_export_oracle"]["default"] is True
     land_pattern_schema = next(
         schema
         for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -106,15 +145,6 @@ def test_mcp_server_lists_expected_tools() -> None:
         if name == "circuit_library_candidates"
     )
     assert candidate_schema["properties"]["product"]["type"] == "string"
-    assert {
-        name
-        for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
-        if name.startswith("circuit_library_review_")
-    } == {
-        "circuit_library_review_packet",
-        "circuit_library_review_status",
-        "circuit_library_review_apply",
-    }
     vision_answer_schema = next(
         schema
         for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -165,6 +195,223 @@ def test_mcp_server_lists_expected_tools() -> None:
         "footprint_path",
         "model_path",
     }
+    corpus_score_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_corpus_score"
+    )
+    assert set(corpus_score_schema["required"]) == {
+        "entry_id",
+        "part_spec_path",
+        "symbol_lib_path",
+        "symbol_name",
+        "footprint_path",
+        "model_path",
+    }
+
+
+def test_corpus_score_mcp_dispatch_and_lane_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CIRCUIT_AUTHORING_LANE", raising=False)
+    captured: dict[str, object] = {}
+    workspace = Path(__file__).resolve().parents[1]
+
+    def score_entry(*args: object, **kwargs: object) -> dict[str, str]:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {"verdict": "not_available"}
+
+    monkeypatch.setattr(mcp_server.corpus, "score_entry", cast(Any, score_entry))
+    arguments = {
+        "entry_id": "lm358-soic8",
+        "part_spec_path": str(workspace / "tests" / "part.json"),
+        "symbol_lib_path": str(workspace / "tests" / "symbols.kicad_sym"),
+        "symbol_name": "LM358",
+        "footprint_path": str(workspace / "tests" / "lm358.kicad_mod"),
+        "model_path": str(workspace / "tests" / "lm358.step"),
+    }
+    result = asyncio.run(mcp_server.call_tool("circuit_corpus_score", arguments))
+    assert result.isError is False
+    assert captured["args"] == (
+        workspace / "library" / "corpus",
+        "lm358-soic8",
+        workspace / "tests" / "part.json",
+        workspace / "tests" / "lm358.kicad_mod",
+        workspace / "tests" / "symbols.kicad_sym",
+        "LM358",
+        workspace / "tests" / "lm358.step",
+    )
+    assert captured["kwargs"] == {}
+
+    monkeypatch.setenv("CIRCUIT_AUTHORING_LANE", "a")
+    refused = asyncio.run(mcp_server.call_tool("circuit_corpus_score", arguments))
+    assert refused.isError is True
+    error = next(block.text for block in refused.content if isinstance(block, TextContent))
+    assert "author lanes cannot run the golden corpus scorer" in error
+
+
+def test_library_metrics_and_mutation_report_mcp_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = tmp_path / "project"
+    library = project / "library"
+    library.mkdir(parents=True)
+    metrics_output = tmp_path / "metrics.json"
+    mutation_output = tmp_path / "mutation-copy.json"
+    fixture_root = tmp_path / "known-good-fixture"
+    fixture_root.mkdir()
+    verifier_fixture = _known_good_library_fixture(fixture_root, monkeypatch, seed=9)
+    spec = verifier_fixture.artifacts.spec
+    spec_path = verifier_fixture.artifacts.source_spec_path
+    assert spec_path is not None
+    datasheet_ref = spec.datasheet
+    assert datasheet_ref is not None
+    extraction_path = Path(datasheet_ref.extraction_path)
+    if not extraction_path.is_absolute():
+        extraction_path = spec_path.parent / extraction_path
+    spec_check_path = fixture_root / "part-spec-check.json"
+    spec_check = check_part_spec(
+        spec,
+        load_extraction(extraction_path),
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+    spec_check_path.write_text(spec_check.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    symbol_lib = fixture_root / "library" / "Fixture.kicad_sym"
+    footprint_path = (
+        fixture_root / "library" / "Fixture.pretty" / f"{spec.package.drawing_id}.kicad_mod"
+    )
+    model_path = next((fixture_root / "models").rglob(f"{spec.package.drawing_id}.step"))
+    report: mcp_server.mutation.MutationReport | None = None
+    metrics = mcp_server.libmetrics.LibraryMetrics(
+        accepted_parts=0,
+        escapes=0,
+        upper95=1.0,
+        corpus_manifest_sha256=None,
+        mutation_report_sha256=None,
+        family_detection_rates={},
+        operator_outcomes=[],
+        critical_single_oracle=[],
+        release_relaxation_supported=False,
+        findings=["accepted_part_sample_below_299"],
+    )
+    called: list[Path] = []
+
+    def compute_metrics(path: Path) -> mcp_server.libmetrics.LibraryMetrics:
+        called.append(path)
+        return metrics
+
+    monkeypatch.setattr(mcp_server.libmetrics, "compute_metrics", compute_metrics)
+
+    def run_real_baseline(
+        mutation_fixture: mcp_server.mutation.MutationFixture,
+    ) -> mcp_server.mutation.MutationReport:
+        nonlocal report
+        findings = list(mutation_fixture.verify(mutation_fixture.artifacts))
+        assert not [
+            item
+            for item in findings
+            if item.severity == "error"
+            and mcp_server.mutation.family_for_code(item.code) not in {"vision", "integrity"}
+        ]
+        report = mcp_server.mutation.MutationReport(
+            seed=mutation_fixture.seed,
+            baseline_findings=sorted(item.code for item in findings),
+            outcomes=[],
+            family_detection_rates={},
+            single_oracle=[],
+            undetected=[],
+            passed=True,
+            export_oracle_run=mutation_fixture.export_oracle_run,
+        )
+        return report
+
+    monkeypatch.setattr(mcp_server.mutation, "run_mutations", run_real_baseline)
+    metric_result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_library_metrics",
+            {"project_path": str(project), "output_path": str(metrics_output)},
+        )
+    )
+    mutation_result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_mutation_report",
+            {
+                "project_path": str(project),
+                "spec_path": str(spec_path),
+                "spec_check_path": str(spec_check_path),
+                "symbol_lib": str(symbol_lib),
+                "symbol_name": spec.mpn,
+                "footprint_path": str(footprint_path),
+                "model_path": str(model_path),
+                "run_export_oracle": False,
+                "seed": 9,
+                "output_path": str(mutation_output),
+            },
+        )
+    )
+
+    assert metric_result.isError is False
+    assert mutation_result.isError is False
+    assert report is not None
+    assert called == [project]
+    assert (
+        mcp_server.libmetrics.LibraryMetrics.model_validate_json(metrics_output.read_bytes())
+        == metrics
+    )
+    assert (
+        mcp_server.mutation.MutationReport.model_validate_json(mutation_output.read_bytes())
+        == report
+    )
+
+
+def test_mutation_report_mcp_defaults_to_export_oracle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, Any] = {}
+    report = mcp_server.mutation.MutationReport(
+        seed=1,
+        baseline_findings=[],
+        outcomes=[],
+        family_detection_rates={},
+        single_oracle=[],
+        undetected=[],
+        passed=True,
+        export_oracle_run=True,
+    )
+
+    def make_fixture(**kwargs: Any) -> mcp_server.mutation.MutationFixture:
+        captured["run_export_oracle"] = kwargs["run_export_oracle"]
+        return cast(mcp_server.mutation.MutationFixture, object())
+
+    def run_mutations(
+        _fixture: mcp_server.mutation.MutationFixture,
+    ) -> mcp_server.mutation.MutationReport:
+        return report
+
+    monkeypatch.setattr(mcp_server.mutation, "library_mutation_fixture", make_fixture)
+    monkeypatch.setattr(mcp_server.mutation, "run_mutations", run_mutations)
+    result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_mutation_report",
+            {
+                "project_path": str(tmp_path / "project"),
+                "spec_path": str(tmp_path / "part.json"),
+                "symbol_lib": str(tmp_path / "symbols.kicad_sym"),
+                "symbol_name": "Fixture",
+                "footprint_path": str(tmp_path / "Fixture.kicad_mod"),
+                "model_path": str(tmp_path / "Fixture.step"),
+            },
+        )
+    )
+
+    assert result.isError is False
+    assert captured["run_export_oracle"] is True
 
 
 def test_vision_compare_dispatch_returns_both_image_paths(
@@ -559,9 +806,14 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
     symbol_path.write_text("{}", encoding="utf-8")
     footprint_path = tmp_path / "footprint.kicad_mod"
     footprint_path.write_text("{}", encoding="utf-8")
+    pin_source_path = tmp_path / "part.ibs"
+    pin_source_path.write_text("[Pin]\n1 PIN1 MODEL\n2 PIN2 MODEL\n", encoding="utf-8")
     captured_sources: list[SourceInfoInput] = []
     verification_options: list[bool] = []
+    verification_pin_sources: list[Path | None] = []
     verification_rule_chains: list[list[str] | None] = []
+    review_pin_sources: list[Path | None] = []
+    status_pin_sources: list[Path | None] = []
     candidate_products: list[str | None] = []
 
     def fake_import(
@@ -597,6 +849,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
 
     def fake_verify(_spec: PartSpec, **kwargs: Any) -> LibraryVerification:
         verification_options.append(cast(bool, kwargs["test_board"]))
+        verification_pin_sources.append(cast(Path | None, kwargs.get("pin_source_path")))
         rules = kwargs["rules"]
         verification_rule_chains.append(
             rules.chain if isinstance(rules, mcp_server.ruleprofile.EffectiveRules) else None
@@ -643,6 +896,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     "part_spec_path": str(spec_path),
                     "library_dir": str(library_dir),
                     "rule_profile": "builtin:kicad-generator",
+                    "pin_source_path": str(pin_source_path),
                 },
             ),
         )
@@ -725,12 +979,14 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     "footprint_path": str(footprint_path),
                     "library_dir": str(library_dir),
                     "rule_profile": "builtin:kicad-generator",
+                    "pin_source_path": str(pin_source_path),
                 },
             ),
         )
         assert verified.isError is False
         assert (tmp_path / "circuit-reports" / "part.library-verification.json").is_file()
         assert verification_options == [True]
+        assert verification_pin_sources == [pin_source_path]
         assert verification_rule_chains == [["builtin:kicad-generator"]]
 
         def build_packet(
@@ -743,10 +999,12 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
             density: Density,
             tolerance_mm: float = 0.02,
             model_required: bool = True,
+            pin_source_path: Path | None = None,
             out_dir: Path,
         ) -> mcp_server.libreview.ReviewPacket:
             del symbol_lib, symbol_name, footprint_path, density, tolerance_mm
             del model_required, out_dir
+            review_pin_sources.append(pin_source_path)
             return mcp_server.libreview.ReviewPacket(
                 artifact_kind="circuit_library_review_packet",
                 packet_id="a" * 16,
@@ -767,7 +1025,9 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
             density: Density,
             tolerance_mm: float,
             model_required: bool,
+            pin_source_path: Path | None = None,
         ) -> str:
+            status_pin_sources.append(pin_source_path)
             del (
                 symbol_lib,
                 symbol_name,
@@ -785,8 +1045,10 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
             _packet_id: str,
             *,
             spec_path: Path,
+            review_scope: str = "full",
         ) -> mcp_server.libreview.ReviewStatus:
             del spec_path
+            assert review_scope == "full"
             return mcp_server.libreview.ReviewStatus(
                 artifact_kind="circuit_library_review_status",
                 packet_id="a" * 16,
@@ -814,6 +1076,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     "symbol_name": "TEST-1",
                     "footprint_path": str(footprint_path),
                     "library_dir": str(library_dir),
+                    "pin_source_path": str(pin_source_path),
                 },
             ),
         )
@@ -830,11 +1093,14 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     "symbol_name": "TEST-1",
                     "footprint_path": str(footprint_path),
                     "library_dir": str(library_dir),
+                    "pin_source_path": str(pin_source_path),
                 },
             ),
         )
         assert status.isError is False
         assert (tmp_path / "circuit-reports" / "part.library-review-status.json").is_file()
+        assert review_pin_sources == [pin_source_path]
+        assert status_pin_sources == [pin_source_path]
 
         applied = cast(
             Any,
@@ -956,7 +1222,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 44
+            assert len(tools.tools) == 47
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title
