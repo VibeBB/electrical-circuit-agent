@@ -80,6 +80,8 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_library_review_packet",
         "circuit_library_review_status",
         "circuit_library_review_apply",
+        "circuit_library_metrics",
+        "circuit_mutation_report",
         "circuit_corpus_score",
         "circuit_konnect_call",
         "circuit_kicad_version",
@@ -102,6 +104,26 @@ def test_mcp_server_lists_expected_tools() -> None:
             if name == tool_name
         )
         assert schema["properties"]["pin_source_path"]["type"] == "string"
+    status_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_library_review_status"
+    )
+    assert status_schema["properties"]["review_scope"]["enum"] == ["full", "relaxed"]
+    assert {
+        name
+        for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name.startswith("circuit_library_review_")
+    } == {
+        "circuit_library_review_packet",
+        "circuit_library_review_status",
+        "circuit_library_review_apply",
+    }
+    assert {
+        name
+        for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name in {"circuit_library_metrics", "circuit_mutation_report"}
+    } == {"circuit_library_metrics", "circuit_mutation_report"}
     land_pattern_schema = next(
         schema
         for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -115,15 +137,6 @@ def test_mcp_server_lists_expected_tools() -> None:
         if name == "circuit_library_candidates"
     )
     assert candidate_schema["properties"]["product"]["type"] == "string"
-    assert {
-        name
-        for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
-        if name.startswith("circuit_library_review_")
-    } == {
-        "circuit_library_review_packet",
-        "circuit_library_review_status",
-        "circuit_library_review_apply",
-    }
     vision_answer_schema = next(
         schema
         for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -228,6 +241,75 @@ def test_corpus_score_mcp_dispatch_and_lane_refusal(
     assert refused.isError is True
     error = next(block.text for block in refused.content if isinstance(block, TextContent))
     assert "author lanes cannot run the golden corpus scorer" in error
+
+
+def test_library_metrics_and_mutation_report_mcp_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    project = tmp_path / "project"
+    library = project / "library"
+    library.mkdir(parents=True)
+    metrics_output = tmp_path / "metrics.json"
+    mutation_input = library / "mutation-report.json"
+    mutation_output = tmp_path / "mutation-copy.json"
+    report = mcp_server.mutation.MutationReport(
+        seed=9,
+        baseline_findings=[],
+        outcomes=[],
+        family_detection_rates={},
+        single_oracle=[],
+        undetected=[],
+        passed=True,
+    )
+    mutation_input.write_text(report.model_dump_json(), encoding="utf-8")
+    metrics = mcp_server.libmetrics.LibraryMetrics(
+        accepted_parts=0,
+        escapes=0,
+        upper95=1.0,
+        corpus_manifest_sha256=None,
+        mutation_report_sha256=None,
+        family_detection_rates={},
+        operator_outcomes=[],
+        critical_single_oracle=[],
+        release_relaxation_supported=False,
+        findings=["accepted_part_sample_below_299"],
+    )
+    called: list[Path] = []
+
+    def compute_metrics(path: Path) -> mcp_server.libmetrics.LibraryMetrics:
+        called.append(path)
+        return metrics
+
+    monkeypatch.setattr(mcp_server.libmetrics, "compute_metrics", compute_metrics)
+
+    metric_result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_library_metrics",
+            {"project_path": str(project), "output_path": str(metrics_output)},
+        )
+    )
+    mutation_result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_mutation_report",
+            {
+                "project_path": str(project),
+                "report_path": str(mutation_input),
+                "output_path": str(mutation_output),
+            },
+        )
+    )
+
+    assert metric_result.isError is False
+    assert mutation_result.isError is False
+    assert called == [project]
+    assert mcp_server.libmetrics.LibraryMetrics.model_validate_json(
+        metrics_output.read_bytes()
+    ) == metrics
+    assert mcp_server.mutation.MutationReport.model_validate_json(
+        mutation_output.read_bytes()
+    ) == report
 
 
 def test_vision_compare_dispatch_returns_both_image_paths(
@@ -861,8 +943,10 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
             _packet_id: str,
             *,
             spec_path: Path,
+            review_scope: str = "full",
         ) -> mcp_server.libreview.ReviewStatus:
             del spec_path
+            assert review_scope == "full"
             return mcp_server.libreview.ReviewStatus(
                 artifact_kind="circuit_library_review_status",
                 packet_id="a" * 16,

@@ -1151,7 +1151,21 @@ def review_status(
     *,
     spec_path: Path | None = None,
     authoring_comparison: authoring.AuthoringComparison | None = None,
+    review_scope: Literal["full", "relaxed"] = "full",
 ) -> ReviewStatus:
+    if review_scope == "relaxed":
+        from . import libmetrics
+
+        try:
+            libmetrics.require_relaxation_supported(library_dir.resolve().parent)
+        except libmetrics.LibraryMetricsError:
+            return ReviewStatus(
+                artifact_kind="circuit_library_review_status",
+                packet_id=packet_id,
+                state="invalid",
+                reasons=["review_relaxation_not_supported_by_metrics"],
+                decisions=[],
+            )
     if authoring_comparison is None and spec_path is not None:
         authoring_comparison = _fresh_authoring_comparison(spec, spec_path.resolve().parent)
     questions = blind_questions(spec, packet_id, authoring_comparison)

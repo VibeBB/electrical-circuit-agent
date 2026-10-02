@@ -39,6 +39,8 @@ from . import (
     landpattern,
     libraries,
     libraryvision,
+    libmetrics,
+    mutation,
     libreuse,
     libreview,
     libsource,
@@ -846,6 +848,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "tolerance_mm": {"type": "number", "default": 0.02},
                 "model_required": {"type": "boolean", "default": True},
                 "pin_source_path": {"type": "string"},
+                "review_scope": {"type": "string", "enum": ["full", "relaxed"], "default": "full"},
                 "output_path": {"type": "string"},
             },
             "required": [
@@ -870,6 +873,31 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "output_path": {"type": "string"},
             },
             "required": ["part_spec_path", "library_dir", "packet_id", "event_sha12"],
+        },
+    ),
+    (
+        "circuit_library_metrics",
+        "Compute hash-bound human review escape-rate and mutation metrics for a project",
+        {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["project_path"],
+        },
+    ),
+    (
+        "circuit_mutation_report",
+        "Load and validate the latest seeded library mutation report",
+        {
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string"},
+                "report_path": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["project_path"],
         },
     ),
     (
@@ -970,6 +998,8 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_library_review_packet": _anno("Library review packet", write=True),
     "circuit_library_review_status": _anno("Library review status", write=True),
     "circuit_library_review_apply": _anno("Apply review corrections", write=True),
+    "circuit_library_metrics": _anno("Library escape-rate metrics", write=True),
+    "circuit_mutation_report": _anno("Library mutation report", write=True),
     "circuit_konnect_call": _anno("Konnect call", write=True, destructive=True, idempotent=False),
     "circuit_kicad_version": _anno("KiCad version", write=False),
 }
@@ -1854,6 +1884,13 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 partspec.load_part_spec(spec_path),
                 current_id,
                 spec_path=spec_path,
+                review_scope=_literal(
+                    args,
+                    "review_scope",
+                    ("full", "relaxed"),
+                    "full",
+                    context="circuit_library_review_status",
+                ),
             )
             output = _output_path(
                 spec_path,
@@ -1906,6 +1943,28 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 "library-review-apply",
             )
             output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_library_metrics":
+            project_path = Path(str(args["project_path"]))
+            result = libmetrics.compute_metrics(project_path)
+            output = Path(
+                _optional_string(args.get("output_path"))
+                or (project_path / "library" / "library-metrics.json")
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        elif name == "circuit_mutation_report":
+            project_path = Path(str(args["project_path"]))
+            report_path = Path(
+                _optional_string(args.get("report_path"))
+                or (project_path / "library" / "mutation-report.json")
+            )
+            report = mutation.MutationReport.model_validate_json(report_path.read_bytes())
+            output_value = _optional_string(args.get("output_path"))
+            if output_value is not None:
+                output = Path(output_value)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+            result = report
         elif name == "circuit_konnect_call":
             konnect_arguments = args.get("arguments")
             ops = args.get("ops")

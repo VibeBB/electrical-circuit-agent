@@ -188,6 +188,7 @@ def cmd_library_review(args: argparse.Namespace) -> int:
                 spec,
                 current_id,
                 spec_path=spec_path,
+                review_scope=args.review_scope,
             )
     except (OSError, ValueError) as exc:
         return _fail("library-review", str(exc))
@@ -361,6 +362,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if action == "packet":
             action_parser.add_argument("--out-dir", default=None)
+        else:
+            action_parser.add_argument(
+                "--review-scope",
+                choices=("full", "relaxed"),
+                default="full",
+            )
         action_parser.set_defaults(handler=cmd_library_review)
 
     connectivity_parser = subparsers.add_parser(

@@ -894,6 +894,18 @@ def test_overlay_scale_uses_pdf_vector_size_and_pitch(tmp_path: Path) -> None:
     assert private_api._overlay_unknown_codes(mismatched_geometry) == ["overlay_scale_unknown"]
 
 
+def test_relaxed_review_scope_fails_closed_without_metrics(tmp_path: Path) -> None:
+    status = libreview.review_status(
+        tmp_path / "library",
+        _spec(),
+        "a" * 16,
+        review_scope="relaxed",
+    )
+
+    assert status.state == "invalid"
+    assert status.reasons == ["review_relaxation_not_supported_by_metrics"]
+
+
 def test_review_status_approves_normalized_answers_and_rejects_corrections(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
