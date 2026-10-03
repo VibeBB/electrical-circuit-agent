@@ -1,3 +1,107 @@
-# One finding ID per line (CVE, GHSA, AVD-DS-*, secret rule, license).
-# Optional expiry suffix: ' exp:YYYY-MM-DD'. Audited suppressions carry a
-# statement in docs/operations.md.
+# .trivyignore — accepted-risk waivers for container scans.
+#
+# Every entry carries an `exp:` expiry; when a waiver lapses, the finding
+# becomes a gate failure again and must be re-evaluated (bump the carrying
+# dependency, or renew with justification). Waivers apply to the publish-time
+# Trivy gates (publish-circuit-images.yml) and the weekly audit
+# (container-audit.yml). Each finding below was enumerated from a scan of the
+# published digests on 2026-10-03; see docs/operations.md "Container
+# hardening" for the full analysis.
+#
+# --- jackson inside freerouting.jar (circuit-tools AND circuit-server) -----
+# freerouting-2.4.1.jar is a sha256-pinned upstream fat jar; 2.4.1 is the
+# latest upstream release (2026-09-03) and carries jackson 2.22.1. No
+# upstream release with patched jackson exists. Freerouting parses local
+# project files and is not a network service. Re-evaluate at the next
+# freerouting release bump.
+CVE-2026-68497 exp:2027-01-03
+CVE-2026-89407 exp:2027-01-03
+CVE-2026-89425 exp:2027-01-03
+CVE-2026-91776 exp:2027-01-03
+CVE-2026-91777 exp:2027-01-03
+#
+# --- SDK-borne Python packages in /agent-server/.venv (circuit-server) -----
+# The server image is assembled by the upstream OpenHands agent-server build
+# (sdk:openhands-agent-server/1.50.1) on top of circuit-tools; these versions
+# come from upstream's dependency resolution, not this repo's uv.lock (which
+# already pins the fixed urllib3 2.8.0 / pypdf 6.19.0 / jaraco-context
+# 6.1.2). pypdf, urllib3, virtualenv, wheel (via setuptools _vendor), and
+# jaraco.context (via setuptools _vendor) findings clear on the next
+# openhands-sdk bump — tracked in scripts/dependency_update_deferrals.json.
+CVE-2026-102925 exp:2027-01-03
+CVE-2026-102930 exp:2027-01-03
+CVE-2026-102937 exp:2027-01-03
+CVE-2026-102993 exp:2027-01-03
+CVE-2026-102994 exp:2027-01-03
+CVE-2026-102995 exp:2027-01-03
+CVE-2026-102996 exp:2027-01-03
+CVE-2026-102997 exp:2027-01-03
+CVE-2026-102998 exp:2027-01-03
+CVE-2026-102999 exp:2027-01-03
+CVE-2026-103000 exp:2027-01-03
+CVE-2026-23949 exp:2027-01-03
+CVE-2026-24049 exp:2027-01-03
+CVE-2026-97687 exp:2027-01-03
+CVE-2026-97689 exp:2027-01-03
+#
+# --- node_modules vendored inside nodejs_wheel (circuit-server) ------------
+# The upstream agent-server ships Node.js via the nodejs_wheel package; its
+# bundled node_modules tree pins npm's own vendored dependencies (tar,
+# undici, brace-expansion, handlebars, minimatch, shell-quote, ...). These
+# are upstream release artifacts we cannot rebuild; they clear when the
+# SDK/nodejs_wheel pins move. Same deferral as the .venv findings.
+CVE-2018-7408 exp:2027-01-03
+CVE-2019-16775 exp:2027-01-03
+CVE-2019-16776 exp:2027-01-03
+CVE-2019-16777 exp:2027-01-03
+CVE-2019-19919 exp:2027-01-03
+CVE-2019-20920 exp:2027-01-03
+CVE-2020-7712 exp:2027-01-03
+CVE-2020-7729 exp:2027-01-03
+CVE-2020-7788 exp:2027-01-03
+CVE-2021-23369 exp:2027-01-03
+CVE-2021-23383 exp:2027-01-03
+CVE-2022-1537 exp:2027-01-03
+CVE-2025-64756 exp:2027-01-03
+CVE-2026-102276 exp:2027-01-03
+CVE-2026-102278 exp:2027-01-03
+CVE-2026-12151 exp:2027-01-03
+CVE-2026-13149 exp:2027-01-03
+CVE-2026-13311 exp:2027-01-03
+CVE-2026-13697 exp:2027-01-03
+CVE-2026-14257 exp:2027-01-03
+CVE-2026-1526 exp:2027-01-03
+CVE-2026-1528 exp:2027-01-03
+CVE-2026-19534 exp:2027-01-03
+CVE-2026-2229 exp:2027-01-03
+CVE-2026-23745 exp:2027-01-03
+CVE-2026-23950 exp:2027-01-03
+CVE-2026-24842 exp:2027-01-03
+CVE-2026-26960 exp:2027-01-03
+CVE-2026-26996 exp:2027-01-03
+CVE-2026-27903 exp:2027-01-03
+CVE-2026-27904 exp:2027-01-03
+CVE-2026-29786 exp:2027-01-03
+CVE-2026-31802 exp:2027-01-03
+CVE-2026-33671 exp:2027-01-03
+CVE-2026-4800 exp:2027-01-03
+CVE-2026-48815 exp:2027-01-03
+CVE-2026-59873 exp:2027-01-03
+CVE-2026-59874 exp:2027-01-03
+CVE-2026-69152 exp:2027-01-03
+CVE-2026-69192 exp:2027-01-03
+CVE-2026-73566 exp:2027-01-03
+CVE-2026-9277 exp:2027-01-03
+CVE-2026-9496 exp:2027-01-03
+GHSA-2cf5-4w76-r9qv exp:2027-01-03
+GHSA-g9r4-xpmj-mj65 exp:2027-01-03
+GHSA-h6ch-v84p-w6p9 exp:2027-01-03
+GHSA-q2c6-c6pm-g3gh exp:2027-01-03
+GHSA-q42p-pg8m-cqh6 exp:2027-01-03
+#
+# --- Docker CLI plugins bundled by the agent-server image -----------------
+# rootlesskit and docker-buildx are shipped inside the upstream image for
+# in-container workspaces; versions track the upstream base, not this repo.
+CVE-2026-17106 exp:2027-01-03
+CVE-2026-46600 exp:2027-01-03
+CVE-2026-56854 exp:2027-01-03

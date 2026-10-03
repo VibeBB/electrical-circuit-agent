@@ -1208,6 +1208,40 @@ Suppressions: `.hadolint.yaml` waivers above; `.trivyignore` holds
 time-boxed finding IDs — entries must carry an `exp:` date and a
 rationale line here when added.
 
+### Publish-gate findings and server repackage
+
+Enumerating the first gate run against the published digests
+(2026-10-03) surfaced three classes of findings:
+
+- `circuit-tools` carries **no pip payload** (system apt python3 +
+  `uv pip install --system`; verified `python3 -m pip` fails, no
+  ensurepip wheel, no pip dpkg package) and its only fixable HIGHs are
+  five jackson CVEs inside the sha256-pinned `freerouting-2.4.1.jar`
+  fat jar. 2.4.1 is the latest upstream release — no fixed jar exists,
+  so those five IDs are `.trivyignore` waivers expiring 2027-01-03.
+- `circuit-server` is assembled by the upstream
+  `sdk:openhands-agent-server/1.50.1` build on top of the tools image.
+  It shipped an unused pip payload in two places — the uv-managed
+  CPython's `site-packages/pip` + `ensurepip` bundle, and the
+  `.venv`'s own `pip` — whose vendored copies produced the
+  msgpack/setuptools/urllib3-vendored findings (the same class sim
+  hit). A repackage layer (`docker/circuit-server-strip.Dockerfile`,
+  run as a buildx step between "Build and publish server" and the
+  digest resolution) removes pip from both trees plus the dead
+  `/root/.cache/uv`; the locked digest then binds to the stripped
+  image. `python3 -m pip` fails and `openhands.agent_server` still
+  imports in the repackaged image.
+- The remaining ~95 circuit-server findings are upstream-borne and not
+  fixable in-repo: SDK-`.venv` packages resolved against upstream's
+  lock (our `uv.lock` already pins the fixed urllib3 2.8.0 /
+  pypdf 6.19.0 / jaraco-context 6.1.2), the `nodejs_wheel` vendored
+  `node_modules` tree, and the bundled Docker CLI plugins. They carry
+  `.trivyignore` waivers expiring 2027-01-03; the real fix is the
+  `openhands-sdk` 1.51.0 bump tracked in
+  `scripts/dependency_update_deferrals.json` — after it lands, re-scan
+  and drop the cleared waivers. Waivers are per-CVE, so any *new*
+  finding still fails the gate.
+
 ## CI runner network auditing
 
 CI and image-publishing jobs use `step-security/harden-runner` in audit-only mode. It observes network egress without blocking requests; per-run insights are available in the GitHub Actions job summary.

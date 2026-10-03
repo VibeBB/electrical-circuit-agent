@@ -135,7 +135,7 @@ jobs:
           version: v0.75.0
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
-          include-non-failures: true
+          list-all-pkgs: 'true'
           exit-code: '0'
           format: json
           output: trivy-circuit-tools.json
@@ -285,6 +285,17 @@ jobs:
             "$RUNNER_TEMP/sdk/openhands-agent-server/openhands/agent_server/docker/build.py" \
             --base-image "$TOOLS_REF" --image "ghcr.io/${IMAGE_OWNER}/circuit-server" \
             --target source --platforms linux/amd64 --push --sdk-project-root "$RUNNER_TEMP/sdk"
+      - name: Strip pip payload from server image
+        run: |
+          set -euo pipefail
+          # Repackage the just-pushed tag: drop the unused pip payload (module,
+          # dist-info, console scripts, ensurepip bundle) and the dead uv
+          # cache, then resolve the digest below against the stripped image.
+          docker buildx build \
+            --build-arg "BASE_IMAGE=ghcr.io/${IMAGE_OWNER}/circuit-server:${SOURCE_SHA}-latest-source" \
+            --tag "ghcr.io/${IMAGE_OWNER}/circuit-server:${SOURCE_SHA}-latest-source" \
+            --platform linux/amd64 --push --provenance=false \
+            -f docker/circuit-server-strip.Dockerfile .
       - name: Resolve server digest
         run: |
           set -euo pipefail
@@ -319,7 +330,7 @@ jobs:
           version: v0.75.0
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
-          include-non-failures: true
+          list-all-pkgs: 'true'
           exit-code: '0'
           format: json
           output: trivy-circuit-server.json
