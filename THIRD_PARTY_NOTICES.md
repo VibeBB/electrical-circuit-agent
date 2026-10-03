@@ -66,8 +66,8 @@ legal advice.
 
 - License: CERN-OHL-P-2.0
 - Source: <https://gitlab.com/ohwr/cern-kicad-libs>
-- Commit: `7618368c1cc70478024ed84882d54c0dade7dc86`
-- Commit date: 2026-09-30 UTC
+- Commit: `eec34374e810d4253b6a2764687efbfbb8ad29a5`
+- Commit date: 2026-10-03 UTC
 - Location: `libraries/cern-kicad-libs`
 - The upstream LICENSE is preserved inside the submodule.
 

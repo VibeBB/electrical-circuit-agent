@@ -7,7 +7,7 @@
   "sbom_attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/52135006",
   "tag": "12da73437738a287d4cb2e741f5a89cfabc149a3-tools",
   "tools": {
-    "cern_commit": "7618368c1cc70478024ed84882d54c0dade7dc86",
+    "cern_commit": "eec34374e810d4253b6a2764687efbfbb8ad29a5",
     "circuit": "0.0.1",
     "freerouting": "2.4.1",
     "kicad-cli": "10.99.0",
