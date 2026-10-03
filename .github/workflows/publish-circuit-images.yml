@@ -129,12 +129,14 @@ jobs:
           limit-severities-for-sarif: true
       - name: Promote tools :latest
         if: inputs.skip_tools != true
+        env:
+          TOOLS_DIGEST: ${{ steps.tools.outputs.digest }}
         run: |
           # imagetools copies the pushed manifest server-side — no re-push,
           # so attestations and the SBOM keep referencing the same digest.
           docker buildx imagetools create \
             --tag "ghcr.io/${IMAGE_OWNER}/circuit-tools:latest" \
-            "ghcr.io/${IMAGE_OWNER}/circuit-tools@${{ steps.tools.outputs.digest }}"
+            "ghcr.io/${IMAGE_OWNER}/circuit-tools@${TOOLS_DIGEST}"
       - name: Scan tools image (Trivy JSON)
         # Runs even when the SARIF gate failed so the diagnostic report and
         # the blocking-CVE summary still have data; guarded on the build

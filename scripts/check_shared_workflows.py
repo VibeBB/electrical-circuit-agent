@@ -10,7 +10,7 @@ EXPECTED: dict[str, str] = {
         "09bc85d9ac93c67434acb53512ca8e557ab01fcfad00e610c67abd26282b77f1"
     ),
     ".github/workflows/workflow-lint.yml#jobs": (
-        "c7e4d9dcfb04a55003705fb7f0960b319496254dcb22cb68491c794bebf96ea5"
+        "90c7561c124083ee9a9e46dfccb6ee1459ab5d64e8607bb9161f58f67a5c0514"
     ),
     ".github/workflows/main-ci-failure-issue.yml#jobs": (
         "748d435c8ec6b362f2d8a42c4c8c77361fe4ee81c3ce8d47ff486c039fa869f6"

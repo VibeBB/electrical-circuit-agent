@@ -77,7 +77,7 @@ jobs:
       - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         # Bot digest-lock branches are deleted on auto-merge, so their SARIF
         # cannot be uploaded; the plain zizmor run below still gates them.
-        if: always() && !startsWith(github.head_ref || github.ref_name, 'bot/update-image-digests-')
+        if: always() && hashFiles('results.sarif') != '' && !startsWith(github.head_ref || github.ref_name, 'bot/update-image-digests-')
         with:
           sarif_file: results.sarif
       - name: Fail on zizmor findings
