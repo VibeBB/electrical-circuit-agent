@@ -13,6 +13,11 @@ on:
         description: "Explicit X.Y.Z override; leave empty to bump"
         required: false
         type: string
+      dry_run:
+        description: "Rehearse the flow without pushing, merging, tagging, or releasing"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -32,10 +37,13 @@ jobs:
       contents: write # push the version bump to main or a bot branch
       pull-requests: write # open and merge the version-bump PR fallback
     outputs:
-      version: ${{ steps.bump.outputs.version }}
-      tag: ${{ steps.bump.outputs.tag }}
-      sha: ${{ steps.bump.outputs.sha }}
+      version: ${{ steps.bump.outputs.version || steps.bump_live.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag || steps.bump_live.outputs.tag }}
+      sha: ${{ steps.bump.outputs.sha || steps.bump_live.outputs.sha }}
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - name: Require main
         env:
           REF: ${{ github.ref }}
@@ -45,8 +53,34 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: Bump version files
+      - name: Bump version files (dry run)
         id: bump
+        if: inputs.dry_run == true
+        env:
+          BUMP: ${{ inputs.bump }}
+          SET_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          SET_VERSION="${SET_VERSION#v}"
+          CURRENT=$(python3 -c 'import tomllib,sys;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          if [ -n "$SET_VERSION" ]; then
+            if [ "$SET_VERSION" = "$CURRENT" ]; then
+              VERSION="$CURRENT"
+            else
+              VERSION=$(python3 scripts/bump_version.py --set "$SET_VERSION" --dry-run)
+            fi
+          else
+            VERSION=$(python3 scripts/bump_version.py --bump "$BUMP" --dry-run)
+          fi
+          {
+            echo "sha=$(git rev-parse HEAD)"
+            echo "version=$VERSION"
+            echo "tag=v$VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "dry run: would release v$VERSION at $(git rev-parse HEAD); no push, PR, tag, or release was created" >> "$GITHUB_STEP_SUMMARY"
+      - name: Bump version files
+        id: bump_live
+        if: inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
           BUMP: ${{ inputs.bump }}
@@ -213,6 +247,9 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.bump-version.outputs.sha }}
@@ -239,6 +276,9 @@ jobs:
       VERSION: ${{ needs.bump-version.outputs.version }}
       SHA: ${{ needs.bump-version.outputs.sha }}
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.bump-version.outputs.sha }}
@@ -248,6 +288,7 @@ jobs:
           mkdir -p dist
           (cd plugins && zip -r "../dist/circuit-plugin-v${VERSION}.zip" circuit)
       - name: Create release and tag
+        if: inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -262,3 +303,7 @@ jobs:
           }
           retry gh release create "v${VERSION}" --target "$SHA" \
             --title "circuit v${VERSION}" --generate-notes dist/*.zip
+      - name: Report dry run
+        if: inputs.dry_run == true
+        run: |
+          echo "dry run: release zip built for v${VERSION} at ${SHA}; tag and GitHub release creation were skipped" >> "$GITHUB_STEP_SUMMARY"
