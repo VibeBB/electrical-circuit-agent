@@ -139,7 +139,8 @@ jobs:
             -c 'cd /lynis && ./lynis audit system --quick --no-colors \
                 --profile /container.prf \
                 --report-file /out/lynis-report.dat --logfile /out/lynis.log \
-                --auditor github-actions' || true
+                --auditor github-actions; \
+                chmod 644 /out/lynis-report.dat /out/lynis.log 2>/dev/null' || true
           index=$(grep '^hardening_index=' "$LYNIS_OUT/lynis-report.dat" \
             | head -1 | cut -d= -f2 || true)
           warnings=$(grep -c '^warning\[\]' "$LYNIS_OUT/lynis-report.dat" || true)
