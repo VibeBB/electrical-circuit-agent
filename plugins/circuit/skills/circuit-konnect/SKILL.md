@@ -65,7 +65,8 @@ remain the circuit kicad-cli-backed reports.
 The complete v0.13.0 coverage matrix is in
 `references/konnect-tools.json`, rendered in `docs/konnect-tools.md`. Use it before
 adding a tool to an authoring flow. IPC-required tools currently include
-`align_components`, `get_board_stackup`, `get_component_list`, `query_traces`,
+`align_components`, `export_manufacturing_package` (native midpoint geometry),
+`get_board_stackup`, `get_component_list`, `query_traces`,
 and `set_placed_footprint_models`.
 Advisory checks and export comparisons are recorded in the design report and never
 change its kicad-cli-derived verdict. Mutating advisory tools run on copies or with

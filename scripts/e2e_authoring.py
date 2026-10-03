@@ -1236,7 +1236,7 @@ def _stage_route(run: AuthoringRun) -> None:
 
 
 def _stage_review(run: AuthoringRun) -> None:
-    """Non-blocking Konnect design review, then release the KiCad IPC session."""
+    """Non-blocking Konnect design review; the IPC session stays up for manufacturing."""
     loaded_brief = run.loaded_brief
     schematic = run.schematic
     board = run.board
@@ -1298,8 +1298,6 @@ def _stage_review(run: AuthoringRun) -> None:
     ]
     run.advise_all("review", review_advisories, with_artifacts=True)
     run.stop_konnect()
-    apiserver.stop()
-    run.socket_path.unlink(missing_ok=True)
 
 
 def _stage_board_gate(run: AuthoringRun, schematic_snapshot: Path) -> BoardGate:
@@ -1456,7 +1454,9 @@ def _stage_exports(run: AuthoringRun) -> None:
 def _stage_manufacturing_advisories(run: AuthoringRun) -> None:
     board = run.board
     konnect_exports = run.konnect_exports
-    run.start_konnect(run.environment)
+    # Konnect 0.13.0 export_manufacturing_package requires native midpoint
+    # geometry over IPC; reuse the board session started for layout/review.
+    run.start_konnect({**run.environment, "KICAD_API_SOCKET": f"ipc://{run.socket_path}"})
     manufacturing_advisories: list[tuple[str, dict[str, object]]] = [
         (
             "export_manufacturing_package",
@@ -1536,6 +1536,8 @@ def _stage_manufacturing_advisories(run: AuthoringRun) -> None:
     ]
     run.advise_all("manufacturing", manufacturing_advisories, with_artifacts=True)
     run.stop_konnect()
+    apiserver.stop()
+    run.socket_path.unlink(missing_ok=True)
 
 
 def _run_pipeline(run: AuthoringRun, result: dict[str, object]) -> PipelineOutput:

@@ -205,7 +205,7 @@ source of truth. Konnect output is advisory and never changes `kicad-cli` JSON v
 | `export_gencad` | pcb_export | manufacturing | manufacturing | file | Advisory export; produced artifacts are compared with authoritative exports. |
 | `export_gerber` | pcb_export | manufacturing | manufacturing | file | Advisory export; produced artifacts are compared with authoritative exports. |
 | `export_ipc2581` | pcb_export | manufacturing | manufacturing | file | Advisory export; produced artifacts are compared with authoritative exports. |
-| `export_manufacturing_package` | manufacturing | manufacturing | manufacturing | file | Advisory export; produced artifacts are compared with authoritative exports. |
+| `export_manufacturing_package` | manufacturing | manufacturing | manufacturing | required | Advisory export; 0.13.0 requires live IPC for native midpoint geometry (JLCPCB assembly). Produced artifacts are compared with authoritative exports. |
 | `export_netlist` | pcb_export | schematic | schematic | file | Advisory export; authoritative kicad-cli exports remain separate. |
 | `export_odb` | pcb_export | manufacturing | manufacturing | file | Advisory export; produced artifacts are compared with authoritative exports. |
 | `export_pdf` | pcb_export | manufacturing | manufacturing | file | Advisory export; produced artifacts are compared with authoritative exports. |

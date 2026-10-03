@@ -814,8 +814,8 @@
   "category": "manufacturing",
   "role": "export_comparison",
   "stage": "manufacturing",
-  "ipc": "file",
-  "note": "Advisory export; produced artifacts are compared with authoritative exports.",
+  "ipc": "required",
+  "note": "Advisory export; 0.13.0 requires live IPC for native midpoint geometry (JLCPCB assembly). Produced artifacts are compared with authoritative exports.",
   "toolset": "manufacturing"
  },
  {

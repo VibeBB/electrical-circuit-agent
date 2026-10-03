@@ -825,6 +825,13 @@ up as an update candidate. Refs resolved from shell variables (e.g. the
   - Verified against the release binary (v0.13.0): `tools/list` after
     loading all toolsets returns 236 tools vs 234 in v0.12.1 — a strict
     superset; the fixture moved to `tests/data/konnect_tools_v0.13.0.json`.
+  - **`export_manufacturing_package` now requires live IPC** (runtime-verified
+    in the image): the JLCPCB assembly portion needs "native midpoint
+    geometry from the exact board open in KiCad" and returns
+    `editor_unavailable` without `KICAD_API_SOCKET`. The e2e manufacturing
+    stage now reuses the still-running board IPC session instead of
+    restarting Konnect without it, and the matrix entry moved to
+    `ipc: required`.
 - `scripts/check_dependency_updates.py` now resolves github-actions pin
   comments through `git ls-remote --tags` peeled `^{}` entries instead of
   the GitHub `git/ref` object's SHA, so annotated tags (e.g.
