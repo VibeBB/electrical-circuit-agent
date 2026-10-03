@@ -58,7 +58,7 @@ jobs:
             exit 0
           fi
           git diff --name-only "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
-          if grep -Eq '^(docker/|fixtures/|libraries/|scripts/smoke_|src/|tests/integration/|\.dockerignore$)' "$RUNNER_TEMP/changed-files"; then
+          if grep -Eq '^(docker/|fixtures/|libraries/|scripts/smoke_|src/|tests/integration/|pyproject\.toml$|uv\.lock$|\.github/|\.dockerignore$)' "$RUNNER_TEMP/changed-files"; then
             echo "docker=true" >> "$GITHUB_OUTPUT"
           else
             echo "docker=false" >> "$GITHUB_OUTPUT"

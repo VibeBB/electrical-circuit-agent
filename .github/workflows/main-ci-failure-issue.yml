@@ -5,6 +5,7 @@ on:
   workflow_run:
     workflows:
       - "CI"
+      - "Container hardening audit"
       - "Digest lock PR sweep"
       - "Check dependency updates"
       - "Locked image check"
@@ -20,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: main-ci-failure-issue
+  group: main-ci-failure-issue-${{ github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
