@@ -7,7 +7,7 @@
 | [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) | Third-party licenses and pins |
 | [`architecture.md`](architecture.md) | Responsibility boundaries and execution sequence |
 | [`operations.md`](operations.md) | Build, smoke, dependency updates |
-| [`konnect-tools.md`](konnect-tools.md) | Konnect v0.12.1 complete tool coverage matrix |
+| [`konnect-tools.md`](konnect-tools.md) | Konnect v0.13.0 complete tool coverage matrix |
 
 ## Accepted ADR list
 

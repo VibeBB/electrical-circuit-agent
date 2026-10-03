@@ -10,8 +10,8 @@ dependencies = [
     "pillow==12.3.0",
     "cadquery-ocp-novtk==8.0.1.0.0",
     "mcp>=1.29,<2",
-    "openhands-sdk==1.50.1",
-    "openhands-tools==1.50.1",
+    "openhands-sdk==1.51.0",
+    "openhands-tools==1.51.0",
 ]
 
 [dependency-groups]
@@ -32,7 +32,7 @@ build-backend = "hatchling.build"
 packages = ["src/circuit"]
 
 [tool.uv]
-required-version = "==0.12.21"
+required-version = "==0.12.22"
 
 [tool.ruff]
 line-length = 100

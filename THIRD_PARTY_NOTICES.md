@@ -8,12 +8,12 @@ legal advice.
 ## Konnect
 
 - License: AGPL-3.0-only
-- Version: v0.12.1
-- Release commit: `fa62e1ccb9eba359519bf8e3eab53a6cffeee33c`
-- Asset: `konnect-v0.12.1-x86_64-unknown-linux-gnu.tar.gz`
-- SHA-256: `8a546fc949d11edbb55096a9b1f2c8f9147b26a9916b47a5c4990ee9e9441fb6`
-- Source: <https://github.com/mixelpixx/Konnect/releases/tag/v0.12.1>
-- LICENSE: <https://raw.githubusercontent.com/mixelpixx/Konnect/fa62e1ccb9eba359519bf8e3eab53a6cffeee33c/LICENSE>
+- Version: v0.13.0
+- Release commit: `6bbe3e4f890ba1d37c0e5d5f38ccd03d90958c9e`
+- Asset: `konnect-v0.13.0-x86_64-unknown-linux-gnu.tar.gz`
+- SHA-256: `9c9d28e7d905d8e8519339a78890193f252bc8134993349b40d80e3a67b93512`
+- Source: <https://github.com/mixelpixx/Konnect/releases/tag/v0.13.0>
+- LICENSE: <https://raw.githubusercontent.com/mixelpixx/Konnect/6bbe3e4f890ba1d37c0e5d5f38ccd03d90958c9e/LICENSE>
 - Redistribution: the release binary is fetched unmodified and executed as a
   separate-process MCP stdio server.
 - In-image LICENSE location: `/usr/share/doc/konnect/LICENSE`
@@ -23,9 +23,9 @@ legal advice.
 - License: GPL-3.0-or-later
 - Source: <https://ppa.launchpadcontent.net/kicad/kicad-dev-nightly/>
 - Package: `kicad-nightly`
-- Version: `202609290253+1dd7ad3604~189~ubuntu26.04.1`
-- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609290253+1dd7ad3604~189~ubuntu26.04.1_amd64.deb)
-- Package SHA-256: `105258412e8fcbc7fabef5980d1701820f96bf40add34d0a4364ac8eb480583e`
+- Version: `202609302019+55110814ee~189~ubuntu26.04.1`
+- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609302019+55110814ee~189~ubuntu26.04.1_amd64.deb)
+- Package SHA-256: `63e5e2b3b8a2b627e8a4a0b0c5fc33b0ac875cab1c796e3ef806df27cc620c8e`
 - Executable: `/usr/lib/kicad-nightly/bin/kicad-cli`
 
 ## KiCad official symbol / footprint libraries
@@ -38,7 +38,7 @@ legal advice.
 - Packages: `kicad-nightly-symbols`, `kicad-nightly-footprints`
 - Versions:
   - symbols `202609271717+716edc43f~12~ubuntu26.04.1`
-  - footprints `202609270717+b5e7a752f~14~ubuntu26.04.1`
+  - footprints `202609302018+9326b9efd~14~ubuntu26.04.1`
 
 ## KiCad Library Convention checker
 
@@ -105,8 +105,8 @@ legal advice.
 ## OpenHands Software Agent SDK
 
 - License: MIT
-- Packages: `openhands-sdk==1.50.1`, `openhands-tools==1.50.1`
-- Source: <https://pypi.org/project/openhands-sdk/1.50.1/>
+- Packages: `openhands-sdk==1.51.0`, `openhands-tools==1.51.0`
+- Source: <https://pypi.org/project/openhands-sdk/1.51.0/>
 - The project uses the SDK as a dependency and does not vendor SDK code.
 
 ## Python runtime dependencies
@@ -125,8 +125,8 @@ direct dependencies are:
   and <https://github.com/Open-Cascade-SAS/OCCT/blob/master/OCCT_LGPL_EXCEPTION.txt>.
 - `mcp>=1.29,<2`: MIT — <https://pypi.org/project/mcp/>
 - `pydantic>=2`: MIT — <https://pypi.org/project/pydantic/>
-- `openhands-sdk==1.50.1`: MIT — <https://pypi.org/project/openhands-sdk/1.50.1/>
-- `openhands-tools==1.50.1`: MIT — <https://pypi.org/project/openhands-tools/1.50.1/>
+- `openhands-sdk==1.51.0`: MIT — <https://pypi.org/project/openhands-sdk/1.51.0/>
+- `openhands-tools==1.51.0`: MIT — <https://pypi.org/project/openhands-tools/1.51.0/>
 
 Transitive dependencies (anyio, httpx, starlette, etc.) follow the pins in
 `uv.lock` and each PyPI distribution's own metadata. This file is not legal

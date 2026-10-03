@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`circuit-tools.Dockerfile` bundles KiCad 11 nightly, Konnect v0.12.1, IBM
+`circuit-tools.Dockerfile` bundles KiCad 11 nightly, Konnect v0.13.0, IBM
 Semeru Open JRE (Eclipse OpenJ9), FreeRouting, the official KiCad libraries,
 and the CERN KiCad libraries into a single execution environment. Konnect is
 launched as a separate process as an unmodified AGPL binary and is never
@@ -18,7 +18,7 @@ upstream Specctra export limitation).
 | KiCad | `202609290253+1dd7ad3604~189~ubuntu26.04.1` |
 | KiCad footprints | `202609270717+b5e7a752f~14~ubuntu26.04.1` |
 | KiCad symbols | `202609271717+716edc43f~12~ubuntu26.04.1` |
-| Konnect | `v0.12.1`, release commit and SHA-256 in the Dockerfile |
+| Konnect | `v0.13.0`, release commit and SHA-256 in the Dockerfile |
 | IBM Semeru Open JRE | `27.0.0.0`, release tarball SHA-256 in the Dockerfile |
 | FreeRouting | `v2.4.1`, release JAR SHA-256 in the Dockerfile |
 | CERN libraries | submodule commit of `libraries/cern-kicad-libs` (also recorded in `cern-kicad-libs.commit` inside the image and the OCI label `circuit.cern.commit`) |
@@ -34,7 +34,7 @@ docker run --rm \
   python3 /opt/circuit/bin/smoke_kicad11_konnect.py
 ```
 
-The tools image's default user is root for SDK v1.50.1 server image build
+The tools image's default user is root for SDK v1.51.0 server image build
 compatibility. For standalone runs specify `--user circuit`; in the server
 image use the `openhands` user created by the SDK.
 
@@ -45,7 +45,7 @@ publishes the tools/server images to GHCR and records the actual digests in
 ## GHCR publishing and lock
 
 Publishing is done by `.github/workflows/publish-circuit-images.yml`. After the
-tools image is verified, the OpenHands SDK v1.50.1 server image is built, with
+tools image is verified, the OpenHands SDK v1.51.0 server image is built, with
 the immutable tags `<commit>-tools` and `<commit>-latest-source` plus the
 `latest` alias. Lock updates are separated into bot PRs. The publish workflow
 checks required PR statuses for up to 30 minutes, ignores non-required failures,

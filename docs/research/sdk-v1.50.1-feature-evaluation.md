@@ -1,6 +1,6 @@
 # OpenHands SDK v1.50.1 feature evaluation (electrical-circuit-agent)
 
-Scope: `openhands-sdk`, `openhands-tools`, and any directly pinned OpenHands packages move from 1.50.0 to 1.50.1 (PyPI upload 2026-09-30T19:31Z). The complete 16-commit upstream range `v1.50.0..v1.50.1` was reviewed. uv remains pinned at 0.12.21.
+Scope: `openhands-sdk`, `openhands-tools`, and any directly pinned OpenHands packages move from 1.50.0 to 1.50.1 (PyPI upload 2026-09-30T19:31Z). The complete 16-commit upstream range `v1.50.0..v1.50.1` was reviewed. uv remains pinned at 0.12.22.
 
 Primary source: [OpenHands SDK v1.50.1 release](https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.50.1).
 

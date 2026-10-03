@@ -23,9 +23,9 @@ ROLES = [
 
 def render(matrix: list[dict[str, str]]) -> str:
     lines = [
-        "# Konnect v0.12.1 tool coverage",
+        "# Konnect v0.13.0 tool coverage",
         "",
-        "This table classifies every Konnect v0.12.1 tool by role, using",
+        "This table classifies every Konnect v0.13.0 tool by role, using",
         "`plugins/circuit/skills/circuit-konnect/references/konnect-tools.json` as the",
         "source of truth. Konnect output is advisory and never changes `kicad-cli` JSON verdicts.",
         "",
@@ -35,17 +35,17 @@ def render(matrix: list[dict[str, str]]) -> str:
         entries = by_role[role]
         lines.append(f"## {role}")
         lines.append("")
-        lines.append("| Tool | Category | Stage | IPC | Note |")
-        lines.append("| --- | --- | --- | --- | --- |")
+        lines.append("| Tool | Toolset | Category | Stage | IPC | Note |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
         if entries:
             for item in entries:
                 note = item["note"].replace("|", "\\|").replace("\n", " ")
                 lines.append(
-                    f"| `{item['tool']}` | {item['category']} | {item['stage']} | "
-                    f"{item['ipc']} | {note} |"
+                    f"| `{item['tool']}` | {item['toolset']} | {item['category']} | "
+                    f"{item['stage']} | {item['ipc']} | {note} |"
                 )
         else:
-            lines.append("| _none_ | — | — | — | — |")
+            lines.append("| _none_ | — | — | — | — | — |")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
