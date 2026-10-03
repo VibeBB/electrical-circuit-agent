@@ -134,8 +134,8 @@ RUN mkdir -p /opt/jre /opt/freerouting \
         --output /opt/freerouting/freerouting.jar \
         "https://github.com/freerouting/freerouting/releases/download/v${FREEROUTING_VERSION}/freerouting-${FREEROUTING_VERSION}.jar" \
     && echo "${FREEROUTING_SHA256}  /opt/freerouting/freerouting.jar" | sha256sum --check \
-    && java -Djava.awt.headless=true -jar /opt/freerouting/freerouting.jar --version 2>&1 \
-        | grep -F "Freerouting v${FREEROUTING_VERSION}" \
+    && { java -Djava.awt.headless=true -jar /opt/freerouting/freerouting.jar --version 2>&1 \
+        || true; } | grep -F "Freerouting v${FREEROUTING_VERSION}" \
     && mkdir -p /usr/share/doc/freerouting /usr/share/doc/semeru-jre \
     && curl --fail --location --silent --show-error \
         --retry 5 --retry-delay 10 --retry-all-errors \
