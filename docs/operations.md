@@ -3,11 +3,11 @@
 ## SBOM attestations
 
 `publish-circuit-images.yml` generates and attests a package-level SPDX-2.3
-SBOM for the tools image and uploads the full Syft SBOM as a 90-day workflow-run
+SBOM for both images and uploads each full Syft SBOM as a 90-day workflow-run
 artifact. It stores the returned URL as
 `sbom_attestation`, which `locked-image-check.yml` verifies when present;
-an absent URL warns and continues. SBOM steps are skipped when `skip_tools`
-is active.
+an absent URL warns and continues. SBOM steps for the tools image are skipped
+when `skip_tools` is active.
 The attested SBOM omits file entries and relationships involving files to
 stay below the 16 MiB limit.
 
@@ -309,9 +309,26 @@ the run via the Actions API. After merging, it dispatches `ci.yml` and
 `locked-image-check.yml` on main as observational runs recorded in the step
 summary.
 
+The publish flow pushes only the immutable `<sha>-tools` and
+`<sha>-latest-source` tags; `:latest` on both images is promoted with
+`docker buildx imagetools create` only after the Trivy
+fixable-HIGH/CRITICAL SARIF gate on the pushed digest passes, so a failing
+image never serves `:latest` and a gate failure leaves the previous good
+tag untouched. imagetools copies the manifest server-side, so attestations
+and the SBOM keep referencing the same digest. On a gate failure the JSON
+diagnostic scan still runs and the blocking fixable findings are rendered
+into the job summary; artifact uploads are `hashFiles`-guarded so skipped
+scans do not produce a second red "Path does not exist" step.
+
+`release.yml` accepts a `dry_run` input that computes the version, runs the
+verify and install-smoke jobs, and builds the release zip while skipping
+every write (push, version-bump PR, merge, tag, `gh release create`). Use
+it to rehearse the release flow end-to-end before the first real release.
+
 The publisher creates a GitHub build-provenance attestation for the
-`circuit-tools` image and stores its URL in the `circuit_tools` lock entry,
-which is mirrored into the plugin lock. When the URL is present,
+`circuit-tools` and `circuit-server` images and stores each URL in the
+corresponding lock entry (`circuit_tools` is mirrored into the plugin
+lock). When the URL is present,
 `locked-image-check.yml` verifies the image digest against
 `publish-circuit-images.yml` before pulling it. The workflow preserves its
 image-internal Konnect smoke and also prewarms the locked image through
@@ -366,8 +383,12 @@ image tag against the latest `uv` release. `@sha256:` digest suffixes on
 Workflow `git clone --branch <ref>` pins are also tracked against the
 upstream repo's highest semver tag — the pinned `CISOfy/lynis` checkout in
 `container-audit.yml` is the current example, so a new Lynis release shows
-up as an update candidate. Refs resolved from shell variables (e.g. the
-`"v${SDK_VERSION}"` SDK checkout) are not literal pins and are skipped.
+up as an update candidate. The clone additionally verifies the checkout
+matches the recorded commit for the tag (3.1.7 resolves to
+`2e99f92265760b73fd6b139868eb8d4116624030`), so a re-pointed tag fails the
+step instead of silently auditing different code. Refs resolved from shell
+variables (e.g. the `"v${SDK_VERSION}"` SDK checkout) are not literal pins
+and are skipped.
 
 ## Updating pins
 
@@ -1297,7 +1318,9 @@ Three layers were adopted after a comparative evaluation of Lynis,
   hardening report" issue. The issue closes automatically when fixable
   HIGH/CRITICAL findings reach zero. The Lynis Hardening Index is
   recorded as a trend metric only — its denominator shifts with
-  container-skipped tests, so it never gates.
+  container-skipped tests, so it never gates. The Lynis clone pins tag
+  3.1.7 and verifies the resolved commit
+  (`2e99f92265760b73fd6b139868eb8d4116624030`).
 
 Not adopted, with reasons: `lynis audit dockerfile` (~6 greps, frozen
 since 2018, subset of hadolint, hardening index always 1);
