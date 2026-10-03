@@ -1,0 +1,11 @@
+# hadolint configuration for docker/*.Dockerfile
+# Rules waived here are documented in docs/operations.md.
+failure-threshold: warning
+trustedRegistries:
+  - docker.io
+  - ghcr.io
+ignored:
+  # apt-get install is not version-pinned: exact deb versions rot when
+  # Ubuntu/Debian archives drop them, and downloaded third-party tools are
+  # already pinned by version + sha256 ARGs.
+  - DL3008

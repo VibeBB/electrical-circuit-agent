@@ -1162,6 +1162,52 @@ With P5 the phased vision-deepening plan is fully implemented; ADR-0016
 through ADR-0020 are the normative records (the research plan document
 was removed).
 
+## Container hardening
+
+Three layers were adopted after a comparative evaluation of Lynis,
+`docker build --check`, Trivy, Grype, Dockle, and hadolint:
+
+- **Dockerfile lint** (`dockerfile-lint` job in `ci.yml`): hadolint
+  v2.15.1 via `hadolint-action` v3.5.0 plus `docker build --check`
+  (BuildKit built-in). `.hadolint.yaml` allows only docker.io and
+  ghcr.io registries and waives DL3008 (exact deb pins rot when archives
+  drop them; downloaded tools are already version+sha256 pinned). The
+  `circuit` account needs no DL3066 waiver — the Dockerfile declares no
+  `USER`, callers pass `--user circuit` at run time.
+- **Image scan on publish** (`publish-circuit-images.yml`): Trivy
+  v0.75.0 via `trivy-action` v0.36.0 scans each pushed digest —
+  `circuit-tools` and `circuit-server` — for CRITICAL/HIGH fixable
+  vulnerabilities, secrets, and misconfiguration, gated (`exit-code 1`),
+  with SARIF uploaded to code scanning (`category:
+  trivy-circuit-tools` / `trivy-circuit-server`) and a full JSON report
+  as an artifact per image. The action is SHA-pinned and `version:` is
+  explicit — the March 2026 Trivy supply-chain compromise made both
+  non-negotiable.
+- **Weekly audit** (`container-audit.yml`, Mondays 03:22 UTC): pulls the
+  pinned digests from `docker/image-digests.json`, re-scans with a fresh
+  vulnerability DB (new CVEs against the frozen images), runs the Docker
+  CIS compliance report on both images, runs an informational in-image
+  Lynis 3.1.7 audit against the tools image, aggregates
+  `container-hardening.json` (artifact), and edits/creates a "Container
+  hardening report" issue. The issue closes automatically when fixable
+  HIGH/CRITICAL findings reach zero. The Lynis Hardening Index is
+  recorded as a trend metric only — its denominator shifts with
+  container-skipped tests, so it never gates.
+
+Not adopted, with reasons: `lynis audit dockerfile` (~6 greps, frozen
+since 2018, subset of hadolint, hardening index always 1);
+Dockle (v0.4.15 stale; its CIS-derived checks are covered by Trivy's
+`--compliance docker-cis` report); Grype (equivalent for the SBOM path,
+kept as fallback); checkov (redundant third linter); `cisofy/lynis`
+Docker image (does not exist — Lynis runs from a pinned git clone);
+non-root USER enforcement and HEALTHCHECK enforcement (CI tools images —
+deferred policy decisions).
+
+Changelog evaluation for the adopted pins is in the introducing PR.
+Suppressions: `.hadolint.yaml` waivers above; `.trivyignore` holds
+time-boxed finding IDs — entries must carry an `exp:` date and a
+rationale line here when added.
+
 ## CI runner network auditing
 
 CI and image-publishing jobs use `step-security/harden-runner` in audit-only mode. It observes network egress without blocking requests; per-run insights are available in the GitHub Actions job summary.

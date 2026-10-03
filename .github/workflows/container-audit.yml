@@ -1,0 +1,311 @@
+name: Container hardening audit
+
+on:
+  schedule:
+    - cron: "22 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Pulls the pinned images from ghcr.io.
+      packages: read
+      # Uploads the Trivy SARIF scans to code scanning.
+      security-events: write
+      # Creates, edits, and closes the "Container hardening report" issue.
+      issues: write
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve and pull pinned images
+        run: |
+          set -euo pipefail
+          tools_ref=$(python3 -c 'import json; e=json.load(open("docker/image-digests.json", encoding="utf-8"))["circuit_tools"]; print(e["image"]+"@"+e["digest"])')
+          server_ref=$(python3 -c 'import json; e=json.load(open("docker/image-digests.json", encoding="utf-8"))["circuit_server"]; print(e["image"]+"@"+e["digest"])')
+          echo "PINNED_TOOLS_IMAGE=$tools_ref" >> "$GITHUB_ENV"
+          echo "PINNED_SERVER_IMAGE=$server_ref" >> "$GITHUB_ENV"
+          docker pull "$tools_ref"
+          docker pull "$server_ref"
+      - name: Scan tools image (Trivy SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          # The digest is frozen; the vulnerability DB is not — this scan
+          # surfaces newly disclosed CVEs against the shipped tools image.
+          scan-ref: ${{ env.PINNED_TOOLS_IMAGE }}
+          version: v0.75.0
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+          format: sarif
+          output: trivy-circuit-tools.sarif
+          limit-severities-for-sarif: true
+      - name: Scan tools image (Trivy JSON, full)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          scan-ref: ${{ env.PINNED_TOOLS_IMAGE }}
+          version: v0.75.0
+          scanners: vuln,secret,misconfig,license
+          include-non-failures: true
+          exit-code: '0'
+          format: json
+          output: trivy-circuit-tools.json
+          skip-setup-trivy: true
+      - name: Scan server image (Trivy SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          scan-ref: ${{ env.PINNED_SERVER_IMAGE }}
+          version: v0.75.0
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+          format: sarif
+          output: trivy-circuit-server.sarif
+          limit-severities-for-sarif: true
+      - name: Scan server image (Trivy JSON, full)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          scan-ref: ${{ env.PINNED_SERVER_IMAGE }}
+          version: v0.75.0
+          scanners: vuln,secret,misconfig,license
+          include-non-failures: true
+          exit-code: '0'
+          format: json
+          output: trivy-circuit-server.json
+          skip-setup-trivy: true
+      - name: Upload tools Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-circuit-tools.sarif
+          category: trivy-circuit-tools-audit
+      - name: Upload server Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-circuit-server.sarif
+          category: trivy-circuit-server-audit
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.75.0
+      - name: Run Docker CIS compliance reports
+        run: |
+          set -euo pipefail
+          trivy image --compliance docker-cis-1.6.0 --report all \
+            --format json --output "$RUNNER_TEMP/trivy-cis-circuit-tools.json" \
+            "${PINNED_TOOLS_IMAGE}"
+          trivy image --compliance docker-cis-1.6.0 --report all \
+            --format json --output "$RUNNER_TEMP/trivy-cis-circuit-server.json" \
+            "${PINNED_SERVER_IMAGE}"
+      - name: Run informational Lynis audit inside the tools image
+        id: lynis
+        continue-on-error: true
+        env:
+          LYNIS_OUT: ${{ runner.temp }}/lynis-out
+        run: |
+          set -uo pipefail
+          git clone --depth 1 --branch 3.1.7 \
+            https://github.com/CISOfy/lynis "$RUNNER_TEMP/lynis"
+          mkdir -p "$LYNIS_OUT"
+          docker run --rm --user 0 \
+            -v "$RUNNER_TEMP/lynis:/lynis:ro" \
+            -v "$LYNIS_OUT:/out" \
+            --entrypoint /bin/sh "$PINNED_TOOLS_IMAGE" \
+            -c 'cd /lynis && ./lynis audit system --quick --no-colors \
+                --report-file /out/lynis-report.dat --logfile /out/lynis.log \
+                --auditor github-actions' || true
+          index=$(grep '^hardening_index=' "$LYNIS_OUT/lynis-report.dat" \
+            | head -1 | cut -d= -f2 || true)
+          warnings=$(grep -c '^warning\[\]' "$LYNIS_OUT/lynis-report.dat" || true)
+          printf 'hardening_index=%s\nwarnings=%s\n' \
+            "${index:-unknown}" "${warnings:-0}" >> "$GITHUB_OUTPUT"
+      - name: Compute container-hardening report
+        env:
+          LYNIS_OUT: ${{ runner.temp }}/lynis-out
+          TRIVY_JSON_TOOLS: trivy-circuit-tools.json
+          TRIVY_JSON_SERVER: trivy-circuit-server.json
+          TRIVY_CIS_TOOLS: ${{ runner.temp }}/trivy-cis-circuit-tools.json
+          TRIVY_CIS_SERVER: ${{ runner.temp }}/trivy-cis-circuit-server.json
+          REPORT_JSON: container-hardening.json
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from collections import Counter
+          from datetime import datetime, timezone
+
+          def image_block(image_ref, trivy_path, cis_path):
+              trivy = json.load(open(trivy_path, encoding="utf-8"))
+              vulns, secrets, licenses = Counter(), Counter(), 0
+              mis_pass = mis_total = fixable_high = 0
+              for result in trivy.get("Results", []):
+                  for v in result.get("Vulnerabilities") or []:
+                      sev = v.get("Severity", "UNKNOWN").lower()
+                      vulns[sev] += 1
+                      if v.get("FixedVersion"):
+                          vulns[f"{sev}_fixed"] += 1
+                          if sev in ("critical", "high"):
+                              fixable_high += 1
+                  for m in result.get("Misconfigurations") or []:
+                      mis_total += 1
+                      if m.get("Status") == "PASS":
+                          mis_pass += 1
+                  for s in result.get("Secrets") or []:
+                      secrets[s.get("Severity", "UNKNOWN").lower()] += 1
+                  for lic in result.get("Licenses") or []:
+                      licenses += 1
+              cis = {"passed": 0, "failed": 0}
+              try:
+                  cis_data = json.load(open(cis_path, encoding="utf-8"))
+                  for result in cis_data.get("Results", []):
+                      summary = result.get("MisconfSummary") or {}
+                      cis["passed"] += int(summary.get("Successes", 0))
+                      cis["failed"] += int(summary.get("Failures", 0))
+              except (OSError, ValueError):
+                  pass
+              image, _, digest = image_ref.partition("@")
+              return {
+                  "image": image,
+                  "digest": digest,
+                  "trivy": {
+                      "critical": vulns["critical"],
+                      "high": vulns["high"],
+                      "medium": vulns["medium"],
+                      "low": vulns["low"],
+                      "fixable_high_or_critical": fixable_high,
+                      "misconfig_pass": mis_pass,
+                      "misconfig_total": mis_total,
+                      "secrets": sum(secrets.values()),
+                      "license_findings": licenses,
+                  },
+                  "cis_docker": cis,
+              }
+
+          images = {}
+          fixable_total = 0
+          for name, ref_env, trivy_env, cis_env in (
+              ("circuit-tools", "PINNED_TOOLS_IMAGE",
+               "TRIVY_JSON_TOOLS", "TRIVY_CIS_TOOLS"),
+              ("circuit-server", "PINNED_SERVER_IMAGE",
+               "TRIVY_JSON_SERVER", "TRIVY_CIS_SERVER"),
+          ):
+              block = image_block(os.environ[ref_env],
+                                  os.environ[trivy_env], os.environ[cis_env])
+              images[name] = block
+              fixable_total += block["trivy"]["fixable_high_or_critical"]
+          lynis = {"hardening_index": "unknown", "warnings": 0}
+          try:
+              for line in open(os.environ["LYNIS_OUT"] + "/lynis-report.dat",
+                               encoding="utf-8", errors="replace"):
+                  if line.startswith("hardening_index="):
+                      lynis["hardening_index"] = line.split("=", 1)[1].strip()
+                  elif line.startswith("warning[]"):
+                      lynis["warnings"] += 1
+          except OSError:
+              pass
+          report = {
+              "images": images,
+              "lynis": lynis,
+              "gate": {"fixable_high_or_critical": fixable_total},
+              "computed_at": datetime.now(timezone.utc).isoformat(),
+          }
+          with open(os.environ["REPORT_JSON"], "w", encoding="utf-8") as fh:
+              json.dump(report, fh, indent=2, sort_keys=True)
+              fh.write("\n")
+          print(json.dumps(report, indent=2, sort_keys=True))
+          PY
+      - name: Upload tools Trivy JSON report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: circuit-tools-trivy-audit
+          path: trivy-circuit-tools.json
+          retention-days: 90
+      - name: Upload server Trivy JSON report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: circuit-server-trivy-audit
+          path: trivy-circuit-server.json
+          retention-days: 90
+      - name: Upload hardening report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: container-hardening
+          path: container-hardening.json
+          retention-days: 90
+      - name: Post report to issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_JSON: container-hardening.json
+          REPORT_MD: ${{ runner.temp }}/hardening-report.md
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > "$REPORT_MD"
+          import json, os
+          r = json.load(open(os.environ["REPORT_JSON"], encoding="utf-8"))
+          print("# Container hardening report\n")
+          print("| Image | Trivy vulns C/H/M/L | Fixable HIGH+CRITICAL "
+                "| Misconfig pass | Secrets | CIS Docker pass/fail |")
+          print("|---|---|---|---|---|---|")
+          for name, block in sorted(r["images"].items()):
+              t = block["trivy"]
+              cis = block["cis_docker"]
+              print(f"| `{name}` | "
+                    f"{t['critical']}/{t['high']}/{t['medium']}/{t['low']} | "
+                    f"{t['fixable_high_or_critical']} | "
+                    f"{t['misconfig_pass']}/{t['misconfig_total']} | "
+                    f"{t['secrets']} | "
+                    f"{cis['passed']}/{cis['failed']} |")
+          print(f"\nDigest: `{r['images']['circuit-tools']['digest']}` "
+                f"(tools), `{r['images']['circuit-server']['digest']}` (server)\n")
+          print(f"- Lynis hardening index (trend only, tools image): "
+                f"{r['lynis']['hardening_index']}")
+          print(f"- Lynis warnings: {r['lynis']['warnings']}")
+          print(f"\nRun: {os.environ['GITHUB_SERVER_URL']}/"
+                f"{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+                f"{os.environ['GITHUB_RUN_ID']}")
+          PY
+          gh label create container-hardening --repo "$GITHUB_REPOSITORY" \
+            --color d93f0b --description "Container hardening report" --force
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --label container-hardening \
+            --search "in:title Container hardening report" \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file "$REPORT_MD"
+          else
+            number=$(gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Container hardening report" \
+              --label container-hardening --body-file "$REPORT_MD" | sed 's#.*/##')
+          fi
+          gate=$(python3 -c 'import json, os; print(json.load(open(os.environ["REPORT_JSON"], encoding="utf-8"))["gate"]["fixable_high_or_critical"])')
+          if [ "$gate" = "0" ] && [ -n "$number" ]; then
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+              --comment "No fixable HIGH/CRITICAL findings remain."
+          fi

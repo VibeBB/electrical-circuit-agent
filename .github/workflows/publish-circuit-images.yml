@@ -51,6 +51,7 @@ jobs:
       id-token: write # OIDC for build-provenance attestation
       attestations: write # stores the attestation
       artifact-metadata: write # creates the attestation storage record
+      security-events: write # uploads the Trivy SARIF scans to code scanning
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -108,6 +109,50 @@ jobs:
             ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max,ignore-error=true
+      - name: Scan tools image (Trivy SARIF)
+        id: trivy-scan-tools
+        if: inputs.skip_tools != true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          # Scan the exact pushed digest — the content the SBOM and
+          # provenance attestations bind to.
+          scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools@${{ steps.tools.outputs.digest }}
+          version: v0.75.0
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+          format: sarif
+          output: trivy-circuit-tools.sarif
+          limit-severities-for-sarif: true
+      - name: Scan tools image (Trivy JSON)
+        if: inputs.skip_tools != true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools@${{ steps.tools.outputs.digest }}
+          version: v0.75.0
+          scanners: vuln,secret,misconfig,license
+          ignore-unfixed: false
+          include-non-failures: true
+          exit-code: '0'
+          format: json
+          output: trivy-circuit-tools.json
+          skip-setup-trivy: true
+      - name: Upload tools Trivy SARIF
+        if: ${{ always() && inputs.skip_tools != true }}
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-circuit-tools.sarif
+          category: trivy-circuit-tools
+      - name: Upload tools Trivy JSON report
+        if: ${{ always() && inputs.skip_tools != true }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: circuit-tools-trivy
+          path: trivy-circuit-tools.json
+          retention-days: 90
       - name: Attest tools image provenance
         id: attest
         if: inputs.skip_tools != true
@@ -250,6 +295,48 @@ jobs:
           printf 'SERVER_TAG=%s\nSERVER_DIGEST=%s\n' "$SERVER_TAG" "$SERVER_DIGEST" >> "$GITHUB_ENV"
           docker buildx imagetools create --tag "ghcr.io/${IMAGE_OWNER}/circuit-server:latest" \
             "ghcr.io/${IMAGE_OWNER}/circuit-server:${SERVER_TAG}"
+      - name: Scan server image (Trivy SARIF)
+        id: trivy-scan-server
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          # Scan the exact pushed digest — the content attestations and the
+          # digest lock bind to.
+          scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-server@${{ env.SERVER_DIGEST }}
+          version: v0.75.0
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+          format: sarif
+          output: trivy-circuit-server.sarif
+          limit-severities-for-sarif: true
+      - name: Scan server image (Trivy JSON)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-server@${{ env.SERVER_DIGEST }}
+          version: v0.75.0
+          scanners: vuln,secret,misconfig,license
+          ignore-unfixed: false
+          include-non-failures: true
+          exit-code: '0'
+          format: json
+          output: trivy-circuit-server.json
+          skip-setup-trivy: true
+      - name: Upload server Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-circuit-server.sarif
+          category: trivy-circuit-server
+      - name: Upload server Trivy JSON report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: circuit-server-trivy
+          path: trivy-circuit-server.json
+          retention-days: 90
       - name: Measure published server
         run: |
           set -euo pipefail

@@ -1,0 +1,3 @@
+# One finding ID per line (CVE, GHSA, AVD-DS-*, secret rule, license).
+# Optional expiry suffix: ' exp:YYYY-MM-DD'. Audited suppressions carry a
+# statement in docs/operations.md.
