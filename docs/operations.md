@@ -716,6 +716,37 @@ image tag against the latest `uv` release. `@sha256:` digest suffixes on
   candidates. AnyIO resolves to 4.15.1. See
   `/home/ubuntu/work/verify/electrical-circuit-agent-deps.log` for full output.
 
+### KiCad nightly, CERN library, and sbom-action update review
+
+- Checked on: 2026-10-03
+- KiCad core moved from `202609290253+1dd7ad3604~189~ubuntu26.04.1` to
+  `202609302019+55110814ee~189~ubuntu26.04.1`; the compare includes 100
+  commits. Reviewed changes cover the KiCad IPC/API surface (footprint
+  plugin actions, symbol editor action handling, document validation
+  ordering), new arc construction modes across schematic/symbol/board
+  editors, staggered via-stack trace sizing, Altium no-connect import, and
+  a large set of nullptr safety, variant-aware field resolution, and exact
+  integer geometry fixes. The API additions are consumed only through
+  `kicad-cli` subprocess calls here, so no plugin or fixture change is
+  required.
+- Footprints moved to `202609302018+9326b9efd~14~ubuntu26.04.1`; its single
+  change fixes the Schaffner RN112-04 choke courtyard — an additive
+  library correction that does not alter existing library references.
+- The CERN library submodule moved from
+  `7618368c1cc70478024ed84882d54c0dade7dc86` to
+  `eec34374e810d4253b6a2764687efbfbb8ad29a5` (2026-10-03, three
+  synchronization commits past the checker-reported `06b9dc02`). Upstream
+  library regeneration continues; license files remain unchanged.
+- `anchore/sbom-action` moved from v0.24.2 (`3ad72834`) to v0.24.3
+  (`66cbf4bc`); the release carries only internal development-tooling
+  bumps, so no workflow behavior change is expected.
+- `ossf/scorecard-action` was reported as having an update candidate, but
+  the candidate resolves to the annotated tag object SHA rather than a
+  commit: the current pin `2d114668` is already the v2.4.4 commit and is
+  up to date. No change.
+- All KiCad Debian assets were fetched from Launchpad and their SHA-256
+  values recomputed for the Dockerfile.
+
 ### OpenHands runtime surfaces
 
 Runtime policy surfaces the plugin declares but the host executes:
