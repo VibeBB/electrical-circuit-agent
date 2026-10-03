@@ -16,6 +16,7 @@ from scripts.check_dependency_updates import (
     check_apt_packages,
     check_docker_args,
     check_docker_base,
+    check_git_clones,
     check_git_commit_pins,
     check_kicad_ppa,
     check_pypi_lock,
@@ -505,6 +506,45 @@ def test_fetch_failures_are_unknown_and_counted(
     assert report["unknown_count"] == len(unknown)
     assert report["outdated_count"] == 0
     assert "| unknown |" in report_markdown.read_text(encoding="utf-8")
+
+
+def test_git_clones_parse_workflow_pins() -> None:
+    statuses = check_git_clones(
+        dependency_updates_module.ROOT, list_remote_tags=lambda url: ["3.1.7"]
+    )
+    lynis = next(status for status in statuses if status.name == "CISOfy/lynis")
+    assert lynis.current == "3.1.7"
+    assert lynis.latest == "3.1.7"
+    assert lynis.source == "git clone (container-audit.yml)"
+    assert lynis.outdated is False
+    # The SDK checkout pins "v${SDK_VERSION}" — a variable, not a literal pin.
+    assert {status.name for status in statuses} == {"CISOfy/lynis"}
+
+
+def test_git_clones_report_outdated_and_fetch_failed(tmp_path: Path) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "audit.yml").write_text(
+        "      - run: |\n"
+        "          git clone --depth 1 --branch 3.1.7 \\\n"
+        "            https://github.com/CISOfy/lynis \"$RUNNER_TEMP/lynis\"\n",
+        encoding="utf-8",
+    )
+    statuses = check_git_clones(
+        tmp_path, list_remote_tags=lambda url: ["3.1.7", "3.2.0"]
+    )
+    lynis = next(status for status in statuses if status.name == "CISOfy/lynis")
+    assert lynis.latest == "3.2.0"
+    assert lynis.outdated is True
+
+    def failed_tags(url: str) -> list[str]:
+        raise OSError(url)
+
+    statuses = check_git_clones(tmp_path, list_remote_tags=failed_tags)
+    lynis = next(status for status in statuses if status.name == "CISOfy/lynis")
+    assert lynis.latest == "?"
+    assert lynis.fetch_failed is True
+    assert lynis.outdated is False
 
 
 def test_check_python_versions_flags_older_minors(tmp_path: Path) -> None:

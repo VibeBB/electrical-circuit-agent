@@ -363,6 +363,12 @@ CPython minor from `git ls-remote --tags`), and the Dockerfile `FROM` images:
 image tag against the latest `uv` release. `@sha256:` digest suffixes on
 `FROM` references are ignored for tag comparison.
 
+Workflow `git clone --branch <ref>` pins are also tracked against the
+upstream repo's highest semver tag — the pinned `CISOfy/lynis` checkout in
+`container-audit.yml` is the current example, so a new Lynis release shows
+up as an update candidate. Refs resolved from shell variables (e.g. the
+`"v${SDK_VERSION}"` SDK checkout) are not literal pins and are skipped.
+
 ## Updating pins
 
 1. Check the KiCad versions in the resolute Packages index of the PPA; the

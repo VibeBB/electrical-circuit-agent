@@ -8,7 +8,8 @@ Utils), unpinned apt packages, the CERN KiCad libraries submodule, direct PyPI
 dependencies (compared against resolved versions in uv.lock), plus uv.lock
 transitive drift via `uv lock --upgrade --dry-run`, the uv required-version pin, Python minor
 pins against the latest stable CPython minor, GitHub Actions `uses:` pins,
-and the Docker base image tags.
+`git clone --branch` pins inside workflows (e.g. the pinned Lynis checkout
+in container-audit.yml), and the Docker base image tags.
 
 Renders a markdown report (and optionally JSON). Deferrals live in
 scripts/dependency_update_deferrals.json; see docs/operations.md for the
@@ -442,6 +443,19 @@ def workflow_files(repo_root: Path) -> list[Path]:
     return sorted((repo_root / ".github" / "workflows").glob("*.yml"))
 
 
+def _github_latest_tag(repo: str, list_remote_tags: ListRemoteTags) -> str:
+    """Highest semver git tag of a GitHub repo ("" on fetch failure)."""
+    try:
+        tags = list_remote_tags(f"https://github.com/{repo}")
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return ""
+    versioned = sorted(
+        (t for t in tags if re.fullmatch(r"v?\d+\.\d+\.\d+", t)),
+        key=lambda t: tuple(int(p) for p in t.removeprefix("v").split(".")),
+    )
+    return versioned[-1] if versioned else ""
+
+
 def check_github_actions(
     repo_root: Path,
     *,
@@ -468,6 +482,45 @@ def check_github_actions(
                     latest,
                     f"{workflow.name}:{tag}",
                     current != latest,
+                )
+            )
+    return statuses
+
+
+_GIT_CLONE = re.compile(
+    r"git\s+clone[\s\S]{0,200}?--branch\s+(\S+)\s*(?:\\\s*\n\s*)?"
+    r"\s*(https://github\.com/([\w.-]+/[\w.-]+))"
+)
+
+
+def check_git_clones(
+    repo_root: Path, *, list_remote_tags: ListRemoteTags = _default_list_remote_tags
+) -> list[Status]:
+    """`git clone --branch <ref> <github-url>` pins inside workflows
+    (e.g. the pinned Lynis checkout in container-audit.yml)."""
+    statuses: list[Status] = []
+    seen: set[tuple[str, str]] = set()
+    for workflow in workflow_files(repo_root):
+        for raw_ref, _url, repo in _GIT_CLONE.findall(workflow.read_text(encoding="utf-8")):
+            ref = raw_ref.strip("'\"")
+            # A ref resolved from a shell variable (e.g. "v${SDK_VERSION}")
+            # is not a literal pin.
+            if "$" in ref or "{" in ref or "}" in ref:
+                continue
+            if (repo, ref) in seen:
+                continue
+            seen.add((repo, ref))
+            latest = _github_latest_tag(repo, list_remote_tags)
+            outdated = bool(latest) and latest != ref
+            statuses.append(
+                Status(
+                    repo,
+                    ref,
+                    latest or "?",
+                    f"git clone ({workflow.name})",
+                    outdated,
+                    "" if latest else "fetch failed",
+                    fetch_failed=not latest,
                 )
             )
     return statuses
@@ -829,6 +882,13 @@ def check_dependency_updates(
     list_remote_tags: ListRemoteTags = _default_list_remote_tags,
 ) -> list[Status]:
     deferrals = load_deferrals(repo_root)
+    tag_cache: dict[str, list[str]] = {}
+
+    def cached_tags(url: str) -> list[str]:
+        if url not in tag_cache:
+            tag_cache[url] = list_remote_tags(url)
+        return tag_cache[url]
+
     statuses = [
         *check_kicad_ppa(repo_root, fetch=fetch),
         *check_docker_args(repo_root, fetch_json=fetch_json),
@@ -838,8 +898,9 @@ def check_dependency_updates(
         *check_pypi(repo_root, deferrals, fetch_json=fetch_json),
         *check_pypi_lock(repo_root, set(project_pins(repo_root)), run_uv=run_uv),
         *check_uv_pin(repo_root, fetch_json=fetch_json),
-        *check_python_versions(repo_root, list_remote_tags=list_remote_tags),
+        *check_python_versions(repo_root, list_remote_tags=cached_tags),
         *check_github_actions(repo_root, fetch_json=fetch_json),
+        *check_git_clones(repo_root, list_remote_tags=cached_tags),
         *check_docker_base(repo_root, fetch_json=fetch_json),
     ]
     return apply_deferrals(statuses, deferrals)
