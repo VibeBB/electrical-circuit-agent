@@ -105,3 +105,15 @@ GHSA-q42p-pg8m-cqh6 exp:2027-01-03
 CVE-2026-17106 exp:2027-01-03
 CVE-2026-46600 exp:2027-01-03
 CVE-2026-56854 exp:2027-01-03
+#
+# --- Dockerfiles embedded in the agent-server package (circuit-server) ----
+# Trivy flags DS-0029 (apt-get without --no-install-recommends) on the
+# Dockerfiles shipped as package resources under
+# /agent-server/.venv/lib/python3.13/site-packages/openhands/agent_server/
+# docker/ and /agent-server/openhands-agent-server/. They are upstream's
+# nested-workspace build templates, not the recipe of the published image,
+# and agent-server reads them at runtime when docker-workspace mode is
+# requested, so they cannot be stripped. Our own Dockerfiles are covered by
+# hadolint + `docker build --check`. Re-evaluate on the openhands-sdk bump —
+# same deferral as the .venv findings.
+DS-0029 exp:2027-01-03

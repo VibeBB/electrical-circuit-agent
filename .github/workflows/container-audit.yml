@@ -133,9 +133,11 @@ jobs:
           mkdir -p "$LYNIS_OUT"
           docker run --rm --user 0 \
             -v "$RUNNER_TEMP/lynis:/lynis:ro" \
+            -v "$GITHUB_WORKSPACE/docker/lynis-container.prf:/container.prf:ro" \
             -v "$LYNIS_OUT:/out" \
             --entrypoint /bin/sh "$PINNED_TOOLS_IMAGE" \
             -c 'cd /lynis && ./lynis audit system --quick --no-colors \
+                --profile /container.prf \
                 --report-file /out/lynis-report.dat --logfile /out/lynis.log \
                 --auditor github-actions' || true
           index=$(grep '^hardening_index=' "$LYNIS_OUT/lynis-report.dat" \

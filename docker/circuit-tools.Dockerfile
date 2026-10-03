@@ -211,3 +211,7 @@ RUN if [ -f /usr/share/doc/kicad-nightly-symbols/LICENSE.md ]; then \
     && rm -f /tmp/circuit-requirements.txt \
     && rm -rf /root/.cache/uv \
     && chown -R circuit:circuit /home/circuit
+
+# Tighten the login.defs umask to 027 (Lynis AUTH-9328): the image has no
+# interactive users, so files created at runtime stay group-readable only.
+RUN printf 'UMASK 027\n' >> /etc/login.defs
