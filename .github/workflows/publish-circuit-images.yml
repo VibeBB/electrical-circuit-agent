@@ -135,7 +135,7 @@ jobs:
           version: v0.75.0
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
-          include-non-failures: true
+          list-all-pkgs: 'true'
           exit-code: '0'
           format: json
           output: trivy-circuit-tools.json
@@ -330,7 +330,7 @@ jobs:
           version: v0.75.0
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
-          include-non-failures: true
+          list-all-pkgs: 'true'
           exit-code: '0'
           format: json
           output: trivy-circuit-server.json
