@@ -527,12 +527,10 @@ def test_git_clones_report_outdated_and_fetch_failed(tmp_path: Path) -> None:
     (workflows / "audit.yml").write_text(
         "      - run: |\n"
         "          git clone --depth 1 --branch 3.1.7 \\\n"
-        "            https://github.com/CISOfy/lynis \"$RUNNER_TEMP/lynis\"\n",
+        '            https://github.com/CISOfy/lynis "$RUNNER_TEMP/lynis"\n',
         encoding="utf-8",
     )
-    statuses = check_git_clones(
-        tmp_path, list_remote_tags=lambda url: ["3.1.7", "3.2.0"]
-    )
+    statuses = check_git_clones(tmp_path, list_remote_tags=lambda url: ["3.1.7", "3.2.0"])
     lynis = next(status for status in statuses if status.name == "CISOfy/lynis")
     assert lynis.latest == "3.2.0"
     assert lynis.outdated is True
