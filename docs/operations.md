@@ -1208,6 +1208,22 @@ Suppressions: `.hadolint.yaml` waivers above; `.trivyignore` holds
 time-boxed finding IDs — entries must carry an `exp:` date and a
 rationale line here when added.
 
+The weekly audit runs Lynis as container root (`--user 0`) with the
+committed `docker/lynis-container.prf` profile, which skips tests that
+are inapplicable inside a container (kernel/systemd/mounts/storage/
+network/PAM/accounting are governed by the runtime flags below, not the
+image fs). The profile turns the Hardening Index into an image-actionable
+trend metric; remaining suggestions are fixed in the Dockerfile
+(`UMASK 027` in login.defs, Lynis AUTH-9328 — `circuit-server` inherits
+it because it layers on `circuit-tools`) or silenced only with a
+documented reason.
+
+`circuit_launcher.py` applies the runtime-hardening flags the container
+profile defers to: `--network none`, `--user uid:gid`,
+`--cap-drop ALL`, `--security-opt no-new-privileges`. A `--read-only`
+root filesystem stays an optional hardening for callers that supply
+tmpfs for tools that need scratch space.
+
 ### Publish-gate findings and server repackage
 
 Enumerating the first gate run against the published digests
@@ -1241,6 +1257,16 @@ Enumerating the first gate run against the published digests
   `scripts/dependency_update_deferrals.json` — after it lands, re-scan
   and drop the cleared waivers. Waivers are per-CVE, so any *new*
   finding still fails the gate.
+- The first publish after that fix surfaced six `DS-0029`
+  misconfigurations (`apt-get` without `--no-install-recommends`) on
+  the Dockerfiles shipped as package resources inside the upstream
+  agent-server build
+  (`/agent-server/.venv/.../openhands/agent_server/docker/` and
+  `/agent-server/openhands-agent-server/`). They are upstream's
+  nested-workspace build templates — not the recipe of the published
+  image — and agent-server reads them at runtime, so they cannot be
+  stripped; the ID is waived through 2027-01-03 and re-evaluated on the
+  same SDK bump.
 
 ## CI runner network auditing
 
