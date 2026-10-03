@@ -7,16 +7,16 @@ from pathlib import Path
 
 EXPECTED: dict[str, str] = {
     ".github/workflows/pr-branch-cleanup.yml": (
-        "3cf954c9e5eef0c704efd4a701a4b1f898cfb06349355176f9b50ff894b88d3c"
+        "09bc85d9ac93c67434acb53512ca8e557ab01fcfad00e610c67abd26282b77f1"
     ),
     ".github/workflows/workflow-lint.yml#jobs": (
-        "0c77c69bbd3db99482ec76e4fc66fb38ec1f4f130b7c80bbd7f6ec8a53ac3ac8"
+        "c7e4d9dcfb04a55003705fb7f0960b319496254dcb22cb68491c794bebf96ea5"
     ),
     ".github/workflows/main-ci-failure-issue.yml#jobs": (
         "748d435c8ec6b362f2d8a42c4c8c77361fe4ee81c3ce8d47ff486c039fa869f6"
     ),
     ".github/workflows/dependency-review.yml": (
-        "4797209390045a888f18dd6b5885ab46588af23c28d58e4b7d9d41c86c02af18"
+        "e1e58422528c0994975c505d74e0d4297869c8c6880cdcf171705c394ecc51d2"
     ),
     ".github/workflows/scorecard.yml": (
         "85094c12b03b79d8e5e864b7fc7a49b8bec413c9f46b8580753ea61a6eb736b5"

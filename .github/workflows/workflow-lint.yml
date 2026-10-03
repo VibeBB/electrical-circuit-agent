@@ -51,12 +51,29 @@ jobs:
         with:
           python-version: "3.12"
           cache-suffix: workflow-lint
+      - name: Fetch pinned zizmor wheel
+        run: |
+          set -euo pipefail
+          # The sha256 is the published value for
+          # zizmor-1.30.1-py3-none-manylinux_2_28_x86_64.whl on PyPI.
+          wheel="zizmor-1.30.1-py3-none-manylinux_2_28_x86_64.whl"
+          curl --fail --location --silent --show-error --retry 5 --retry-delay 10 \
+            --output "$RUNNER_TEMP/$wheel" \
+            "https://files.pythonhosted.org/packages/63/55/1900b53d34dcebc207cf3ceb7957b3748e8bb40958f062e3853ab72f2395/$wheel"
+          echo "eee12266b793cb87ad4a7e3af2e72404f8a63e3de5eb099b80bf7b1cfd232a8e  $RUNNER_TEMP/$wheel" \
+            | sha256sum -c -
       - name: Zizmor
         env:
           # GH_TOKEN enables zizmor's online audits (advisory DB lookups,
-          # ref/tag resolution); without it zizmor runs in offline mode.
+          # ref/tag resolution). Bot digest-lock branches can be deleted
+          # mid-run, so resolve nothing online there.
           GH_TOKEN: ${{ github.token }}
-        run: uvx zizmor@1.30.1 --format sarif .github/workflows > results.sarif
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          flags=""
+          case "$HEAD_REF" in bot/update-image-digests-*) flags="--offline";; esac
+          uvx --from "$RUNNER_TEMP/zizmor-1.30.1-py3-none-manylinux_2_28_x86_64.whl" \
+            zizmor $flags --format sarif .github/workflows > results.sarif
       - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         # Bot digest-lock branches are deleted on auto-merge, so their SARIF
         # cannot be uploaded; the plain zizmor run below still gates them.
@@ -64,9 +81,18 @@ jobs:
         with:
           sarif_file: results.sarif
       - name: Fail on zizmor findings
-        # The SARIF run always exits 0 so findings can be uploaded; the
-        # plain-format run exits non-zero when findings exist, which makes
-        # them gate this check.
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: uvx zizmor@1.30.1 --format plain .github/workflows
+        # The SARIF run always exits 0 so findings can be uploaded; gate on
+        # the results it recorded instead of scanning a second time.
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          results = json.load(open("results.sarif", encoding="utf-8"))["runs"][0]["results"]
+          for r in results:
+              try:
+                  loc = r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+              except (KeyError, IndexError):
+                  loc = "?"
+              print(f"- {r['ruleId']} {loc}: {r['message']['text'][:200]}")
+          print(f"{len(results)} zizmor finding(s)")
+          sys.exit(1 if results else 0)
+          PY

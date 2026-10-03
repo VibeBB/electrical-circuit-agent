@@ -40,8 +40,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
-          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" \
-            || echo "branch $BRANCH is already gone"
+          # The merge may have already deleted the branch; keep the raw 422
+          # JSON off the log so it does not mask real failures.
+          if ! gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" \
+              2>/dev/null; then
+            echo "branch $BRANCH is already gone"
+          fi
       - name: Sweep automation branches with no open pull request
         if: github.event_name != 'pull_request'
         env:
@@ -54,8 +58,11 @@ jobs:
             open=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open \
               --head "$branch" --json number --jq 'length')
             if [ "$open" = "0" ]; then
-              gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" \
-                && echo "deleted stale branch $branch" \
-                || echo "failed to delete $branch"
+              if gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" \
+                  2>/dev/null; then
+                echo "deleted stale branch $branch"
+              else
+                echo "failed to delete $branch"
+              fi
             fi
           done < branches.txt
