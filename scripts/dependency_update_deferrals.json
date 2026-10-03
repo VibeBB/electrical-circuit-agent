@@ -11,6 +11,12 @@
       "version": "3.x",
       "reason": "openhands-sdk が Python 3.14 を未検証のため保留（requires-python >=3.12, CI は 3.12）。SDK のサポート範囲が 3.14 を含む版へ更新する際に再検討。",
       "recheck_by": "2027-04-01"
+    },
+    {
+      "target": "openhands-sdk",
+      "version": "1.51.0",
+      "reason": "The circuit-server image is assembled by the upstream agent-server build (sdk:openhands-agent-server/1.50.1); its .venv, nodejs_wheel node_modules, and Docker CLI plugins carry ~70 upstream-borne Trivy findings currently covered by expiring .trivyignore waivers. Defer the bump until its changelog review confirms compatibility, then re-scan and drop cleared waivers.",
+      "recheck_by": "2027-01-03"
     }
   ]
 }
