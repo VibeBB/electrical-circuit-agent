@@ -17,9 +17,13 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
+      actions: write # dispatch post-merge verification workflows on main
       contents: write # required to merge digest-lock PRs
       pull-requests: write # merge stalled digest-lock PRs
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - name: Merge stalled digest-lock PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -27,7 +31,7 @@ jobs:
           set -uo pipefail
           # Lock PRs sometimes stay open with auto-merge armed and every
           # required check green while GitHub's mergeability evaluation
-          # reports "blocked" indefinitely. Re-try the merge periodically;
+          # reports "blocked" indefinitely. Re-try the merge every 6 hours;
           # the branch ruleset still gates it, so an unsatisfied PR
           # cannot merge.
           prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 50 \
@@ -44,6 +48,14 @@ jobs:
               clean|blocked|behind|unstable)
                 if gh pr merge --repo "$GITHUB_REPOSITORY" --squash --delete-branch "$pr"; then
                   echo "merged $pr_url (was $state)" | tee -a "$GITHUB_STEP_SUMMARY"
+                  # A GITHUB_TOKEN merge fires no push event, so dispatch
+                  # the post-merge verification on main explicitly — the
+                  # same runs publish_image_pin_pr.sh dispatches after a
+                  # pin merge.
+                  for wf in ci.yml locked-image-check.yml; do
+                    gh workflow run "$wf" --repo "$GITHUB_REPOSITORY" --ref main \
+                      || echo "::warning::post-merge dispatch of $wf failed"
+                  done
                 else
                   gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch "$pr" || true
                   echo "$pr_url left open ($state; auto-merge armed)" | tee -a "$GITHUB_STEP_SUMMARY"
