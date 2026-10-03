@@ -23,6 +23,10 @@ ARG KICAD_LIBRARY_UTILS_COMMIT=90b0af91eaffcd91552027c3bfd166896f78c7de
 ARG CERN_COMMIT=unknown
 ARG IMAGE_REVISION=unknown
 
+# Fail the build when the left side of a verification pipe (curl|sha256sum)
+# breaks instead of silently passing the right side.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV JAVA_HOME=/opt/jre
 ENV PATH=/opt/jre/bin:/usr/lib/kicad-nightly/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -87,11 +91,10 @@ RUN grep -q "^URIs: http://security\.ubuntu\.com/ubuntu" \
         --output /tmp/kicad-nightly-footprints.deb \
         "${KICAD_NIGHTLY_FOOTPRINTS_DEB_URL}" \
     && echo "${KICAD_NIGHTLY_FOOTPRINTS_DEB_SHA256}  /tmp/kicad-nightly-footprints.deb" | sha256sum --check \
-    && cd /tmp \
     && apt_install_retry \
-        ./kicad-nightly.deb \
-        ./kicad-nightly-symbols.deb \
-        ./kicad-nightly-footprints.deb \
+        /tmp/kicad-nightly.deb \
+        /tmp/kicad-nightly-symbols.deb \
+        /tmp/kicad-nightly-footprints.deb \
     && rm -f /tmp/kicad-nightly*.deb \
     && rm -rf /var/lib/apt/lists/*
 
@@ -124,7 +127,7 @@ RUN mkdir -p /opt/jre /opt/freerouting \
     && tar -xzf /tmp/semeru-jre.tar.gz -C /opt/jre --strip-components=1 \
     && rm -f /tmp/semeru-jre.tar.gz \
     && command -v java | grep -E '^/opt/jre/bin/java$' \
-    && java -version 2>&1 | grep -q 'Eclipse OpenJ9 VM' \
+    && java -version 2>&1 | grep -F 'Eclipse OpenJ9 VM' >/dev/null \
     && java -version 2>&1 | grep -F "IBM Semeru Runtime Open Edition ${SEMERU_JRE_VERSION}" \
     && curl --fail --location --silent --show-error \
         --retry 5 --retry-delay 10 --retry-all-errors \
@@ -172,6 +175,8 @@ COPY pyproject.toml uv.lock /opt/circuit/
 COPY src /opt/circuit/src
 COPY plugins/circuit /opt/circuit/plugins/circuit
 
+WORKDIR /opt/circuit
+
 RUN if [ -f /usr/share/doc/kicad-nightly-symbols/LICENSE.md ]; then \
         cp /usr/share/doc/kicad-nightly-symbols/LICENSE.md \
           /opt/circuit/libraries/kicad-official-LICENSE.md; \
@@ -191,7 +196,6 @@ RUN if [ -f /usr/share/doc/kicad-nightly-symbols/LICENSE.md ]; then \
        fi \
     && mkdir -p /home/circuit/.config/kicad /home/circuit/.cache/kicad \
     && chown -R circuit:circuit /home/circuit \
-    && cd /opt/circuit \
     && uv export --frozen --no-dev --no-emit-project --format requirements-txt \
         --output-file /tmp/circuit-requirements.txt \
     && uv pip install --system --break-system-packages \
@@ -206,5 +210,3 @@ RUN if [ -f /usr/share/doc/kicad-nightly-symbols/LICENSE.md ]; then \
     && python3 -m circuit.doctor --warn \
     && rm -f /tmp/circuit-requirements.txt \
     && chown -R circuit:circuit /home/circuit
-
-WORKDIR /opt/circuit
