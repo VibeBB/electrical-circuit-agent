@@ -39,6 +39,9 @@ jobs:
       - name: Resolve and pull pinned images
         run: |
           set -euo pipefail
+          # One cache for every Trivy invocation in this job so the
+          # vulnerability DB downloads once instead of once per scan.
+          echo "TRIVY_CACHE_DIR=$RUNNER_TEMP/trivy-cache" >> "$GITHUB_ENV"
           tools_ref=$(python3 -c 'import json; e=json.load(open("docker/image-digests.json", encoding="utf-8"))["circuit_tools"]; print(e["image"]+"@"+e["digest"])')
           server_ref=$(python3 -c 'import json; e=json.load(open("docker/image-digests.json", encoding="utf-8"))["circuit_server"]; print(e["image"]+"@"+e["digest"])')
           echo "PINNED_TOOLS_IMAGE=$tools_ref" >> "$GITHUB_ENV"
@@ -128,8 +131,16 @@ jobs:
           LYNIS_OUT: ${{ runner.temp }}/lynis-out
         run: |
           set -uo pipefail
+          # Lynis 3.1.7 resolves to commit 2e99f92265760b73fd6b139868eb8d4116624030;
+          # verify the checkout so a re-pointed tag fails instead of
+          # silently auditing with different code.
           git clone --depth 1 --branch 3.1.7 \
             https://github.com/CISOfy/lynis "$RUNNER_TEMP/lynis"
+          resolved=$(git -C "$RUNNER_TEMP/lynis" rev-parse HEAD)
+          if [ "$resolved" != "2e99f92265760b73fd6b139868eb8d4116624030" ]; then
+            echo "::error::Lynis 3.1.7 resolved to $resolved, expected 2e99f92265760b73fd6b139868eb8d4116624030"
+            exit 1
+          fi
           mkdir -p "$LYNIS_OUT"
           docker run --rm --user 0 \
             -v "$RUNNER_TEMP/lynis:/lynis:ro" \
@@ -157,7 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os
+          import json, os, sys
           from collections import Counter
           from datetime import datetime, timezone
 
@@ -184,12 +195,21 @@ jobs:
               cis = {"passed": 0, "failed": 0}
               try:
                   cis_data = json.load(open(cis_path, encoding="utf-8"))
-                  for result in cis_data.get("Results", []):
-                      summary = result.get("MisconfSummary") or {}
-                      cis["passed"] += int(summary.get("Successes", 0))
-                      cis["failed"] += int(summary.get("Failures", 0))
               except (OSError, ValueError):
-                  pass
+                  cis_data = {}
+              # --compliance nests check summaries deeper than top-level
+              # Results; walk recursively so the totals are real.
+              def _summaries(node):
+                  yield node
+                  for child in node.get("Results") or []:
+                      yield from _summaries(child)
+              for result in _summaries(cis_data):
+                  summary = result.get("MisconfSummary") or {}
+                  cis["passed"] += int(summary.get("Successes", 0))
+                  cis["failed"] += int(summary.get("Failures", 0))
+              if cis["passed"] + cis["failed"] == 0:
+                  # dead telemetry must fail, not masquerade as coverage
+                  sys.exit("Docker CIS scan produced no results")
               image, _, digest = image_ref.partition("@")
               return {
                   "image": image,
