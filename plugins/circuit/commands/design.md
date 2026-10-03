@@ -28,7 +28,7 @@ labels for power rails (VCC/GND) and for nets that would otherwise force wires t
 cross — a schematic that connects everything with labels and no wires is
 electrically valid but unreadable, and `circuit_sch_lint` reports it as
 `label_only_connectivity`. Do not draw pin-to-pin wires across
-components. In Konnect 0.12.1, `save_project` takes `{}`. Schematic files are only
+components. In Konnect 0.13.0, `save_project` takes `{}`. Schematic files are only
 written by Konnect operations — never by generated scripts or hand-edited
 s-expressions. When dynamically loaded `konnect_*` toolsets are not visible to the
 harness, run those same operations through `circuit_konnect_call` rather than

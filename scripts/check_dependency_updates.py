@@ -44,6 +44,7 @@ Fetch = Callable[[str], bytes]
 FetchJson = Callable[[str], Any]
 RunUv = Callable[[list[str], Path], str]
 ListRemoteTags = Callable[[str], list[str]]
+ListRemoteTagCommits = Callable[[str], dict[str, str]]
 
 # ---------------------------------------------------------------------------
 # Repo-specific targets: the only block that differs between sibling repos.
@@ -183,6 +184,31 @@ def _default_list_remote_tags(url: str) -> list[str]:
         line.rsplit("\t", 1)[-1].removeprefix("refs/tags/").removesuffix("^{}")
         for line in result.stdout.splitlines()
     ]
+
+
+def _default_list_remote_tag_commits(url: str) -> dict[str, str]:
+    """Tag name -> commit SHA the tag points at.
+
+    Annotated tags resolve through the peeled `^{}` line to the tagged
+    commit; lightweight tags resolve to the object they name directly.
+    """
+    result = subprocess.run(
+        ["git", "ls-remote", "--tags", url],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    commits: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        sha, _, ref = line.partition("\t")
+        name = ref.removeprefix("refs/tags/")
+        if name.endswith("^{}"):
+            commits[name[: -len("^{}")]] = sha
+        else:
+            commits.setdefault(name, sha)
+    return commits
 
 
 def normalize_name(name: str) -> str:
@@ -459,29 +485,41 @@ def _github_latest_tag(repo: str, list_remote_tags: ListRemoteTags) -> str:
 def check_github_actions(
     repo_root: Path,
     *,
-    fetch_json: FetchJson = _default_json,
+    list_remote_tag_commits: ListRemoteTagCommits = _default_list_remote_tag_commits,
 ) -> list[Status]:
+    """`uses: <repo>@<sha> # <tag>` pins.
+
+    The pinned SHA is compared against the dereferenced commit the commented
+    tag points at: annotated tags peel to a commit via `^{}`, so a tag-object
+    SHA never produces a false outdated result.
+    """
     statuses: list[Status] = []
+    tag_cache: dict[str, dict[str, str] | None] = {}
     for workflow in workflow_files(repo_root):
         for match in _ACTION.finditer(workflow.read_text(encoding="utf-8")):
             repo, current, tag = match.groups()
             if tag is None:
                 continue
-            ref_value = fetch_json(f"https://api.github.com/repos/{repo}/git/ref/tags/{tag}")
-            if not isinstance(ref_value, dict):
-                raise ValueError(f"GitHub action tag response is malformed: {repo}@{tag}")
-            ref = cast(dict[str, Any], ref_value)
-            obj = ref.get("object")
-            latest = cast(dict[str, Any], obj).get("sha") if isinstance(obj, dict) else None
-            if not isinstance(latest, str):
-                raise ValueError(f"GitHub action tag response is malformed: {repo}@{tag}")
+            if repo not in tag_cache:
+                try:
+                    tag_cache[repo] = list_remote_tag_commits(f"https://github.com/{repo}")
+                except (
+                    OSError,
+                    subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired,
+                ):
+                    tag_cache[repo] = None
+            commits = tag_cache[repo]
+            latest = commits.get(tag) if commits else None
             statuses.append(
                 Status(
                     f"Action {repo}",
                     current,
-                    latest,
+                    latest or "?",
                     f"{workflow.name}:{tag}",
-                    current != latest,
+                    bool(latest) and current != latest,
+                    "" if latest else "fetch failed",
+                    fetch_failed=latest is None,
                 )
             )
     return statuses
@@ -880,6 +918,7 @@ def check_dependency_updates(
     fetch_json: FetchJson = _default_json,
     run_uv: RunUv = _default_run_uv,
     list_remote_tags: ListRemoteTags = _default_list_remote_tags,
+    list_remote_tag_commits: ListRemoteTagCommits = _default_list_remote_tag_commits,
 ) -> list[Status]:
     deferrals = load_deferrals(repo_root)
     tag_cache: dict[str, list[str]] = {}
@@ -899,7 +938,7 @@ def check_dependency_updates(
         *check_pypi_lock(repo_root, set(project_pins(repo_root)), run_uv=run_uv),
         *check_uv_pin(repo_root, fetch_json=fetch_json),
         *check_python_versions(repo_root, list_remote_tags=cached_tags),
-        *check_github_actions(repo_root, fetch_json=fetch_json),
+        *check_github_actions(repo_root, list_remote_tag_commits=list_remote_tag_commits),
         *check_git_clones(repo_root, list_remote_tags=cached_tags),
         *check_docker_base(repo_root, fetch_json=fetch_json),
     ]
@@ -913,6 +952,7 @@ def report(
     fetch_json: FetchJson = _default_json,
     run_uv: RunUv = _default_run_uv,
     list_remote_tags: ListRemoteTags = _default_list_remote_tags,
+    list_remote_tag_commits: ListRemoteTagCommits = _default_list_remote_tag_commits,
 ) -> dict[str, Any]:
     statuses = check_dependency_updates(
         repo_root,
@@ -920,6 +960,7 @@ def report(
         fetch_json=fetch_json,
         run_uv=run_uv,
         list_remote_tags=list_remote_tags,
+        list_remote_tag_commits=list_remote_tag_commits,
     )
     return {
         "outdated_count": sum(item.outdated for item in statuses),

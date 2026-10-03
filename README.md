@@ -22,7 +22,7 @@ requirements conversation becomes a verified schematic and a routed board.
   design brief (parts, nets, board dimensions, optional placement) plus an
   intake sidecar that binds every requirement and assumption to an id.
 - **Deterministic authoring** — validates the brief, then builds the
-  schematic with Konnect 0.12.1, updates/places/routes the PCB through
+  schematic with Konnect 0.13.0, updates/places/routes the PCB through
   `kicad-cli api-server`, and exports manufacturing files.
 - **Deterministic verification** — ERC/DRC verdicts come solely from
   `kicad-cli` JSON output; `circuit_connectivity_check` compares the
@@ -131,7 +131,7 @@ third-party components, their licenses, sources, and redistribution
 boundaries.
 
 Konnect runs as an unmodified AGPL-3.0-only binary in a separate process.
-Its source is release commit `fa62e1ccb9eba359519bf8e3eab53a6cffeee33c` of
+Its source is release commit `6bbe3e4f890ba1d37c0e5d5f38ccd03d90958c9e` of
 [mixelpixx/Konnect](https://github.com/mixelpixx/Konnect). The Konnect README
 notes that "commercial licenses are available" for corporate use cases where
 the AGPL does not fit. This statement is not legal advice; users should verify
@@ -148,7 +148,7 @@ the license conditions that apply to their own usage.
 - **対話による要件取り込み** — 設計意図を明確化し、JSON 設計ブリーフ
   （部品・net・基板寸法・任意の配置）と intake サイドカー（全要件・仮定を
   ID に紐付け）として固定します。
-- **決定論的オーサリング** — ブリーフを検証し、Konnect 0.12.1 で回路図を
+- **決定論的オーサリング** — ブリーフを検証し、Konnect 0.13.0 で回路図を
   構築、`kicad-cli api-server` 経由で PCB の更新・配置・配線を行い、
   製造ファイルをエクスポートします。
 - **決定論的検証** — ERC/DRC の合否は `kicad-cli` の JSON 出力のみで決定。
@@ -255,7 +255,7 @@ uv run python scripts/verify_all.py --stage fast
 
 Konnect は AGPL-3.0-only の無改変バイナリを別プロセスとして実行します。
 ソースは [mixelpixx/Konnect](https://github.com/mixelpixx/Konnect) の
-release commit `fa62e1ccb9eba359519bf8e3eab53a6cffeee33c` です。Konnect の
+release commit `6bbe3e4f890ba1d37c0e5d5f38ccd03d90958c9e` です。Konnect の
 README は、企業利用で AGPL が適合しない場合について
 「commercial licenses are available」と案内しています。本記載は法的助言では
 なく、利用者は自身の利用形態に適用されるライセンス条件を確認してください。

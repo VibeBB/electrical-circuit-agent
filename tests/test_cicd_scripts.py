@@ -18,6 +18,7 @@ from scripts.check_dependency_updates import (
     check_docker_base,
     check_git_clones,
     check_git_commit_pins,
+    check_github_actions,
     check_kicad_ppa,
     check_pypi_lock,
     check_python_versions,
@@ -37,7 +38,7 @@ from scripts.update_image_digest_lock import update_lock
 
 def test_update_and_read_image_lock(tmp_path: Path) -> None:
     lock = tmp_path / "image-digests.json"
-    tools = {"kicad-cli": "10.99.0", "konnect": "0.12.1"}
+    tools = {"kicad-cli": "10.99.0", "konnect": "0.13.0"}
     assert update_lock(
         lock,
         entry="circuit_tools",
@@ -363,7 +364,7 @@ def test_measure_image_tools_reads_cern_commit_file(monkeypatch: pytest.MonkeyPa
     output = "\n".join(
         [
             "10.99.0",
-            "konnect 0.12.1",
+            "konnect 0.13.0",
             "Python 3.14.4",
             "circuit=0.0.1",
             "semeru_jre=27.0.0.0",
@@ -389,7 +390,7 @@ def test_measure_image_tools_rejects_unknown_cern_commit(
     output = "\n".join(
         [
             "10.99.0",
-            "konnect 0.12.1",
+            "konnect 0.13.0",
             "Python 3.14.4",
             "circuit=0.0.1",
             "semeru_jre=27.0.0.0",
@@ -545,6 +546,50 @@ def test_git_clones_report_outdated_and_fetch_failed(tmp_path: Path) -> None:
     assert lynis.outdated is False
 
 
+def test_check_github_actions_compares_dereferenced_tag_commits(
+    tmp_path: Path,
+) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    # scorecard-action v2.4.4 is an annotated tag: its tag-object SHA differs
+    # from the dereferenced commit the pin records.
+    (workflows / "security.yml").write_text(
+        "      - uses: ossf/scorecard-action@" + "a" * 40 + " # v2.4.4\n"
+        "      - uses: anchore/sbom-action@" + "b" * 40 + " # v0.24.3\n",
+        encoding="utf-8",
+    )
+    commits = {
+        "https://github.com/ossf/scorecard-action": {"v2.4.4": "a" * 40},
+        "https://github.com/anchore/sbom-action": {"v0.24.3": "c" * 40},
+    }
+
+    statuses = check_github_actions(tmp_path, list_remote_tag_commits=lambda url: commits[url])
+    by_name = {status.name: status for status in statuses}
+    scorecard = by_name["Action ossf/scorecard-action"]
+    assert scorecard.latest == "a" * 40
+    assert scorecard.outdated is False
+    sbom = by_name["Action anchore/sbom-action"]
+    assert sbom.latest == "c" * 40
+    assert sbom.outdated is True
+
+
+def test_check_github_actions_fetch_failure_is_unknown(tmp_path: Path) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "security.yml").write_text(
+        "      - uses: ossf/scorecard-action@" + "a" * 40 + " # v2.4.4\n",
+        encoding="utf-8",
+    )
+
+    def failed(url: str) -> dict[str, str]:
+        raise OSError(url)
+
+    statuses = check_github_actions(tmp_path, list_remote_tag_commits=failed)
+    assert statuses[0].latest == "?"
+    assert statuses[0].fetch_failed is True
+    assert statuses[0].outdated is False
+
+
 def test_check_python_versions_flags_older_minors(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nrequires-python = ">=3.12"\n',
@@ -596,7 +641,7 @@ def test_check_docker_base_strips_digest_pins(tmp_path: Path) -> None:
     docker = tmp_path / "docker"
     docker.mkdir()
     (docker / "circuit-tools.Dockerfile").write_text(
-        "FROM ghcr.io/astral-sh/uv:0.12.21@sha256:aaa AS uv\nFROM ubuntu:26.04@sha256:bbb\n",
+        "FROM ghcr.io/astral-sh/uv:0.12.22@sha256:aaa AS uv\nFROM ubuntu:26.04@sha256:bbb\n",
         encoding="utf-8",
     )
 
@@ -605,14 +650,14 @@ def test_check_docker_base_strips_digest_pins(tmp_path: Path) -> None:
         if host == "hub.docker.com":
             return {"results": [{"name": "26.04"}], "next": None}
         if host == "pypi.org":
-            return {"info": {"version": "0.12.21"}}
+            return {"info": {"version": "0.12.22"}}
         raise ValueError(url)
 
     statuses = check_docker_base(tmp_path, fetch_json=fetch_json)
     by_name = {status.name: status for status in statuses}
     assert by_name["Docker base ubuntu"].current == "26.04"
     assert not by_name["Docker base ubuntu"].outdated
-    assert by_name["uv base image"].current == "0.12.21"
+    assert by_name["uv base image"].current == "0.12.22"
     assert not by_name["uv base image"].outdated
 
 
@@ -631,7 +676,7 @@ def test_apply_deferrals_suppresses_matching_statuses(tmp_path: Path) -> None:
     statuses = [
         Status("Python minor (ci.yml)", "3.12", "3.14", "ci.yml", True),
         Status("uv", "0.12.18", "0.13.0", "pyproject", True),
-        Status("Konnect", "0.12.1", "0.12.1", "GitHub", False),
+        Status("Konnect", "0.13.0", "0.13.0", "GitHub", False),
     ]
     deferrals = [
         {

@@ -753,6 +753,105 @@ up as an update candidate. Refs resolved from shell variables (e.g. the
 - All KiCad Debian assets were fetched from Launchpad and their SHA-256
   values recomputed for the Dockerfile.
 
+### OpenHands SDK v1.51.0, uv 0.12.22, and Konnect v0.13.0 update review
+
+- Checked on: 2026-10-03
+- `openhands-sdk`/`openhands-tools` `==1.50.1` → `==1.51.0` (main
+  dependencies). The complete `v1.50.1..v1.51.0` release was reviewed:
+  - Agent-profiles additions (tools as the only tool control from one
+    server catalog, profile persona replacement, tool-supplied system-prompt
+    guidance, sub-agent tool/MCP scoping, resolve-and-finalize launch) are
+    not adopted: the plugin's delegation boundary is `AgentDefinition` +
+    `TaskToolSet` frontmatter, and its "profiles" are host-side
+    `~/.openhands/profiles/*.json` LLM profiles provisioned by the
+    `ensure_llm_profiles` hook — a different mechanism. The sub-agent
+    tool/MCP scoping fix is a transparent hardening consistent with the
+    existing boundary; no change needed.
+  - LLM fixes (prompt_cache_key via real provider for proxied models,
+    OpenRouter as verified provider, `/switch_llm` provider resolution,
+    direct-routing classifier messages) and the `ACPAgentSettings.llm`
+    deprecation are inherent or n/a — the repo neither proxies models nor
+    uses ACP.
+  - The SDK's own pydantic 2.12.5 → 2.13.5 bump arrives transitively via
+    `uv lock --upgrade`; the SDK still requires `fastmcp>=3.2.0,<4`, so the
+    MCP 2.x deferral stays and its reason now cites 1.51.0 (latest 2.3.0).
+- uv `0.12.21` → `0.12.22` (`[tool.uv] required-version` and the
+  digest-pinned `FROM ghcr.io/astral-sh/uv:0.12.22` stage). The release
+  carries CPython patch additions, lockfile-recording fixes for
+  workspace-member default groups and dependency-group Python requirements,
+  `UV_PYTHON_ARCH`, wheel platform-tag suffix tolerance, and relock hash
+  verification — all inherent tooling improvements; this is a
+  single-project (non-workspace) repo so the workspace items are n/a.
+- Konnect `0.12.1` → `0.13.0` (`KONNECT_VERSION`, `KONNECT_SHA256`
+  `9c9d28e7…`, `KONNECT_COMMIT` `6bbe3e4f890ba1d37c0e5d5f38ccd03d90958c9e`
+  — the annotated tag's dereferenced merge commit). The minor-bump
+  changelog ("Live truth, bounded recovery, complete boards") was reviewed
+  in full:
+  - **Toolset reshuffle (adopted, required).** The MCP surface is now
+    gated behind 21 toolsets plus an always-on core: `project`, `library`,
+    `editor_navigation`, `sch_components`, `sch_wiring`, `sch_bus`,
+    `sch_analysis`, `sch_batch`, `sch_export`, `sch_hierarchy`, `pcb_board`,
+    `pcb_components`, `pcb_routing`, `placement`, `pcb_export`,
+    `verification`, `integration`, `config`, `design_review`,
+    `manufacturing`, `templates`. `create_schematic`/`edit_sheet`/
+    `add_hierarchical_sheet` moved to `sch_hierarchy`, bus ops to `sch_bus`,
+    Specctra/JLCPCB calls to `integration`, and editor state ops to
+    `editor_navigation`. `scripts/e2e_authoring.py` `TOOLSETS` now loads
+    all 21; `scripts/smoke_kicad11_konnect.py` selects toolsets
+    dynamically and needs no change; `circuit_konnect_call` requires callers
+    to pass `load_toolset` ops, so the coverage matrix
+    (`konnect-tools.json`, rendered `docs/konnect-tools.md`) gained a
+    `toolset` column naming each tool's set (`core` = always available),
+    and `circuit-konnect` SKILL.md documents the new names.
+  - **New tools (adopted into the matrix).** `get_board_stackup`
+    (advisory, live-IPC-only board stackup readback) and
+    `set_placed_footprint_models` (authoring, live-IPC 3D-model edit with
+    `models_revision` readback) are recorded with `ipc: required`.
+  - **Live-truth/readback and bounded-recovery semantics** (explicit board
+    source, uncertain-mutation distinction, bounded IPC retries, chunked
+    schematic-to-PCB sync) are transparent quality improvements aligned
+    with the advisory-never-verdict and single-writer conventions; no code
+    change.
+  - **Schematic/PCB fixes** (ERC coordinate scaling and structured report
+    shape, power-symbol designator, hierarchical pin placement and
+    geometry validation, bus connectivity evidence, batch fields, pad
+    zone-connect modes, netclass unmatched-pattern exposure, outline
+    classification, placement evidence disclosure, unsafe autonomous
+    placement guidance replaced by bounded moves) are inherent upstream
+    fixes; `auto_place_from_schematic` usage is unchanged.
+  - **Not adopted:** installed Claude/Codex guidance drift reporting —
+    the repo runs Konnect as an unmodified binary and does not use
+    `konnect init` integration.
+  - Verified against the release binary (v0.13.0): `tools/list` after
+    loading all toolsets returns 236 tools vs 234 in v0.12.1 — a strict
+    superset; the fixture moved to `tests/data/konnect_tools_v0.13.0.json`.
+  - **`export_manufacturing_package` now requires live IPC** (runtime-verified
+    in the image): the JLCPCB assembly portion needs "native midpoint
+    geometry from the exact board open in KiCad" and returns
+    `editor_unavailable` without `KICAD_API_SOCKET`. The e2e manufacturing
+    stage now reuses the still-running board IPC session instead of
+    restarting Konnect without it, and the matrix entry moved to
+    `ipc: required`.
+- `scripts/check_dependency_updates.py` now resolves github-actions pin
+  comments through `git ls-remote --tags` peeled `^{}` entries instead of
+  the GitHub `git/ref` object's SHA, so annotated tags (e.g.
+  `ossf/scorecard-action` v2.4.4) compare the pinned commit to the
+  dereferenced commit; fetch failures report `unknown` like the other
+  remote checks. Unit tests cover the deref and fetch-failure paths.
+- ruff was already locked at 0.16.10 — no change. KiCad nightly core/
+  symbols/footprints ARGs were already at the newest PPA builds (the
+  apparent mixed state is per-package index skew). The CERN submodule
+  gitlink was already at `eec34374e810d4253b6a2764687efbfbb8ad29a5`; only
+  `libraries/README.md` and `THIRD_PARTY_NOTICES.md` records were stale
+  and are now synced. `anchore/sbom-action` already pins the v0.24.3
+  commit. The `openhands-sdk` 1.51.0 deferral entry was removed now that
+  the bump landed; the `.trivyignore` follow-up (drop cleared waivers once
+  the circuit-server image republishes on 1.51.0) stays open.
+- Reason for adoption: scheduled dependency alignment; the plugin's
+  fail-closed authoring boundary is unchanged.
+- Verification: see the PR for `verify_all --stage fast`, plugin load,
+  and shared-workflow results.
+
 ### OpenHands runtime surfaces
 
 Runtime policy surfaces the plugin declares but the host executes:

@@ -18,7 +18,7 @@ wire the schematic like a hand-drawn one: connect the main signal chain and seri
 paths with `add_wire`/`batch_add_wire` (or `connect_pins`/`batch_connect_pins`)
 plus `add_junction` at T-junctions, reserving `batch_connect_to_net` labels for
 power rails (VCC/GND) and nets that would otherwise cross. Do not draw pin-to-pin
-wires across components. In v0.12.1 call `save_project` with `{}`.
+wires across components. In v0.13.0 call `save_project` with `{}`.
 
 Konnect loads most authoring operations through `load_toolset`, and some
 harnesses never re-fetch `tools/list` after that call, so the operations never
@@ -28,8 +28,18 @@ that happens. Invoke the operation through `circuit_konnect_call` instead:
 Konnect stdio session and returns its result verbatim. Because toolset state is
 session-scoped, batch related calls in the `ops` array so `load_toolset` and the
 real ops share one session: `{"ops": [{"tool": "load_toolset", "arguments":
-{"name": "schematic"}}, {"tool": "batch_edit_schematic_components",
-"arguments": {...}}]}` — the call reports `isError` when any op fails. As a fallback, drive
+{"name": "sch_batch"}}, {"tool": "batch_edit_schematic_components",
+"arguments": {...}}]}` — the call reports `isError` when any op fails.
+v0.13.0 gates tools behind 21 toolsets: `project`, `library`,
+`editor_navigation`, `sch_components`, `sch_wiring`, `sch_bus`, `sch_analysis`,
+`sch_batch`, `sch_export`, `sch_hierarchy`, `pcb_board`, `pcb_components`,
+`pcb_routing`, `placement`, `pcb_export`, `verification`, `integration`,
+`config`, `design_review`, `manufacturing`, `templates`. Load the toolset
+recorded for the tool in the coverage matrix; tools marked `core` are
+always available without `load_toolset`. Note that sheet authoring
+(`create_schematic`, `edit_sheet`, `add_hierarchical_sheet`) now lives in
+`sch_hierarchy`, bus wiring in `sch_bus`, and Specctra/JLCPCB calls in
+`integration`. As a fallback, drive
 the same ops with a small stdio JSON-RPC client (the repository's
 `scripts/konnect_client.py` pattern) against the `konnect` binary with
 `KICAD_API_SOCKET` set; record such terminal invocations in the summary since
@@ -52,10 +62,12 @@ server for the selected board first. Load the PCB toolset as needed, then use
 unmodified AGPL subprocess; the authoritative connectivity, ERC, and DRC results
 remain the circuit kicad-cli-backed reports.
 
-The complete v0.12.1 coverage matrix is in
+The complete v0.13.0 coverage matrix is in
 `references/konnect-tools.json`, rendered in `docs/konnect-tools.md`. Use it before
 adding a tool to an authoring flow. IPC-required tools currently include
-`align_components`, `get_component_list`, `query_traces`, and `refill_zones`.
+`align_components`, `export_manufacturing_package` (native midpoint geometry),
+`get_board_stackup`, `get_component_list`, `query_traces`,
+and `set_placed_footprint_models`.
 Advisory checks and export comparisons are recorded in the design report and never
 change its kicad-cli-derived verdict. Mutating advisory tools run on copies or with
 `dry_run` where supported.
