@@ -104,9 +104,10 @@ jobs:
             IMAGE_REVISION=${{ github.sha }}
             CERN_COMMIT=${{ steps.source.outputs.cern_commit }}
           push: true
+          # Push only the immutable sha tag: :latest is promoted after the
+          # Trivy gate passes so a failing image never serves it.
           tags: |
             ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
-            ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max,ignore-error=true
       - name: Scan tools image (Trivy SARIF)
@@ -126,8 +127,19 @@ jobs:
           format: sarif
           output: trivy-circuit-tools.sarif
           limit-severities-for-sarif: true
-      - name: Scan tools image (Trivy JSON)
+      - name: Promote tools :latest
         if: inputs.skip_tools != true
+        run: |
+          # imagetools copies the pushed manifest server-side — no re-push,
+          # so attestations and the SBOM keep referencing the same digest.
+          docker buildx imagetools create \
+            --tag "ghcr.io/${IMAGE_OWNER}/circuit-tools:latest" \
+            "ghcr.io/${IMAGE_OWNER}/circuit-tools@${{ steps.tools.outputs.digest }}"
+      - name: Scan tools image (Trivy JSON)
+        # Runs even when the SARIF gate failed so the diagnostic report and
+        # the blocking-CVE summary still have data; guarded on the build
+        # digest so a failed build produces no malformed scan ref.
+        if: ${{ always() && inputs.skip_tools != true && steps.tools.outputs.digest != '' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
@@ -140,14 +152,39 @@ jobs:
           format: json
           output: trivy-circuit-tools.json
           skip-setup-trivy: true
+      - name: Report blocking tools CVEs
+        # The SARIF gate prints only "exit code 1"; list the fixable
+        # HIGH/CRITICAL findings that actually blocked the publish.
+        if: ${{ failure() && inputs.skip_tools != true && hashFiles('trivy-circuit-tools.json') != '' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+
+          data = json.load(open("trivy-circuit-tools.json", encoding="utf-8"))
+          rows = []
+          for result in data.get("Results") or []:
+              target = result.get("Target", "?")
+              for v in result.get("Vulnerabilities") or []:
+                  if v.get("Severity") in ("HIGH", "CRITICAL") and v.get("FixedVersion"):
+                      rows.append((v["VulnerabilityID"], v.get("PkgName", "?"),
+                                   v["Severity"], v.get("InstalledVersion", "?"),
+                                   v["FixedVersion"], target))
+          print("## Blocking circuit-tools findings")
+          print()
+          print("| CVE | Package | Severity | Installed | Fixed | Target |")
+          print("|---|---|---|---|---|---|")
+          for row in sorted(rows):
+              print("| " + " | ".join(row) + " |")
+          print(f"\n{len(rows)} fixable HIGH/CRITICAL finding(s)")
+          PY
       - name: Upload tools Trivy SARIF
-        if: ${{ always() && inputs.skip_tools != true }}
+        if: ${{ always() && inputs.skip_tools != true && hashFiles('trivy-circuit-tools.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: trivy-circuit-tools.sarif
           category: trivy-circuit-tools
       - name: Upload tools Trivy JSON report
-        if: ${{ always() && inputs.skip_tools != true }}
+        if: ${{ always() && inputs.skip_tools != true && hashFiles('trivy-circuit-tools.json') != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: circuit-tools-trivy
@@ -304,8 +341,6 @@ jobs:
             "ghcr.io/${IMAGE_OWNER}/circuit-server:${SERVER_TAG}" | tr -d '"')
           case "$SERVER_DIGEST" in sha256:*) ;; *) echo "invalid server digest: $SERVER_DIGEST" >&2; exit 1 ;; esac
           printf 'SERVER_TAG=%s\nSERVER_DIGEST=%s\n' "$SERVER_TAG" "$SERVER_DIGEST" >> "$GITHUB_ENV"
-          docker buildx imagetools create --tag "ghcr.io/${IMAGE_OWNER}/circuit-server:latest" \
-            "ghcr.io/${IMAGE_OWNER}/circuit-server:${SERVER_TAG}"
       - name: Scan server image (Trivy SARIF)
         id: trivy-scan-server
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -322,7 +357,16 @@ jobs:
           format: sarif
           output: trivy-circuit-server.sarif
           limit-severities-for-sarif: true
+      - name: Promote server :latest
+        run: |
+          docker buildx imagetools create \
+            --tag "ghcr.io/${IMAGE_OWNER}/circuit-server:latest" \
+            "ghcr.io/${IMAGE_OWNER}/circuit-server@${SERVER_DIGEST}"
       - name: Scan server image (Trivy JSON)
+        # Runs even when the SARIF gate failed so the diagnostic report and
+        # the blocking-CVE summary still have data; guarded on the resolved
+        # digest so a failed build produces no malformed scan ref.
+        if: ${{ always() && env.SERVER_DIGEST != '' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
@@ -335,19 +379,103 @@ jobs:
           format: json
           output: trivy-circuit-server.json
           skip-setup-trivy: true
+      - name: Report blocking server CVEs
+        if: ${{ failure() && hashFiles('trivy-circuit-server.json') != '' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+
+          data = json.load(open("trivy-circuit-server.json", encoding="utf-8"))
+          rows = []
+          for result in data.get("Results") or []:
+              target = result.get("Target", "?")
+              for v in result.get("Vulnerabilities") or []:
+                  if v.get("Severity") in ("HIGH", "CRITICAL") and v.get("FixedVersion"):
+                      rows.append((v["VulnerabilityID"], v.get("PkgName", "?"),
+                                   v["Severity"], v.get("InstalledVersion", "?"),
+                                   v["FixedVersion"], target))
+          print("## Blocking circuit-server findings")
+          print()
+          print("| CVE | Package | Severity | Installed | Fixed | Target |")
+          print("|---|---|---|---|---|---|")
+          for row in sorted(rows):
+              print("| " + " | ".join(row) + " |")
+          print(f"\n{len(rows)} fixable HIGH/CRITICAL finding(s)")
+          PY
       - name: Upload server Trivy SARIF
-        if: always()
+        if: ${{ always() && hashFiles('trivy-circuit-server.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: trivy-circuit-server.sarif
           category: trivy-circuit-server
       - name: Upload server Trivy JSON report
-        if: always()
+        if: ${{ always() && hashFiles('trivy-circuit-server.json') != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: circuit-server-trivy
           path: trivy-circuit-server.json
           retention-days: 90
+      - name: Attest server image provenance
+        id: attest_server
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/vibebb/circuit-server
+          subject-digest: ${{ env.SERVER_DIGEST }}
+          push-to-registry: true
+      - name: Generate server SPDX SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        env:
+          SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: registry
+          TMPDIR: ${{ runner.temp }}
+          SYFT_FILE_METADATA_SELECTION: none
+        with:
+          image: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-server@${{ env.SERVER_DIGEST }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/circuit-server.full.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Package server SPDX SBOM
+        run: |
+          python3 scripts/package_level_sbom.py \
+            "$RUNNER_TEMP/circuit-server.full.spdx.json" \
+            "$RUNNER_TEMP/circuit-server.spdx.json"
+      - name: Guard server SPDX SBOM size
+        env:
+          SBOM_PATH: ${{ runner.temp }}/circuit-server.spdx.json
+        run: |
+          set -euo pipefail
+          size=$(stat -c%s "$SBOM_PATH")
+          echo "SBOM size: ${size} bytes"
+          if [ "$size" -gt 16777216 ]; then
+            echo "::error::SBOM exceeds 16777216 bytes: ${size} bytes"
+            exit 1
+          fi
+      - name: Validate server SPDX SBOM
+        run: |
+          python3 - "${{ runner.temp }}/circuit-server.spdx.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          sbom = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if sbom.get("spdxVersion") != "SPDX-2.3":
+              raise SystemExit("server SBOM must use SPDX-2.3")
+          PY
+      - name: Attest server SBOM
+        id: attest_server_sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/vibebb/circuit-server
+          subject-digest: ${{ env.SERVER_DIGEST }}
+          sbom-path: ${{ runner.temp }}/circuit-server.spdx.json
+          push-to-registry: true
+      - name: Upload full server SPDX SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: circuit-server-spdx-sbom
+          path: ${{ runner.temp }}/circuit-server.full.spdx.json
+          retention-days: 90
+          if-no-files-found: error
       - name: Measure published server
         run: |
           set -euo pipefail
@@ -378,6 +506,8 @@ jobs:
           SKIP_TOOLS: ${{ inputs.skip_tools }}
           ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
           SBOM_ATTESTATION_URL: ${{ steps.attest_sbom.outputs.attestation-url }}
+          SERVER_ATTESTATION_URL: ${{ steps.attest_server.outputs.attestation-url }}
+          SERVER_SBOM_ATTESTATION_URL: ${{ steps.attest_server_sbom.outputs.attestation-url }}
         run: |
           set -euo pipefail
           retry() {
@@ -413,6 +543,8 @@ jobs:
           uv run python scripts/update_image_digest_lock.py --lock docker/image-digests.json \
             --entry circuit_server --image "ghcr.io/${IMAGE_OWNER}/circuit-server" \
             --tag "$SERVER_TAG" --digest "$SERVER_DIGEST" --published-at "$published_at" \
+            --attestation "$SERVER_ATTESTATION_URL" \
+            --sbom-attestation "$SERVER_SBOM_ATTESTATION_URL" \
             --workflow-run "$workflow_run" --dockerfile "sdk:openhands-agent-server/v${SDK_VERSION}" \
             --tools-json "$RUNNER_TEMP/circuit-server.json"
           # Ship the same pin inside the plugin so an installed plugin can

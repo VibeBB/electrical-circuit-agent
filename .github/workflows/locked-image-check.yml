@@ -25,7 +25,14 @@ jobs:
       digest: ${{ steps.lock.outputs.digest }}
       attestation: ${{ steps.lock.outputs.attestation }}
       sbom_attestation: ${{ steps.sbom.outputs.sbom_attestation }}
+      server_image: ${{ steps.server.outputs.image }}
+      server_digest: ${{ steps.server.outputs.digest }}
+      server_attestation: ${{ steps.server.outputs.attestation }}
+      server_sbom_attestation: ${{ steps.server.outputs.sbom_attestation }}
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -138,6 +145,83 @@ jobs:
                   raise SystemExit("image lock SBOM attestation must be an HTTPS URL")
           print(f"sbom_attestation={sbom_attestation or ''}")
           PY
+      - id: server
+        env:
+          LOCK_PATH: docker/image-digests.json
+          LOCK_ENTRY: circuit_server
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          def https_url(value, field):
+              if value is None:
+                  return ""
+              parsed = urlsplit(value) if isinstance(value, str) else None
+              if (
+                  parsed is None
+                  or parsed.scheme != "https"
+                  or not parsed.netloc
+                  or any(character.isspace() for character in value)
+              ):
+                  raise SystemExit(f"circuit_server {field} must be an HTTPS URL")
+              return value
+
+          path = Path(os.environ["LOCK_PATH"])
+          present = "false"
+          image = ""
+          digest = ""
+          attestation = ""
+          sbom_attestation = ""
+          if path.is_file():
+              data = json.loads(path.read_text(encoding="utf-8"))
+              if not isinstance(data, dict):
+                  raise SystemExit("image digest lock must be a JSON object")
+              entry = data.get(os.environ["LOCK_ENTRY"])
+              if entry is not None:
+                  if not isinstance(entry, dict):
+                      raise SystemExit("circuit_server lock entry must be an object")
+                  if entry.get("image") != "ghcr.io/vibebb/circuit-server":
+                      raise SystemExit(
+                          "circuit_server image does not match ghcr.io/vibebb/circuit-server"
+                      )
+                  digest_value = entry.get("digest")
+                  tag = entry.get("tag")
+                  if digest_value is None and tag is None:
+                      if entry.get("attestation") is not None or entry.get("sbom_attestation") is not None:
+                          raise SystemExit(
+                              "unpublished circuit_server entry cannot have attestation metadata"
+                          )
+                  else:
+                      if (
+                          not isinstance(digest_value, str)
+                          or re.fullmatch(r"sha256:[0-9a-f]{64}", digest_value) is None
+                          or digest_value == f"sha256:{'0' * 64}"
+                      ):
+                          raise SystemExit("circuit_server digest must be null or a sha256 digest")
+                      if (
+                          not isinstance(tag, str)
+                          or re.fullmatch(r"[0-9a-f]{40}-latest-source", tag) is None
+                      ):
+                          raise SystemExit(
+                              "circuit_server tag must be null or a latest-source tag"
+                          )
+                      present = "true"
+                      image = entry["image"]
+                      digest = digest_value
+                      attestation = https_url(entry.get("attestation"), "attestation")
+                      sbom_attestation = https_url(
+                          entry.get("sbom_attestation"), "sbom_attestation"
+                      )
+          print(f"present={present}")
+          print(f"image={image}")
+          print(f"digest={digest}")
+          print(f"attestation={attestation}")
+          print(f"sbom_attestation={sbom_attestation}")
+          PY
   check:
     needs: check-lock
     if: needs.check-lock.outputs.present == 'true'
@@ -147,6 +231,9 @@ jobs:
       contents: read
       attestations: read
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
@@ -182,6 +269,33 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ needs.check-lock.outputs.image }}
           DIGEST: ${{ needs.check-lock.outputs.digest }}
+        run: |
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
+            --predicate-type https://spdx.dev/Document/v2.3
+      - name: Warn that server image has no attestation metadata
+        if: needs.check-lock.outputs.server_attestation == ''
+        run: echo "::warning::circuit_server image lock has no attestation metadata; skipping provenance verification."
+      - name: Verify server image provenance
+        if: needs.check-lock.outputs.server_attestation != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ needs.check-lock.outputs.server_image }}
+          DIGEST: ${{ needs.check-lock.outputs.server_digest }}
+        run: |
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
+      - name: Warn when server image has no SBOM attestation
+        if: needs.check-lock.outputs.server_sbom_attestation == ''
+        run: echo "::warning::circuit_server image lock has no SBOM attestation; continuing"
+      - name: Verify server image SBOM attestation
+        if: needs.check-lock.outputs.server_sbom_attestation != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ needs.check-lock.outputs.server_image }}
+          DIGEST: ${{ needs.check-lock.outputs.server_digest }}
         run: |
           gh attestation verify "oci://${IMAGE}@${DIGEST}" \
             --repo "$GITHUB_REPOSITORY" \
@@ -266,6 +380,13 @@ jobs:
           path: ${{ github.workspace }}/circuit-smoke-out/
           if-no-files-found: ignore
           retention-days: 14
+      - name: Preflight host rasterizer tools
+        # verify_all --stage standard rasterizes via poppler/rsvg on the
+        # host; surface a missing tool as a setup error, not a deep
+        # RasterizeError minutes into the stage.
+        run: |
+          command -v pdftoppm
+          command -v rsvg-convert
       - run: uv run python scripts/verify_all.py --stage standard
         env:
           CIRCUIT_TOOLS_IMAGE: ${{ steps.image.outputs.ref }}
