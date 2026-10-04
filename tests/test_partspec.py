@@ -1402,6 +1402,37 @@ def test_single_lane_and_invisible_mechanical_evidence_fail(
     assert "invisible_text" in {finding.code for finding in report.findings}
 
 
+def test_image_only_pdf_mechanical_reading_fails_closed(tmp_path: Path) -> None:
+    spec, extraction, spec_path, extraction_path = _fixture(tmp_path)
+    pdf_path = tmp_path / "parts.pdf"
+    image_only_page = Image.new("RGB", (200, 200), color="white")
+    ImageDraw.Draw(image_only_page).rectangle((20, 20, 180, 180), fill="black")
+    image_only_page.save(pdf_path, format="PDF")
+    digest = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    spec.datasheet.sha256 = digest
+    extraction.pdf_sha256 = digest
+    extraction.pages[0].text_layer = False
+    extraction_path.write_text(extraction.model_dump_json(), encoding="utf-8")
+    _save_spec(spec, spec_path)
+
+    derived, derived_dir = _REDERIVED_BY_PDF[pdf_path.resolve()]
+    derived.pdf_sha256 = digest
+    derived.pages[0].text_layer = False
+    _REDERIVED_BY_PDF[pdf_path.resolve()] = (derived, derived_dir)
+
+    report = check_part_spec(
+        spec,
+        extraction,
+        spec_path=spec_path,
+        extraction_path=extraction_path,
+    )
+
+    assert any(
+        finding.code == "mechanical_single_lane" and finding.field == "package.body_length"
+        for finding in report.findings
+    )
+
+
 def test_dimension_reading_bbox_covers_referenced_cells_not_entire_table(
     tmp_path: Path,
 ) -> None:

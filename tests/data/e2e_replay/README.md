@@ -19,5 +19,7 @@ launch real agents.
 
 `tps62130-happy.jsonl` uses only generated PDF and evidence fixtures. It is
 explicitly not evidence about the commercial TPS62130. The other scenarios
-exercise an NDA-blocked acquisition ending in an unavailable HumanRequest,
-and a substitute-permission request that is first denied and later granted.
+exercise an NDA-blocked acquisition ending in an unavailable HumanRequest, a
+substitute-permission request that is first denied and later granted, and a
+synthetic Hirose connector download whose injected HTML response is rejected
+before any PartSpec or writer tool runs.

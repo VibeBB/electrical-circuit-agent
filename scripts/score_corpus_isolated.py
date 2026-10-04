@@ -94,7 +94,7 @@ def _image_ref(image: str | None, lock_path: Path) -> tuple[str, str | None]:
     return selected, digest
 
 
-def _relative_candidate_file(root: Path, value: str) -> str:
+def _relative_candidate_file(root: Path, value: str, *, missing_ok: bool = False) -> str:
     relative = Path(value)
     if (
         relative.is_absolute()
@@ -103,13 +103,19 @@ def _relative_candidate_file(root: Path, value: str) -> str:
     ):
         raise CorpusIsolationError("candidate artifact paths must stay inside the library")
     try:
-        resolved = (root / relative).resolve(strict=True)
-    except OSError as exc:
+        resolved = (root / relative).resolve(strict=not missing_ok)
+    except (OSError, RuntimeError) as exc:
         raise CorpusIsolationError(f"candidate artifact is unavailable: {value}: {exc}") from exc
-    if not resolved.is_relative_to(root) or not resolved.is_file():
+    if not resolved.is_relative_to(root):
         raise CorpusIsolationError(
             f"candidate artifact is outside the library or not a file: {value}"
         )
+    if resolved.exists() and not resolved.is_file():
+        raise CorpusIsolationError(
+            f"candidate artifact is outside the library or not a file: {value}"
+        )
+    if not resolved.exists() and not missing_ok:
+        raise CorpusIsolationError(f"candidate artifact is unavailable: {value}")
     return relative.as_posix()
 
 
@@ -269,12 +275,6 @@ def run_isolated_score(
             "corpus, source, candidate, and datasheet-cache inputs must be directories"
         )
 
-    candidate_files = {
-        "part_spec": _relative_candidate_file(candidate_path, part_spec),
-        "footprint": _relative_candidate_file(candidate_path, footprint),
-        "symbol_lib": _relative_candidate_file(candidate_path, symbol_lib),
-        "model": _relative_candidate_file(candidate_path, model),
-    }
     image_ref, locked_digest = _image_ref(image, lock_path)
     inspection = execute(
         [
@@ -298,6 +298,16 @@ def run_isolated_score(
     manifest_hash, truth_hashes, datasheet_hashes = _corpus_hashes(corpus_path)
     if entry_id not in truth_hashes:
         raise CorpusIsolationError(f"unknown corpus entry id: {entry_id}")
+    manifest = corpus.load_manifest(corpus_path / "corpus.json")
+    entry = next(entry for entry in manifest.entries if entry.id == entry_id)
+    truth, _ = corpus.load_truth(corpus_path, entry)
+    human_request = truth.expected_outcome == "human_request"
+    candidate_files = {
+        "part_spec": _relative_candidate_file(candidate_path, part_spec),
+        "footprint": _relative_candidate_file(candidate_path, footprint, missing_ok=human_request),
+        "symbol_lib": _relative_candidate_file(candidate_path, symbol_lib),
+        "model": _relative_candidate_file(candidate_path, model, missing_ok=human_request),
+    }
     datasheet_cache_pdf_sha256 = _matching_datasheet_sha256(
         datasheet_cache_path, datasheet_hashes[entry_id]
     )

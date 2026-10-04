@@ -46,6 +46,20 @@ _DRAWING_PHRASES = (
 PinCorner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
 DimensionKind = Literal["limit", "bilateral", "basic", "reference", "typical"]
 CellKey = Literal["min", "nom", "max"]
+PackageFamily = Literal[
+    "no_lead_quad",
+    "no_lead_dual",
+    "gullwing_quad",
+    "gullwing_dual",
+    "chip",
+    "sot223",
+    "tabbed_dpak",
+    "sod",
+    "bga",
+    "connector",
+    "through_hole_inline",
+    "custom",
+]
 _MIRRORED_CORNERS: dict[PinCorner, PinCorner] = {
     "top_left": "top_right",
     "top_right": "top_left",
@@ -422,20 +436,7 @@ class PackageSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    family: Literal[
-        "no_lead_quad",
-        "no_lead_dual",
-        "gullwing_quad",
-        "gullwing_dual",
-        "chip",
-        "sot223",
-        "tabbed_dpak",
-        "sod",
-        "bga",
-        "connector",
-        "through_hole_inline",
-        "custom",
-    ]
+    family: PackageFamily
     drawing_id: str
     drawing_revision: str | None = None
     pin_count: int = Field(gt=0)
