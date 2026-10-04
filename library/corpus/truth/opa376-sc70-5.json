@@ -1,0 +1,113 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "opa376-sc70-5",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "+IN",
+    "2": "V-",
+    "3": "-IN",
+    "4": "OUT",
+    "5": "V+"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 1.85,
+      "nom": null,
+      "max": 2.15
+    },
+    "body_width": {
+      "min": 1.1,
+      "nom": null,
+      "max": 1.4
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.1
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.65,
+      "max": null
+    },
+    "lead_span": {
+      "min": 1.8,
+      "nom": null,
+      "max": 2.4
+    },
+    "lead_length": {
+      "min": 0.26,
+      "nom": null,
+      "max": 0.46
+    },
+    "lead_width": {
+      "min": 0.15,
+      "nom": null,
+      "max": 0.33
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -1.1,
+        -0.65
+      ],
+      "size": [
+        0.95,
+        0.4
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -1.1,
+        0.0
+      ],
+      "size": [
+        0.95,
+        0.4
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -1.1,
+        0.65
+      ],
+      "size": [
+        0.95,
+        0.4
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        1.1,
+        0.65
+      ],
+      "size": [
+        0.95,
+        0.4
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        1.1,
+        -0.65
+      ],
+      "size": [
+        0.95,
+        0.4
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-8b6cb4a2-f613-4609-bac0-353142e09a6f",
+  "notes": "DCK0005A package outline (page 43) and example board layout (page 44). Frame: KiCad top view, pin 1 top-left. SC70 pin order differs from the SOT-23 variant."
+}

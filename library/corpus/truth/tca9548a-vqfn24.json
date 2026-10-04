@@ -1,0 +1,357 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "tca9548a-vqfn24",
+  "package_family": "no_lead_quad",
+  "pins": {
+    "1": "SD0",
+    "2": "SC0",
+    "3": "SD1",
+    "4": "SC1",
+    "5": "SD2",
+    "6": "SC2",
+    "7": "SD3",
+    "8": "SC3",
+    "9": "GND",
+    "10": "SD4",
+    "11": "SC4",
+    "12": "SD5",
+    "13": "SC5",
+    "14": "SD6",
+    "15": "SC6",
+    "16": "SD7",
+    "17": "SC7",
+    "18": "A2",
+    "19": "SCL",
+    "20": "SDA",
+    "21": "VCC",
+    "22": "A0",
+    "23": "A1",
+    "24": "RESET",
+    "25": "Thermal Pad"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 3.9,
+      "nom": null,
+      "max": 4.1
+    },
+    "body_width": {
+      "min": 3.9,
+      "nom": null,
+      "max": 4.1
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.0
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.5,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": {
+      "min": 0.3,
+      "nom": null,
+      "max": 0.5
+    },
+    "lead_width": {
+      "min": 0.18,
+      "nom": null,
+      "max": 0.3
+    },
+    "exposed_pad_length": {
+      "min": 2.0,
+      "nom": 2.1,
+      "max": 2.2
+    },
+    "exposed_pad_width": {
+      "min": 2.0,
+      "nom": 2.1,
+      "max": 2.2
+    }
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -1.9,
+        -1.25
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -1.9,
+        -0.75
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -1.9,
+        -0.25
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -1.9,
+        0.25
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        -1.9,
+        0.75
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        -1.9,
+        1.25
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        -1.25,
+        1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        -0.75,
+        1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "9",
+      "center": [
+        -0.25,
+        1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "10",
+      "center": [
+        0.25,
+        1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "11",
+      "center": [
+        0.75,
+        1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "12",
+      "center": [
+        1.25,
+        1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "13",
+      "center": [
+        1.9,
+        1.25
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "14",
+      "center": [
+        1.9,
+        0.75
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "15",
+      "center": [
+        1.9,
+        0.25
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "16",
+      "center": [
+        1.9,
+        -0.25
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "17",
+      "center": [
+        1.9,
+        -0.75
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "18",
+      "center": [
+        1.9,
+        -1.25
+      ],
+      "size": [
+        0.6,
+        0.24
+      ]
+    },
+    {
+      "number": "19",
+      "center": [
+        1.25,
+        -1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "20",
+      "center": [
+        0.75,
+        -1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "21",
+      "center": [
+        0.25,
+        -1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "22",
+      "center": [
+        -0.25,
+        -1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "23",
+      "center": [
+        -0.75,
+        -1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "24",
+      "center": [
+        -1.25,
+        -1.9
+      ],
+      "size": [
+        0.24,
+        0.6
+      ]
+    },
+    {
+      "number": "25",
+      "center": [
+        0.0,
+        0.0
+      ],
+      "size": [
+        2.1,
+        2.1
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-788fc3e8-a30a-4fb2-922d-ce8283f9e822",
+  "notes": "RGE0024C package outline (page 33) and example board layout (page 34). Frame: KiCad top view, pin 1 top-left. RGE pin numbering differs from the PW/DGS variants. The pin table does not list the exposed pad; pad 25 comes from the example board layout."
+}

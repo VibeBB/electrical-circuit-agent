@@ -1,0 +1,221 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "sn74hc00-soic14",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "1A",
+    "2": "1B",
+    "3": "1Y",
+    "4": "2A",
+    "5": "2B",
+    "6": "2Y",
+    "7": "GND",
+    "8": "3Y",
+    "9": "3A",
+    "10": "3B",
+    "11": "4Y",
+    "12": "4A",
+    "13": "4B",
+    "14": "VCC"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 8.55,
+      "nom": null,
+      "max": 8.75
+    },
+    "body_width": {
+      "min": 3.8,
+      "nom": null,
+      "max": 4.0
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.75
+    },
+    "pitch": {
+      "min": null,
+      "nom": 1.27,
+      "max": null
+    },
+    "lead_span": {
+      "min": 5.8,
+      "nom": null,
+      "max": 6.2
+    },
+    "lead_length": {
+      "min": 0.4,
+      "nom": null,
+      "max": 1.27
+    },
+    "lead_width": {
+      "min": 0.31,
+      "nom": null,
+      "max": 0.51
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -2.7,
+        -3.81
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -2.7,
+        -2.54
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -2.7,
+        -1.27
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -2.7,
+        0.0
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        -2.7,
+        1.27
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        -2.7,
+        2.54
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        -2.7,
+        3.81
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        2.7,
+        3.81
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "9",
+      "center": [
+        2.7,
+        2.54
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "10",
+      "center": [
+        2.7,
+        1.27
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "11",
+      "center": [
+        2.7,
+        0.0
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "12",
+      "center": [
+        2.7,
+        -1.27
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "13",
+      "center": [
+        2.7,
+        -2.54
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "14",
+      "center": [
+        2.7,
+        -3.81
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-9f0133f8-8bf9-4f7b-870a-82fe09e1a3a4",
+  "notes": "D0014A package outline (page 23) and example board layout (page 24). Frame: KiCad top view, pin 1 top-left."
+}

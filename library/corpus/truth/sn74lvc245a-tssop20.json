@@ -1,0 +1,293 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "sn74lvc245a-tssop20",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "DIR",
+    "2": "A1",
+    "3": "A2",
+    "4": "A3",
+    "5": "A4",
+    "6": "A5",
+    "7": "A6",
+    "8": "A7",
+    "9": "A8",
+    "10": "GND",
+    "11": "B8",
+    "12": "B7",
+    "13": "B6",
+    "14": "B5",
+    "15": "B4",
+    "16": "B3",
+    "17": "B2",
+    "18": "B1",
+    "19": "OE",
+    "20": "VCC"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 6.4,
+      "nom": null,
+      "max": 6.6
+    },
+    "body_width": {
+      "min": 4.3,
+      "nom": null,
+      "max": 4.5
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.2
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.65,
+      "max": null
+    },
+    "lead_span": {
+      "min": 6.2,
+      "nom": null,
+      "max": 6.6
+    },
+    "lead_length": {
+      "min": 0.5,
+      "nom": null,
+      "max": 0.75
+    },
+    "lead_width": {
+      "min": 0.19,
+      "nom": null,
+      "max": 0.3
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -2.9,
+        -2.925
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -2.9,
+        -2.275
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -2.9,
+        -1.625
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -2.9,
+        -0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        -2.9,
+        -0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        -2.9,
+        0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        -2.9,
+        0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        -2.9,
+        1.625
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "9",
+      "center": [
+        -2.9,
+        2.275
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "10",
+      "center": [
+        -2.9,
+        2.925
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "11",
+      "center": [
+        2.9,
+        2.925
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "12",
+      "center": [
+        2.9,
+        2.275
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "13",
+      "center": [
+        2.9,
+        1.625
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "14",
+      "center": [
+        2.9,
+        0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "15",
+      "center": [
+        2.9,
+        0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "16",
+      "center": [
+        2.9,
+        -0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "17",
+      "center": [
+        2.9,
+        -0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "18",
+      "center": [
+        2.9,
+        -1.625
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "19",
+      "center": [
+        2.9,
+        -2.275
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "20",
+      "center": [
+        2.9,
+        -2.925
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-d09c3f9a-7d7c-41ef-b70b-8fc15259a1b4",
+  "notes": "PW0020A package outline (page 29) and example board layout (page 30). Frame: KiCad top view, pin 1 top-left. Signal names A1-A8/B1-B8 collide with BGA-style coordinates."
+}

@@ -114,6 +114,8 @@ class CorpusPad(BaseModel):
     number: str
     center: tuple[float, float]
     size: tuple[float, float]
+    drill: float | None = Field(default=None, gt=0)
+    shape: Literal["rect", "roundrect", "oval", "circle", "polygon"] | None = None
 
 
 class CorpusTruth(BaseModel):
@@ -394,6 +396,25 @@ def _check_footprint_pads(
                 "pad center or size differs from corpus truth",
                 expected_geometry,
                 actual_geometry,
+            )
+        if pad.drill is not None and (actual.drill is None or abs(pad.drill - actual.drill) > 0.01):
+            add_finding(
+                "corpus_pad_drill_mismatch",
+                "error",
+                f"footprint.pad.{pad.number}.drill",
+                "pad drill differs from corpus truth by more than 0.01 mm",
+                pad.drill,
+                actual.drill,
+            )
+        actual_shape = "polygon" if actual.shape == "custom" else actual.shape
+        if pad.shape is not None and actual_shape != pad.shape:
+            add_finding(
+                "corpus_pad_shape_mismatch",
+                "error",
+                f"footprint.pad.{pad.number}.shape",
+                "pad shape differs from corpus truth",
+                pad.shape,
+                actual_shape,
             )
 
 

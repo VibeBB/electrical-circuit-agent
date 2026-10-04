@@ -214,6 +214,15 @@ The sealed golden corpus lives at `library/corpus/corpus.json`; a project-local
 files and approvals are separately hash-bound. New entries start unconfirmed,
 and corpus truth is not available to authoring lanes. Score with
 `circuit_corpus_score`; a missing PDF or unconfirmed truth is not a pass.
+For isolated scoring, run `scripts/score_corpus_isolated.py` with an entry ID,
+the candidate library root, and relative PartSpec, footprint, symbol, and STEP
+paths. It uses the digest-locked `circuit-tools` image by default (or a
+preloaded `circuit-tools:ci` image supplied with `--image`), refuses to run
+inside an authoring lane, and fails if Docker or the image is unavailable.
+The container has no network, a read-only root filesystem, and read-only
+corpus, source, and candidate mounts; only its `/tmp` tmpfs and the output
+directory are writable. The JSON report binds the score to the image digest,
+manifest SHA-256, and every truth-file SHA-256.
 
 Seeded critical mutations exercise symbols, footprints, PartSpecs, and STEP
 models against the deterministic verification stack. A critical mutation is

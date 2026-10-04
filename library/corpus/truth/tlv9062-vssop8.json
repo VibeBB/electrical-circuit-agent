@@ -1,0 +1,149 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "tlv9062-vssop8",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "OUT1",
+    "2": "IN1-",
+    "3": "IN1+",
+    "4": "V-",
+    "5": "IN2+",
+    "6": "IN2-",
+    "7": "OUT2",
+    "8": "V+"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 2.9,
+      "nom": null,
+      "max": 3.1
+    },
+    "body_width": {
+      "min": 2.9,
+      "nom": null,
+      "max": 3.1
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.1
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.65,
+      "max": null
+    },
+    "lead_span": {
+      "min": 4.75,
+      "nom": null,
+      "max": 5.05
+    },
+    "lead_length": {
+      "min": 0.4,
+      "nom": null,
+      "max": 0.7
+    },
+    "lead_width": {
+      "min": 0.25,
+      "nom": null,
+      "max": 0.38
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -2.2,
+        -0.975
+      ],
+      "size": [
+        1.4,
+        0.45
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -2.2,
+        -0.325
+      ],
+      "size": [
+        1.4,
+        0.45
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -2.2,
+        0.325
+      ],
+      "size": [
+        1.4,
+        0.45
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -2.2,
+        0.975
+      ],
+      "size": [
+        1.4,
+        0.45
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        2.2,
+        0.975
+      ],
+      "size": [
+        1.4,
+        0.45
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        2.2,
+        0.325
+      ],
+      "size": [
+        1.4,
+        0.45
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        2.2,
+        -0.325
+      ],
+      "size": [
+        1.4,
+        0.45
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        2.2,
+        -0.975
+      ],
+      "size": [
+        1.4,
+        0.45
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-96a12e73-f388-4e2e-967b-e61c6f5a226c",
+  "notes": "DGK0008A package outline (page 46) and example board layout (page 47). Frame: KiCad top view, pin 1 top-left."
+}

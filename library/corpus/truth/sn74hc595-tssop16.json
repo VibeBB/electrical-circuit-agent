@@ -1,0 +1,245 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "sn74hc595-tssop16",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "QB",
+    "2": "QC",
+    "3": "QD",
+    "4": "QE",
+    "5": "QF",
+    "6": "QG",
+    "7": "QH",
+    "8": "GND",
+    "9": "QH'",
+    "10": "SRCLR",
+    "11": "SRCLK",
+    "12": "RCLK",
+    "13": "OE",
+    "14": "SER",
+    "15": "QA",
+    "16": "VCC"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 4.9,
+      "nom": null,
+      "max": 5.1
+    },
+    "body_width": {
+      "min": 4.3,
+      "nom": null,
+      "max": 4.5
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.2
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.65,
+      "max": null
+    },
+    "lead_span": {
+      "min": 6.2,
+      "nom": null,
+      "max": 6.6
+    },
+    "lead_length": {
+      "min": 0.5,
+      "nom": null,
+      "max": 0.75
+    },
+    "lead_width": {
+      "min": 0.17,
+      "nom": null,
+      "max": 0.3
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -2.9,
+        -2.275
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -2.9,
+        -1.625
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -2.9,
+        -0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -2.9,
+        -0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        -2.9,
+        0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        -2.9,
+        0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        -2.9,
+        1.625
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        -2.9,
+        2.275
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "9",
+      "center": [
+        2.9,
+        2.275
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "10",
+      "center": [
+        2.9,
+        1.625
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "11",
+      "center": [
+        2.9,
+        0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "12",
+      "center": [
+        2.9,
+        0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "13",
+      "center": [
+        2.9,
+        -0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "14",
+      "center": [
+        2.9,
+        -0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "15",
+      "center": [
+        2.9,
+        -1.625
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "16",
+      "center": [
+        2.9,
+        -2.275
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-47a3eb40-7ad3-41b1-831c-a70a6277d15b",
+  "notes": "PW0016A package outline (page 37) and example board layout (page 38). Frame: KiCad top view, pin 1 top-left. OE and SRCLR are active-low (overbar in the datasheet)."
+}

@@ -1,0 +1,149 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "lm2903-tssop8",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "1OUT",
+    "2": "1IN-",
+    "3": "1IN+",
+    "4": "GND",
+    "5": "2IN+",
+    "6": "2IN-",
+    "7": "2OUT",
+    "8": "VCC"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 2.9,
+      "nom": null,
+      "max": 3.1
+    },
+    "body_width": {
+      "min": 4.3,
+      "nom": null,
+      "max": 4.5
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.2
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.65,
+      "max": null
+    },
+    "lead_span": {
+      "min": 6.2,
+      "nom": null,
+      "max": 6.6
+    },
+    "lead_length": {
+      "min": 0.5,
+      "nom": null,
+      "max": 0.75
+    },
+    "lead_width": {
+      "min": 0.19,
+      "nom": null,
+      "max": 0.3
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -2.9,
+        -0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -2.9,
+        -0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -2.9,
+        0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -2.9,
+        0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        2.9,
+        0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        2.9,
+        0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        2.9,
+        -0.325
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        2.9,
+        -0.975
+      ],
+      "size": [
+        1.5,
+        0.45
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-c6ddc0ad-ea6f-464b-8707-1fa045f3f354",
+  "notes": "PW0008A package outline (page 53) and example board layout (page 54). Frame: KiCad top view, pin 1 top-left."
+}

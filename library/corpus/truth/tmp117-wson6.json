@@ -1,0 +1,121 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "tmp117-wson6",
+  "package_family": "no_lead_dual",
+  "pins": {
+    "1": "SCL",
+    "2": "GND",
+    "3": "ALERT",
+    "4": "ADD0",
+    "5": "V+",
+    "6": "SDA"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 1.9,
+      "nom": null,
+      "max": 2.1
+    },
+    "body_width": {
+      "min": 1.9,
+      "nom": null,
+      "max": 2.1
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 0.8
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.65,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": {
+      "min": 1.5,
+      "nom": 1.6,
+      "max": 1.7
+    },
+    "exposed_pad_width": {
+      "min": 0.9,
+      "nom": 1.0,
+      "max": 1.1
+    }
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -0.975,
+        -0.65
+      ],
+      "size": [
+        0.45,
+        0.3
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -0.975,
+        0.0
+      ],
+      "size": [
+        0.45,
+        0.3
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -0.975,
+        0.65
+      ],
+      "size": [
+        0.45,
+        0.3
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        0.975,
+        0.65
+      ],
+      "size": [
+        0.45,
+        0.3
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        0.975,
+        0.0
+      ],
+      "size": [
+        0.45,
+        0.3
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        0.975,
+        -0.65
+      ],
+      "size": [
+        0.45,
+        0.3
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-f9172cfe-9fc8-4e0b-ad88-3f581139c7cc",
+  "notes": "DRV0006B package outline (page 40) and example board layout (page 41). Frame: KiCad top view, pin 1 top-left. The package has an exposed thermal pad but the example board layout has no land for it; a footprint with an EP land is wrong. Lead length/width are not stated unambiguously and are left unpopulated."
+}

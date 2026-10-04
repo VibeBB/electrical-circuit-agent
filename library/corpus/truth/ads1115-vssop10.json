@@ -1,0 +1,173 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "ads1115-vssop10",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "ADDR",
+    "2": "ALERT/RDY",
+    "3": "GND",
+    "4": "AIN0",
+    "5": "AIN1",
+    "6": "AIN2",
+    "7": "AIN3",
+    "8": "VDD",
+    "9": "SDA",
+    "10": "SCL"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 2.9,
+      "nom": null,
+      "max": 3.1
+    },
+    "body_width": {
+      "min": 2.9,
+      "nom": null,
+      "max": 3.1
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.1
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.5,
+      "max": null
+    },
+    "lead_span": {
+      "min": 4.75,
+      "nom": null,
+      "max": 5.05
+    },
+    "lead_length": {
+      "min": 0.4,
+      "nom": null,
+      "max": 0.7
+    },
+    "lead_width": {
+      "min": 0.17,
+      "nom": null,
+      "max": 0.27
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -2.2,
+        -1.0
+      ],
+      "size": [
+        1.45,
+        0.3
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -2.2,
+        -0.5
+      ],
+      "size": [
+        1.45,
+        0.3
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -2.2,
+        0.0
+      ],
+      "size": [
+        1.45,
+        0.3
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -2.2,
+        0.5
+      ],
+      "size": [
+        1.45,
+        0.3
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        -2.2,
+        1.0
+      ],
+      "size": [
+        1.45,
+        0.3
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        2.2,
+        1.0
+      ],
+      "size": [
+        1.45,
+        0.3
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        2.2,
+        0.5
+      ],
+      "size": [
+        1.45,
+        0.3
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        2.2,
+        0.0
+      ],
+      "size": [
+        1.45,
+        0.3
+      ]
+    },
+    {
+      "number": "9",
+      "center": [
+        2.2,
+        -0.5
+      ],
+      "size": [
+        1.45,
+        0.3
+      ]
+    },
+    {
+      "number": "10",
+      "center": [
+        2.2,
+        -1.0
+      ],
+      "size": [
+        1.45,
+        0.3
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-6cfb8dd1-e588-46d3-a5c7-720caed2ae59",
+  "notes": "DGS0010A package outline (page 51) and example board layout (page 52). Frame: KiCad top view, pin 1 top-left."
+}

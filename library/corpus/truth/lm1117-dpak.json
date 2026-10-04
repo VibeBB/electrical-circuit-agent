@@ -1,0 +1,77 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "lm1117-dpak",
+  "package_family": "gullwing_tab",
+  "pins": {
+    "1": "ADJ/GND",
+    "3": "VIN",
+    "4": "VOUT"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 6.35,
+      "nom": null,
+      "max": 6.73
+    },
+    "body_width": {
+      "min": 5.97,
+      "nom": null,
+      "max": 6.22
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 2.55
+    },
+    "pitch": {
+      "min": null,
+      "nom": 2.285,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -4.38,
+        -2.285
+      ],
+      "size": [
+        2.15,
+        1.3
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -4.38,
+        2.285
+      ],
+      "size": [
+        2.15,
+        1.3
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        2.285,
+        0.0
+      ],
+      "size": [
+        5.7,
+        5.5
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-2219751e-9d93-4760-b634-616d2cb17ed9",
+  "notes": "NDP0003B package outline (page 41) and example board layout (page 42). Frame: KiCad top view, pin 1 top-left. Pin 2 is the trimmed center lead (VOUT, common with the tab); the land pattern has pads 1, 3 and tab 4 only."
+}

@@ -1,0 +1,109 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "sn74lvc1g14-sot553",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "N.C.",
+    "2": "A",
+    "3": "GND",
+    "4": "Y",
+    "5": "VCC"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 1.5,
+      "nom": null,
+      "max": 1.7
+    },
+    "body_width": {
+      "min": 1.1,
+      "nom": null,
+      "max": 1.3
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 0.6
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.5,
+      "max": null
+    },
+    "lead_span": {
+      "min": 1.5,
+      "nom": null,
+      "max": 1.7
+    },
+    "lead_length": null,
+    "lead_width": {
+      "min": 0.15,
+      "nom": null,
+      "max": 0.27
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -0.74,
+        -0.5
+      ],
+      "size": [
+        0.67,
+        0.3
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -0.74,
+        0.0
+      ],
+      "size": [
+        0.67,
+        0.3
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -0.74,
+        0.5
+      ],
+      "size": [
+        0.67,
+        0.3
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        0.74,
+        0.5
+      ],
+      "size": [
+        0.67,
+        0.3
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        0.74,
+        -0.5
+      ],
+      "size": [
+        0.67,
+        0.3
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-27cd27e5-f972-4414-91eb-6dc8754777d9",
+  "notes": "DRL0005A package outline (page 25) and example board layout (page 26). Frame: KiCad top view, pin 1 top-left. Lead length is not stated unambiguously in the outline text and is left unpopulated."
+}

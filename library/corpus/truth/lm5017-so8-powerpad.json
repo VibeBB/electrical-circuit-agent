@@ -1,0 +1,169 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "lm5017-so8-powerpad",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "RTN",
+    "2": "VIN",
+    "3": "UVLO",
+    "4": "RON",
+    "5": "FB",
+    "6": "VCC",
+    "7": "BST",
+    "8": "SW",
+    "9": "EP"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 4.8,
+      "nom": null,
+      "max": 5.0
+    },
+    "body_width": {
+      "min": 3.8,
+      "nom": null,
+      "max": 4.0
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.7
+    },
+    "pitch": {
+      "min": null,
+      "nom": 1.27,
+      "max": null
+    },
+    "lead_span": {
+      "min": 5.8,
+      "nom": null,
+      "max": 6.2
+    },
+    "lead_length": {
+      "min": 0.4,
+      "nom": null,
+      "max": 1.27
+    },
+    "lead_width": {
+      "min": 0.31,
+      "nom": null,
+      "max": 0.51
+    },
+    "exposed_pad_length": {
+      "min": 2.8,
+      "nom": null,
+      "max": 3.4
+    },
+    "exposed_pad_width": {
+      "min": 2.11,
+      "nom": null,
+      "max": 2.71
+    }
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -2.7,
+        -1.905
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -2.7,
+        -0.635
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -2.7,
+        0.635
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -2.7,
+        1.905
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        2.7,
+        1.905
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        2.7,
+        0.635
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        2.7,
+        -0.635
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        2.7,
+        -1.905
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "9",
+      "center": [
+        0.0,
+        0.0
+      ],
+      "size": [
+        2.95,
+        4.9
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-83e3f3a1-c82e-4bae-9232-3d654d42d106",
+  "notes": "DDA0008B package outline (page 35) and example board layout (page 36). Frame: KiCad top view, pin 1 top-left. Copper 2.95 x 4.9 mm per note 9 (may vary for creepage); solder-mask opening 2.71 x 3.4 mm."
+}
