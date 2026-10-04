@@ -50,7 +50,10 @@ jobs:
           }
           # One cache for every Trivy invocation in this job so the
           # vulnerability DB downloads once instead of once per scan.
-          echo "TRIVY_CACHE_DIR=$RUNNER_TEMP/trivy-cache" >> "$GITHUB_ENV"
+          {
+            echo "TRIVY_CACHE_DIR=$RUNNER_TEMP/trivy-cache"
+            echo "TRIVY_DB_WEEK=$(date -u +%G-W%V)"
+          } >> "$GITHUB_ENV"
           # print_locked_image.py resolves the entry by key and fails
           # closed on a missing or non-digest-pinned lock entry.
           tools_ref=$(python3 scripts/print_locked_image.py --entry circuit_tools)
@@ -59,6 +62,17 @@ jobs:
           echo "PINNED_SERVER_IMAGE=$server_ref" >> "$GITHUB_ENV"
           retry docker pull "$tools_ref"
           retry docker pull "$server_ref"
+      - name: Restore Trivy vulnerability DB cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/trivy-cache
+          # Restored/saved weekly like the publish workflow so the ~120MB
+          # vulnerability DB is not refetched on every weekly audit.
+          key: trivy-db-${{ env.TRIVY_DB_WEEK }}-${{ github.run_id }}
+          restore-keys: |
+            trivy-db-${{ env.TRIVY_DB_WEEK }}-
+            trivy-db-
+          fail-on-cache-miss: false
       - name: Scan tools image (Trivy SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -350,3 +364,12 @@ jobs:
             gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
               --comment "No fixable HIGH/CRITICAL findings remain."
           fi
+      - name: Save Trivy vulnerability DB cache
+        if: github.ref_name == 'main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/trivy-cache
+          # Saved after all scans so the refreshed DB stays warm for later
+          # runs; the weekly restore-keys rotate the baseline once per ISO
+          # week. Dispatched runs on a branch restore but never write.
+          key: trivy-db-${{ env.TRIVY_DB_WEEK }}-${{ github.run_id }}
