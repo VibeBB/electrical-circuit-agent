@@ -1,0 +1,7 @@
+{
+  "source": "Texas Instruments TPS62130 datasheet F, RGT0016C package drawing and example board layout",
+  "pages": [40, 41, 42],
+  "pad_center_basis": "Page 41 dimensions the perimeter-row centerlines at 2.8 mm, so each row is centered at 1.4 mm from the package origin.",
+  "drawing_revision_basis": "The outline is identified as RGT0016C; page 41 does not show a separate revision token.",
+  "exposed_pad_paste_basis": "Page 42 depicts one 1.55 mm square stencil aperture on the 1.68 mm exposed pad, approximately 85% area coverage; the footprint applies a -0.065 mm solder-paste margin instead of creating a window array."
+}

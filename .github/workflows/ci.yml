@@ -190,6 +190,92 @@ jobs:
         env:
           CIRCUIT_TOOLS_IMAGE: circuit-tools:ci
 
+  real-part-mutation:
+    name: real-part-mutation
+    needs: [changes, fast]
+    if: >-
+      needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: true
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y poppler-utils
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-suffix: real-part-mutation
+      - run: uv sync --locked
+      - name: Prepare corpus cache
+        run: mkdir -p "$RUNNER_TEMP/corpus-cache" "$RUNNER_TEMP/real-part-mutation"
+      - name: Restore TPS62130 datasheet cache
+        id: corpus-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/corpus-cache
+          key: corpus-tps62130-f9b1af285622c0cf1a5991f9641a6e64c5e6d899e52cc0b1632808742019579f
+      - name: Fetch and verify TPS62130 datasheet
+        run: >-
+          uv run python scripts/fetch_corpus_datasheet.py
+          --entry tps62130-vqfn16
+          --cache "$RUNNER_TEMP/corpus-cache"
+      - name: Save TPS62130 datasheet cache
+        if: steps.corpus-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/corpus-cache
+          key: corpus-tps62130-f9b1af285622c0cf1a5991f9641a6e64c5e6d899e52cc0b1632808742019579f
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - id: cern
+        run: |
+          set -euo pipefail
+          cern_commit=$(git -C libraries/cern-kicad-libs rev-parse HEAD)
+          if [[ ! "$cern_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid CERN commit: $cern_commit" >&2
+            exit 1
+          fi
+          echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
+      - run: >-
+          docker buildx build --load
+          -f docker/circuit-tools.Dockerfile -t circuit-tools:ci
+          --build-arg "CERN_COMMIT=$CERN_COMMIT"
+          --cache-from type=gha,scope=circuit-tools
+          --cache-to type=gha,mode=max,scope=circuit-tools,ignore-error=true
+          .
+      - name: Run production mutation verifier in the tools image
+        run: |
+          set -euo pipefail
+          chmod 0777 "$RUNNER_TEMP/real-part-mutation"
+          docker run --rm --network none --user circuit \
+            -v "$PWD:/repo:ro" \
+            -v "$RUNNER_TEMP/corpus-cache:/corpus-cache:ro" \
+            -v "$RUNNER_TEMP/real-part-mutation:/out" \
+            -w /repo \
+            -e PYTHONPATH=/repo/src \
+            -e CIRCUIT_REQUIRE_CORPUS_PDFS=1 \
+            -e CIRCUIT_CORPUS_CACHE=/corpus-cache \
+            circuit-tools:ci \
+            python3 scripts/run_real_mutation_matrix.py \
+              --entry tps62130-vqfn16 \
+              --cache /corpus-cache \
+              --out /out/tps62130-real-mutation-report.json \
+              --export-oracle
+      - name: Upload real-part mutation report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tps62130-real-mutation-report
+          path: ${{ runner.temp }}/real-part-mutation/tps62130-real-mutation-report.json
+          if-no-files-found: ignore
+
   plugin-load:
     runs-on: ubuntu-26.04
     timeout-minutes: 15

@@ -301,7 +301,9 @@ def _padded_bbox(bbox: BBox, width: float, height: float) -> BBox:
 def _dpi(bbox: BBox) -> int:
     width = bbox[2] - bbox[0]
     height = bbox[3] - bbox[1]
-    return min(1200, max(300, math.ceil(600 * 72 / min(width, height))))
+    detail_dpi = math.ceil(600 * 72 / min(width, height))
+    pixel_budget_dpi = math.floor(2400 * 72 / max(width, height))
+    return min(1200, max(300, min(detail_dpi, pixel_budget_dpi)))
 
 
 def _render_pdftoppm(

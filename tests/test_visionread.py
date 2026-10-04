@@ -20,6 +20,7 @@ from circuit.visionread import (
     VisionReadError,
     VisionReadItem,
     VisionReadRequest,
+    _dpi,  # pyright: ignore[reportPrivateUsage]
     _render_pdfium,  # pyright: ignore[reportPrivateUsage]
     _render_pdftoppm,  # pyright: ignore[reportPrivateUsage]
     _write_batch,  # pyright: ignore[reportPrivateUsage]
@@ -200,6 +201,13 @@ def test_oversized_crop_is_rejected_without_tiling(
 
     assert not (batch_dir / "batch.json").exists()
     assert not list(batch_dir.rglob("*.png"))
+
+
+def test_wide_crop_reduces_dpi_to_fit_pixel_budget() -> None:
+    dpi = _dpi((0, 0, 488, 22))
+
+    assert dpi == 354
+    assert 488 * dpi / 72 <= 2400
 
 
 def _stub_rasterizers(monkeypatch: pytest.MonkeyPatch) -> None:

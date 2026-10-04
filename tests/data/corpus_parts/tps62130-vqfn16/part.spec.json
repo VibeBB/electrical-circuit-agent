@@ -1,0 +1,225 @@
+{
+  "artifact_kind": "circuit_part_spec",
+  "mpn": "TPS62130RGTR",
+  "manufacturer": "Texas Instruments",
+  "datasheet": {
+    "path": "datasheet.pdf",
+    "sha256": "f9b1af285622c0cf1a5991f9641a6e64c5e6d899e52cc0b1632808742019579f",
+    "revision": "F (SLVSAG7F)",
+    "extraction_path": "extraction/extraction.json"
+  },
+  "package": {
+    "family": "no_lead_quad",
+    "drawing_id": "RGT0016C",
+    "drawing_revision": null,
+    "pin_count": 16,
+    "pins_per_side": [4, 4, 4, 4],
+    "pitch": {
+      "nom": 0.5,
+      "kind": "reference",
+      "reference": true,
+      "reading": {
+        "page": 41,
+        "bbox": [168, 303, 212, 322],
+        "vision": "(0.5)",
+        "vision_record": "evidence/page-041.advisory.json"
+      }
+    },
+    "body_length": {
+      "min": 2.9,
+      "max": 3.1,
+      "reading": {
+        "page": 40,
+        "bbox": [255, 134, 272, 157],
+        "vision": "3.1 2.9",
+        "vision_record": "evidence/page-040.advisory.json"
+      }
+    },
+    "body_width": {
+      "min": 2.9,
+      "max": 3.1,
+      "reading": {
+        "page": 40,
+        "bbox": [345, 217, 362, 240],
+        "vision": "3.1 2.9",
+        "vision_record": "evidence/page-040.advisory.json"
+      }
+    },
+    "height": {
+      "min": 0.8,
+      "max": 1.0,
+      "reading": {
+        "page": 40,
+        "bbox": [152, 349, 170, 372],
+        "vision": "1.0 0.8",
+        "vision_record": "evidence/page-040.advisory.json"
+      }
+    },
+    "lead_length": {
+      "nom": 0.45,
+      "kind": "reference",
+      "reference": true,
+      "reading": {
+        "page": 40,
+        "bbox": [133, 444, 161, 457],
+        "vision": "(0.45)",
+        "vision_record": "evidence/page-040.advisory.json"
+      }
+    },
+    "lead_width": {
+      "min": 0.18,
+      "max": 0.3,
+      "reading": {
+        "page": 40,
+        "bbox": [370, 566, 393, 588],
+        "vision": "0.30 0.18",
+        "vision_record": "evidence/page-040.advisory.json"
+      }
+    },
+    "exposed_pad": {
+      "number": "17",
+      "length": {
+        "kind": "bilateral",
+        "min": 1.61,
+        "nom": 1.68,
+        "max": 1.75,
+        "reading": {
+          "page": 40,
+          "bbox": [249, 435, 291, 448],
+          "vision": "1.68 ± 0.07",
+          "vision_record": "evidence/page-040.advisory.json"
+        }
+      },
+      "width": {
+        "kind": "bilateral",
+        "min": 1.61,
+        "nom": 1.68,
+        "max": 1.75,
+        "reading": {
+          "page": 40,
+          "bbox": [249, 435, 291, 448],
+          "vision": "1.68 ± 0.07",
+          "vision_record": "evidence/page-040.advisory.json"
+        }
+      }
+    },
+    "drawing_view": "top",
+    "pin1_corner": "top_left",
+    "pin1_reading": {
+      "page": 40,
+      "bbox": [205, 100, 250, 155],
+      "vision": "pin 1 at top left",
+      "vision_record": "evidence/page-040.advisory.json"
+    }
+  },
+  "land_pattern": {
+    "source": "datasheet",
+    "dimensions": {
+      "row_spacing": {
+        "nom": 2.8,
+        "kind": "reference",
+        "reference": true,
+        "reading": {
+          "page": 41,
+          "bbox": [288, 404, 310, 419],
+          "vision": "(2.8)",
+          "vision_record": "evidence/page-041.advisory.json"
+        }
+      }
+    },
+    "pads": [
+      {"number": "1", "x": -1.4, "y": -0.75, "width": 0.6, "height": 0.24, "shape": "rect"},
+      {"number": "2", "x": -1.4, "y": -0.25, "width": 0.6, "height": 0.24, "shape": "rect"},
+      {"number": "3", "x": -1.4, "y": 0.25, "width": 0.6, "height": 0.24, "shape": "rect"},
+      {"number": "4", "x": -1.4, "y": 0.75, "width": 0.6, "height": 0.24, "shape": "rect"},
+      {"number": "5", "x": -0.75, "y": 1.4, "width": 0.24, "height": 0.6, "shape": "rect"},
+      {"number": "6", "x": -0.25, "y": 1.4, "width": 0.24, "height": 0.6, "shape": "rect"},
+      {"number": "7", "x": 0.25, "y": 1.4, "width": 0.24, "height": 0.6, "shape": "rect"},
+      {"number": "8", "x": 0.75, "y": 1.4, "width": 0.24, "height": 0.6, "shape": "rect"},
+      {"number": "9", "x": 1.4, "y": 0.75, "width": 0.6, "height": 0.24, "shape": "rect"},
+      {"number": "10", "x": 1.4, "y": 0.25, "width": 0.6, "height": 0.24, "shape": "rect"},
+      {"number": "11", "x": 1.4, "y": -0.25, "width": 0.6, "height": 0.24, "shape": "rect"},
+      {"number": "12", "x": 1.4, "y": -0.75, "width": 0.6, "height": 0.24, "shape": "rect"},
+      {"number": "13", "x": 0.75, "y": -1.4, "width": 0.24, "height": 0.6, "shape": "rect"},
+      {"number": "14", "x": 0.25, "y": -1.4, "width": 0.24, "height": 0.6, "shape": "rect"},
+      {"number": "15", "x": -0.25, "y": -1.4, "width": 0.24, "height": 0.6, "shape": "rect"},
+      {"number": "16", "x": -0.75, "y": -1.4, "width": 0.24, "height": 0.6, "shape": "rect"},
+      {"number": "17", "x": 0.0, "y": 0.0, "width": 1.68, "height": 1.68, "shape": "rect"}
+    ]
+  },
+  "pinout": {
+    "page": 3,
+    "bbox": [215, 205, 395, 390],
+    "view": "top",
+    "view_reading": {
+      "page": 3,
+      "bbox": [420, 395, 470, 416],
+      "mechanical": "Top View",
+      "vision": "Top View",
+      "vision_record": "evidence/page-003.advisory.json"
+    },
+    "labels_vision": {
+      "1": "SW",
+      "2": "SW",
+      "3": "SW",
+      "4": "PG",
+      "5": "FB",
+      "6": "AGND",
+      "7": "FSW",
+      "8": "DEF",
+      "9": "SS/TR",
+      "10": "AVIN",
+      "11": "PVIN",
+      "12": "PVIN",
+      "13": "EN",
+      "14": "VOS",
+      "15": "PGND",
+      "16": "PGND"
+    },
+    "vision_record": "evidence/page-003.advisory.json"
+  },
+  "pins": [
+    {"number": "1", "name": "SW", "electrical_type": "output", "reading": {"page": 3, "bbox": [220, 260, 300, 300], "vision": "1 SW", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "2", "name": "SW", "electrical_type": "output", "reading": {"page": 3, "bbox": [220, 260, 300, 300], "vision": "2 SW", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "3", "name": "SW", "electrical_type": "output", "reading": {"page": 3, "bbox": [220, 260, 300, 300], "vision": "3 SW", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "4", "name": "PG", "electrical_type": "output", "reading": {"page": 3, "bbox": [220, 260, 300, 300], "vision": "4 PG", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "5", "name": "FB", "electrical_type": "input", "reading": {"page": 3, "bbox": [250, 430, 400, 465], "vision": "5 FB", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "6", "name": "AGND", "electrical_type": "power_in", "reading": {"page": 3, "bbox": [250, 430, 400, 465], "vision": "6 AGND", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "7", "name": "FSW", "electrical_type": "input", "reading": {"page": 3, "bbox": [250, 430, 400, 465], "vision": "7 FSW", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "8", "name": "DEF", "electrical_type": "input", "reading": {"page": 3, "bbox": [250, 430, 400, 465], "vision": "8 DEF", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "9", "name": "SS/TR", "electrical_type": "input", "reading": {"page": 3, "bbox": [390, 260, 440, 310], "vision": "9 SS/TR", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "10", "name": "AVIN", "electrical_type": "power_in", "reading": {"page": 3, "bbox": [390, 260, 440, 310], "vision": "10 AVIN", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "11", "name": "PVIN", "electrical_type": "power_in", "reading": {"page": 3, "bbox": [390, 260, 440, 310], "vision": "11 PVIN", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "12", "name": "PVIN", "electrical_type": "power_in", "reading": {"page": 3, "bbox": [390, 260, 440, 310], "vision": "12 PVIN", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "13", "name": "EN", "electrical_type": "input", "reading": {"page": 3, "bbox": [330, 225, 365, 260], "vision": "13 EN", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "14", "name": "VOS", "electrical_type": "input", "reading": {"page": 3, "bbox": [330, 225, 365, 260], "vision": "14 VOS", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "15", "name": "PGND", "electrical_type": "power_in", "reading": {"page": 3, "bbox": [330, 225, 365, 260], "vision": "15 PGND", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "16", "name": "PGND", "electrical_type": "power_in", "reading": {"page": 3, "bbox": [330, 225, 365, 260], "vision": "16 PGND", "vision_record": "evidence/page-003.advisory.json"}},
+    {"number": "17", "name": "Exposed Thermal Pad", "electrical_type": "power_in", "reading": {"page": 3, "bbox": [260, 300, 340, 330], "vision": "Exposed Thermal Pad", "vision_record": "evidence/page-003.advisory.json"}}
+  ],
+  "pin_table": {
+    "page": 3,
+    "table": 1,
+    "number_col": 0,
+    "name_col": 1,
+    "header_rows": 2
+  },
+  "orderable": [
+    {
+      "mpn": "TPS62130RGTR",
+      "package_designator": "RGT",
+      "pin_count": 16,
+      "row": {"table": 1, "row": 4, "col": 0},
+      "reading": {
+        "page": 37,
+        "cells": {
+          "min": {"table": 1, "row": 4, "col": 0},
+          "max": {"table": 1, "row": 4, "col": 2}
+        },
+        "vision": "TPS62130RGTR RGT 16",
+        "vision_record": "evidence/page-037.advisory.json"
+      }
+    }
+  ],
+  "authoring": null
+}

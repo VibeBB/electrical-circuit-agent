@@ -5,10 +5,11 @@ import math
 import re
 import secrets
 from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, Protocol, cast
+from unittest.mock import patch
 
-import pytest
 from PIL import Image, ImageDraw
 
 from circuit.datasheet import DatasheetExtraction
@@ -19,6 +20,19 @@ from circuit.partspec import (
     _all_readings,  # pyright: ignore[reportPrivateUsage]
 )
 from circuit.visionread import VisionReadRequest, create_read_batch, record_answers
+
+
+class _Patcher(Protocol):
+    def setattr(self, target: Any, name: str, value: Any) -> None: ...
+
+
+class _PatchContext:
+    def __init__(self, stack: ExitStack) -> None:
+        self.stack = stack
+
+    def setattr(self, target: Any, name: str, value: Any) -> None:
+        self.stack.enter_context(patch.object(target, name, value))
+
 
 FIXTURE_CONTROL = "ABC234"
 FIXTURE_IMPRESSION = (
@@ -114,19 +128,21 @@ def _reading_bbox(
 ) -> tuple[float, float, float, float]:
     if reading.page is None:
         raise ValueError("fixture reading has no source page")
-    if reading.bbox is not None:
-        return reading.bbox
     boxes: list[tuple[float, float, float, float]] = []
     for reference in (reading.cells or {}).values():
         table = _table(extraction, extraction_dir, reading.page, reference.table)
         bbox = _cell_bbox(table, reference.row, reference.col)
         if bbox is not None:
             boxes.append(bbox)
+    if boxes:
+        return _union(boxes)
+    if reading.bbox is not None:
+        return reading.bbox
     return _union(boxes)
 
 
 def _write_render_stub(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: _Patcher,
     lane: Literal["a", "b"],
 ) -> None:
     from circuit import visionread
@@ -183,6 +199,11 @@ def _pin_table_answer(
         raise ValueError("fixture pin table has no rows")
     rows = cast(list[object], raw_rows)
     boxes: list[tuple[float, float, float, float]] = []
+    for row_index in range(ref.header_rows):
+        for col_index in {ref.number_col, ref.name_col}:
+            cell = _cell_bbox(table, row_index, col_index)
+            if cell is not None:
+                boxes.append(cell)
     for pin in spec.pins:
         if pin.reading.alternative_evidence is not None:
             continue
@@ -196,7 +217,10 @@ def _pin_table_answer(
                 number = row_cells[ref.number_col] if ref.number_col < len(row_cells) else ""
                 name = row_cells[ref.name_col] if ref.name_col < len(row_cells) else ""
                 number_text = str(number or "").strip()
-                if pin.number == number_text or (
+                number_tokens = {
+                    token.strip() for token in re.split(r"[,;/\s]+", number_text) if token.strip()
+                }
+                if pin.number in number_tokens or (
                     spec.package.exposed_pad is not None
                     and pin.number == spec.package.exposed_pad.number
                     and not number_text
@@ -215,7 +239,18 @@ def _pin_table_answer(
             cell = _cell_bbox(table, reference.row, reference.col)
             if cell is not None:
                 boxes.append(cell)
-    return _union(boxes), json.dumps(rows, ensure_ascii=False)
+    selected_rows: list[list[str]] = []
+    for row in rows:
+        if not isinstance(row, list):
+            raise ValueError("fixture pin table contains a malformed row")
+        row_cells = cast(list[object], row)
+        selected_rows.append(
+            [
+                str(row_cells[index] or "") if index < len(row_cells) else ""
+                for index in (ref.number_col, ref.name_col)
+            ]
+        )
+    return _union(boxes), json.dumps(selected_rows, ensure_ascii=False)
 
 
 def _orderable_table_answer(
@@ -301,17 +336,17 @@ def attach_vision_reads(
     spec: PartSpec,
     spec_path: Path,
     extraction_path: Path,
-    monkeypatch: pytest.MonkeyPatch | None = None,
+    monkeypatch: _Patcher | None = None,
     *,
     lane: Literal["a", "b"] = "b",
 ) -> PartSpec:
     if monkeypatch is None:
-        with pytest.MonkeyPatch.context() as patcher:
+        with ExitStack() as stack:
             return attach_vision_reads(
                 spec,
                 spec_path,
                 extraction_path,
-                patcher,
+                _PatchContext(stack),
                 lane=lane,
             )
     extraction = DatasheetExtraction.model_validate_json(
@@ -359,6 +394,7 @@ def attach_vision_reads(
             answer = reading.vision
             kind = "transcribe"
         bbox = _reading_bbox(reading, extraction, extraction_dir)
+        reading.bbox = bbox
         requests.append(
             (
                 VisionReadRequest(field=field, page=reading.page, bbox=bbox, kind=kind),
