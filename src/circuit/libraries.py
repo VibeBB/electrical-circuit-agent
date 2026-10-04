@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import sexpr
 from .brief import DesignBrief, brief_sha256
@@ -17,6 +17,14 @@ from .libitems import LibItemError, parse_footprint
 from .libreview import correction_regressions, current_packet_id, review_status
 from .libverify import LibraryVerification, verify_library_part
 from .partspec import load_part_spec
+
+LibraryAuthoringReason = Literal[
+    "missing_symbol",
+    "missing_footprint",
+    "missing_pins",
+    "unverified_project_part",
+    "human_review_pending",
+]
 
 
 class LibraryRoots(BaseModel):
@@ -42,6 +50,17 @@ class SymbolInfo(BaseModel):
     pins: list[str]
 
 
+class LibraryAuthoringRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    refs: list[str]
+    lib_id: str | None
+    footprint_id: str | None
+    mpn: str | None
+    manufacturer: str | None
+    reason: LibraryAuthoringReason
+
+
 class LibraryReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -58,6 +77,70 @@ class LibraryReport(BaseModel):
     missing_pins: dict[str, list[str]]
     verdict: Literal["pass", "fail"]
     reasons: list[str]
+    authoring_requests: list[LibraryAuthoringRequest] = Field(
+        default_factory=list[LibraryAuthoringRequest]
+    )
+
+
+def _authoring_requests(
+    brief: DesignBrief,
+    *,
+    missing_symbol_libraries: list[str],
+    missing_symbols: list[str],
+    missing_footprint_libraries: list[str],
+    missing_footprints: list[str],
+    missing_pins: dict[str, list[str]],
+    reasons: list[str],
+) -> list[LibraryAuthoringRequest]:
+    grouped: dict[
+        tuple[str | None, str | None, str | None, str | None, LibraryAuthoringReason],
+        set[str],
+    ] = {}
+    for part in brief.parts:
+        nickname, _symbol_name = part.lib_id.split(":", 1)
+        footprint_nickname, _footprint_name = part.footprint.split(":", 1)
+        part_reasons: set[LibraryAuthoringReason] = set()
+        if nickname in missing_symbol_libraries or part.lib_id in missing_symbols:
+            part_reasons.add("missing_symbol")
+        if (
+            footprint_nickname in missing_footprint_libraries
+            or part.footprint in missing_footprints
+        ):
+            part_reasons.add("missing_footprint")
+        if part.reference in missing_pins:
+            part_reasons.add("missing_pins")
+        if (
+            f"unverified project library part: {part.lib_id}" in reasons
+            or f"correction_regressed: {part.lib_id}" in reasons
+        ):
+            part_reasons.add("unverified_project_part")
+        if any(
+            reason.startswith("human_review_") and reason.endswith(f": {part.lib_id}")
+            for reason in reasons
+        ):
+            part_reasons.add("human_review_pending")
+        for reason in part_reasons:
+            key = (part.lib_id, part.footprint, None, None, reason)
+            grouped.setdefault(key, set()).add(part.reference)
+    return [
+        LibraryAuthoringRequest(
+            refs=sorted(refs),
+            lib_id=lib_id,
+            footprint_id=footprint_id,
+            mpn=mpn,
+            manufacturer=manufacturer,
+            reason=reason,
+        )
+        for (lib_id, footprint_id, mpn, manufacturer, reason), refs in sorted(
+            grouped.items(),
+            key=lambda item: (
+                item[0][4],
+                item[0][0] or "",
+                item[0][1] or "",
+                sorted(item[1]),
+            ),
+        )
+    ]
 
 
 def _field(node: list[sexpr.SExpr], name: str) -> str | None:
@@ -432,4 +515,13 @@ def check_libraries(
         missing_pins=missing_pins,
         verdict="fail" if failed else "pass",
         reasons=reasons,
+        authoring_requests=_authoring_requests(
+            brief,
+            missing_symbol_libraries=missing_symbol_libraries,
+            missing_symbols=missing_symbols,
+            missing_footprint_libraries=missing_footprint_libraries,
+            missing_footprints=missing_footprints,
+            missing_pins=missing_pins,
+            reasons=reasons,
+        ),
     )

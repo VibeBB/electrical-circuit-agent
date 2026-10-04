@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
@@ -46,6 +46,7 @@ from . import (
     libreview,
     libsource,
     libverify,
+    libwriter,
     model3d,
     mutation,
     netlist,
@@ -670,6 +671,46 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_footprint_write",
+        "Write a deterministic footprint from a checked PartSpec",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "output_path": {"type": "string"},
+                "density": {
+                    "type": "string",
+                    "enum": ["most", "nominal", "least"],
+                    "default": "nominal",
+                },
+                "rules_path": {
+                    "type": "string",
+                    "description": "rule profile ID or path to a profile JSON file",
+                },
+                "model_path": {"type": "string"},
+                "ep_paste_margin_mm": {"type": "number"},
+                "name": {"type": "string"},
+                "spec_check_path": {"type": "string"},
+            },
+            "required": ["part_spec_path", "output_path"],
+        },
+    ),
+    (
+        "circuit_symbol_write",
+        "Write a deterministic symbol from a checked PartSpec",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "library_path": {"type": "string"},
+                "footprint_id": {"type": "string"},
+                "symbol_name": {"type": "string"},
+                "spec_check_path": {"type": "string"},
+            },
+            "required": ["part_spec_path", "library_path", "footprint_id"],
+        },
+    ),
+    (
         "circuit_library_candidates",
         "Search installed and project libraries for reusable items, including "
         "product-tuned candidates",
@@ -1073,6 +1114,8 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_part_author_compare": _anno("Compare sealed authoring lanes", write=True),
     "circuit_part_spec_check": _anno("PartSpec check", write=True),
     "circuit_land_pattern": _anno("Land pattern", write=True),
+    "circuit_footprint_write": _anno("Write deterministic footprint", write=True),
+    "circuit_symbol_write": _anno("Write deterministic symbol", write=True),
     "circuit_library_candidates": _anno("Library candidates", write=True),
     "circuit_library_import": _anno("Library import", write=True),
     "circuit_library_record": _anno("Library provenance record", write=True),
@@ -1298,10 +1341,101 @@ _PART_BUILD_TOOL_NAMES = {
     "circuit_datasheet_extract",
     "circuit_part_spec_check",
     "circuit_land_pattern",
+    "circuit_footprint_write",
+    "circuit_symbol_write",
     "circuit_library_candidates",
     "circuit_library_import",
     "circuit_library_record",
 }
+
+
+def _checked_writer_spec(
+    args: dict[str, Any],
+    *,
+    tool_name: str,
+) -> tuple[partspec.PartSpec, Path, str]:
+    spec_path = Path(str(args["part_spec_path"]))
+    spec = partspec.load_part_spec(spec_path)
+    current_sha256 = partspec.part_spec_sha256(spec_path)
+    check_value = _optional_string(args.get("spec_check_path"))
+    check_path = (
+        Path(check_value) if check_value is not None else spec_path.parent / "part.spec.check.json"
+    )
+    try:
+        check = partspec.PartSpecReport.model_validate_json(check_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"{tool_name}: part_spec_check_missing: {check_path}") from exc
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{tool_name}: part_spec_check_invalid: {check_path}: {exc}") from exc
+    if check.part_spec_sha256 != current_sha256 or check.pdf_sha256 != spec.datasheet.sha256:
+        raise ValueError(
+            f"{tool_name}: part_spec_check_stale: check does not match the current PartSpec"
+        )
+    errors = [finding for finding in check.findings if finding.severity == "error"]
+    if check.verdict != "pass" or errors:
+        codes = sorted({finding.code for finding in errors})
+        raise ValueError(
+            f"{tool_name}: part_spec_check_failed: check verdict is {check.verdict}; "
+            f"error findings: {codes}"
+        )
+    return spec, spec_path, current_sha256
+
+
+def _writer_rules(
+    spec_path: Path,
+    rules_path: str | None,
+) -> ruleprofile.EffectiveRules | None:
+    if rules_path is None:
+        return None
+    profile_path = Path(rules_path)
+    if profile_path.is_file():
+        return ruleprofile.load_rules(profile_path.stem, profile_path.parent)
+    return ruleprofile.load_rules(rules_path, spec_path.parent / "library" / "rules")
+
+
+def _record_writer_output(
+    *,
+    tool_name: str,
+    result: libwriter.WriteResult,
+    artifact: Literal["symbol", "footprint"],
+    library_dir: Path,
+    spec_path: Path,
+    spec: partspec.PartSpec,
+) -> dict[str, Any]:
+    input_hashes = [
+        f"input_part_spec_sha256={result.part_spec_sha256}",
+        f"input_datasheet_sha256={spec.datasheet.sha256}",
+    ]
+    if result.land_pattern_sha256 is not None:
+        input_hashes.append(f"input_land_pattern_sha256={result.land_pattern_sha256}")
+    transformation = (
+        f"{tool_name} writer_version={result.writer_version} "
+        f"{' '.join(input_hashes)} output_sha256={result.sha256}"
+    )
+    provenance = _part_build_tool(
+        "circuit_library_record",
+        {
+            "library_dir": str(library_dir),
+            "artifact_path": result.path,
+            "artifact": artifact,
+            "name": result.name,
+            "transformation": transformation,
+            "origin": "generated",
+            "vendor": "circuit-library-writer",
+            "license": {
+                "license_ref": "project-generated",
+                "attribution": "Generated by the circuit deterministic library writer",
+                "redistribution": "project_only",
+            },
+            "part_spec_path": str(spec_path),
+        },
+    )
+    return {
+        "write": result.model_dump(mode="json"),
+        "provenance": provenance.model_dump(mode="json")
+        if isinstance(provenance, BaseModel)
+        else provenance,
+    }
 
 
 def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
@@ -1355,13 +1489,80 @@ def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
             spec_path=spec_path,
             extraction_path=extraction_path,
         )
-        output = _output_path(
-            spec_path,
-            _optional_string(args.get("output_path")),
-            "part-spec",
+        output_value = _optional_string(args.get("output_path"))
+        output = (
+            Path(output_value)
+            if output_value is not None
+            else spec_path.parent / "part.spec.check.json"
         )
+        output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         return result
+    if name == "circuit_footprint_write":
+        spec, spec_path, spec_sha256 = _checked_writer_spec(args, tool_name=name)
+        rules = _writer_rules(spec_path, _optional_string(args.get("rules_path")))
+        density = cast(
+            landpattern.Density,
+            _literal(
+                args,
+                "density",
+                ("most", "nominal", "least"),
+                rules.density if rules is not None else "nominal",
+                context=name,
+            ),
+        )
+        try:
+            land = landpattern.compute_land_pattern(spec, density, rules=rules)
+        except landpattern.LandPatternError as exc:
+            if spec.package.family in {"through_hole_inline", "custom"}:
+                raise libwriter.LibWriterError("unsupported_family") from exc
+            raise
+        ep_paste_margin = args.get("ep_paste_margin_mm")
+        if ep_paste_margin is not None and (
+            isinstance(ep_paste_margin, bool) or not isinstance(ep_paste_margin, (int, float))
+        ):
+            raise ValueError(f"{name} requires ep_paste_margin_mm to be numeric")
+        output_path = Path(str(args["output_path"]))
+        result = libwriter.write_footprint(
+            spec,
+            land,
+            output_path,
+            spec_sha256=spec_sha256,
+            name=_optional_string(args.get("name")),
+            model_path=_optional_string(args.get("model_path")),
+            ep_paste_margin_mm=float(ep_paste_margin) if ep_paste_margin is not None else None,
+        )
+        library_dir = (
+            output_path.parent.parent
+            if output_path.parent.name.endswith(".pretty")
+            else output_path.parent
+        )
+        return _record_writer_output(
+            tool_name=name,
+            result=result,
+            artifact="footprint",
+            library_dir=library_dir,
+            spec_path=spec_path,
+            spec=spec,
+        )
+    if name == "circuit_symbol_write":
+        spec, spec_path, spec_sha256 = _checked_writer_spec(args, tool_name=name)
+        library_path = Path(str(args["library_path"]))
+        result = libwriter.write_symbol(
+            spec,
+            library_path,
+            spec_sha256=spec_sha256,
+            symbol_name=_optional_string(args.get("symbol_name")),
+            footprint_id=str(args["footprint_id"]),
+        )
+        return _record_writer_output(
+            tool_name=name,
+            result=result,
+            artifact="symbol",
+            library_dir=library_path.parent,
+            spec_path=spec_path,
+            spec=spec,
+        )
     if name == "circuit_land_pattern":
         spec_path = Path(str(args["part_spec_path"]))
         spec = partspec.load_part_spec(spec_path)
