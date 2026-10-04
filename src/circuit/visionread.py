@@ -18,12 +18,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
+import pdfplumber
 import pypdfium2 as pdfium  # pyright: ignore[reportMissingTypeStubs]
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .advisory import impression_is_prose
-from .datasheet import DatasheetExtraction, load_extraction
+from .datasheet import DatasheetExtraction, PdfWord, load_extraction, page_words
+from .raster import glyph_signature, normalized_cross_correlation
 
 VisionKind = Literal[
     "transcribe",
@@ -31,6 +33,7 @@ VisionKind = Literal[
     "pin1_corner",
     "pin_labels",
     "table",
+    "som_tokens",
     "compare_footprint",
     "compare_symbol",
     "compare_model",
@@ -63,6 +66,12 @@ _PROMPTS: dict[VisionKind, str] = {
         "a list of cell strings in left-to-right order, including header rows. "
         "Use an empty string for an empty cell."
     ),
+    "som_tokens": (
+        "Read the marked tokens in this image. Answer as JSON, referencing the numbered token "
+        'IDs (for example {"pin_number":"t17","pin_name":"t18"}); do not guess '
+        'transcribed text. A value may instead be {"token_id":"t17","text":"1"} '
+        "when you want to state the text you see."
+    ),
     "compare_footprint": (
         "The left image is a datasheet drawing and the right image is a CAD library rendering "
         'of the same part. Answer as JSON {"pin1_matches": bool, "arrangement_matches": bool, '
@@ -87,6 +96,17 @@ def prompt_for_kind(kind: VisionKind) -> str:
 
 _CONTROL_ALPHABET = "ACDEFHJKLMNPRTUVWXY34679"
 _PDFTOPPM_ENV = "CIRCUIT_PDFTOPPM"
+_PDFFONTS_ENV = "CIRCUIT_PDFFONTS"
+_GLYPH_DPI = 1200
+_GLYPH_SCORE_MARGIN = 0.03
+_GLYPH_GROUPS = (
+    {character: "0OD" for character in "0OD"}
+    | {character: "1lI" for character in "1lI"}
+    | {character: "5S" for character in "5S"}
+    | {character: "8B" for character in "8B"}
+    | {character: "2Z" for character in "2Z"}
+    | {character: "6G" for character in "6G"}
+)
 
 
 class VisionReadError(ValueError):
@@ -110,6 +130,31 @@ class VisionReadRequest(BaseModel):
         return value
 
 
+class VisionToken(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token_id: str = Field(pattern=r"^t[1-9][0-9]*$")
+    bbox: BBox
+    lanes: list[Literal["poppler", "pdfplumber"]]
+
+
+class VisionGlyphFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: Literal["glyph_ambiguous", "glyph_template_unavailable"]
+    character: str = Field(min_length=1, max_length=1)
+    lane: Literal["pdftoppm", "pdfium"]
+    message: str = Field(min_length=1)
+
+
+def _empty_vision_tokens() -> list[VisionToken]:
+    return []
+
+
+def _empty_vision_glyph_findings() -> list[VisionGlyphFinding]:
+    return []
+
+
 class VisionReadItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -127,6 +172,8 @@ class VisionReadItem(BaseModel):
     prompt_sha256: str
     control: bool = False
     bindings: dict[str, str] = Field(default_factory=dict)
+    tokens: list[VisionToken] = Field(default_factory=_empty_vision_tokens)
+    glyph_findings: list[VisionGlyphFinding] = Field(default_factory=_empty_vision_glyph_findings)
 
 
 class VisionBatch(BaseModel):
@@ -144,6 +191,8 @@ class VisionBatch(BaseModel):
     field_bindings: dict[str, str] = Field(default_factory=dict)
     control_state_path: str = ""
     control_state_sha256: str = ""
+    private_state_path: str = ""
+    private_state_sha256: str = ""
     control_salt: str
     control_answer_sha256: str
     control_read_sha256: str
@@ -248,12 +297,13 @@ def _write_batch(
     batch_dir: Path,
     batch: VisionBatch,
     control_root: Path | None = None,
+    token_texts: Mapping[str, Mapping[str, str]] | None = None,
 ) -> VisionBatch:
-    sidecar_path = (
-        (control_root or _control_root_for_batch(batch_dir, batch.lane))
-        / (".vision-control")
-        / f"{batch.batch_id}.json"
-    )
+    private_root = (control_root or _control_root_for_batch(batch_dir, batch.lane)).resolve()
+    batch_root = batch_dir.resolve()
+    while private_root.is_relative_to(batch_root):
+        private_root = private_root.parent
+    sidecar_path = private_root / ".vision-control" / f"{batch.batch_id}.json"
     control_state = {
         "batch_id": batch.batch_id,
         "control_salt": batch.control_salt,
@@ -273,7 +323,33 @@ def _write_batch(
             "control_state_sha256": _sha256(sidecar_path.read_bytes()),
         }
     )
-    _atomic_json(batch_dir / "batch.json", _batch_payload(batch))
+    glyph_findings = {
+        item.read_id: [finding.model_dump(mode="json") for finding in item.glyph_findings]
+        for item in batch.items
+        if item.glyph_findings
+    }
+    private_state_path = private_root / ".vision-token-map" / f"{batch.batch_id}.json"
+    private_state = {
+        "batch_id": batch.batch_id,
+        "token_texts": {read_id: dict(values) for read_id, values in (token_texts or {}).items()},
+        "glyph_findings": glyph_findings,
+    }
+    _atomic_json(
+        private_state_path,
+        private_state,
+        exclusive=True,
+        already_exists="vision private state",
+    )
+    batch = batch.model_copy(
+        update={
+            "private_state_path": os.path.relpath(private_state_path, start=batch_dir.resolve()),
+            "private_state_sha256": _sha256(private_state_path.read_bytes()),
+        }
+    )
+    public_batch = batch.model_copy(
+        update={"items": [item.model_copy(update={"glyph_findings": []}) for item in batch.items]}
+    )
+    _atomic_json(batch_dir / "batch.json", _batch_payload(public_batch))
     return batch
 
 
@@ -304,6 +380,496 @@ def _dpi(bbox: BBox) -> int:
     detail_dpi = math.ceil(600 * 72 / min(width, height))
     pixel_budget_dpi = math.floor(2400 * 72 / max(width, height))
     return min(1200, max(300, min(detail_dpi, pixel_budget_dpi)))
+
+
+def _token_text_key(text: str) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text)).strip()
+
+
+def _tokens_in_bbox(
+    extraction: DatasheetExtraction,
+    extraction_dir: Path,
+    page: int,
+    bbox: BBox,
+) -> tuple[list[VisionToken], dict[str, str]]:
+    grouped: list[dict[str, object]] = []
+    for lane in ("poppler", "pdfplumber"):
+        for word in page_words(extraction, extraction_dir, page, lanes=(lane,)):
+            if (
+                word.x0 >= bbox[2]
+                or word.x1 <= bbox[0]
+                or word.top >= bbox[3]
+                or word.bottom <= bbox[1]
+                or not word.text.strip()
+            ):
+                continue
+            current_bbox = (word.x0, word.top, word.x1, word.bottom)
+            duplicate = next(
+                (
+                    item
+                    for item in grouped
+                    if item["key"] == _token_text_key(word.text)
+                    and all(
+                        abs(float(a) - float(b)) <= 0.75
+                        for a, b in zip(cast(BBox, item["bbox"]), current_bbox, strict=True)
+                    )
+                ),
+                None,
+            )
+            if duplicate is None:
+                grouped.append(
+                    {
+                        "key": _token_text_key(word.text),
+                        "text": word.text,
+                        "bbox": current_bbox,
+                        "lanes": {lane},
+                    }
+                )
+            else:
+                cast(set[str], duplicate["lanes"]).add(lane)
+
+    grouped.sort(
+        key=lambda item: (
+            cast(BBox, item["bbox"])[1],
+            cast(BBox, item["bbox"])[0],
+            str(item["text"]),
+            ",".join(
+                lane for lane in ("poppler", "pdfplumber") if lane in cast(set[str], item["lanes"])
+            ),
+        )
+    )
+    tokens: list[VisionToken] = []
+    texts: dict[str, str] = {}
+    for index, item in enumerate(grouped, start=1):
+        token_id = f"t{index}"
+        texts[token_id] = str(item["text"])
+        tokens.append(
+            VisionToken(
+                token_id=token_id,
+                bbox=cast(BBox, item["bbox"]),
+                lanes=cast(
+                    list[Literal["poppler", "pdfplumber"]],
+                    [
+                        lane
+                        for lane in ("poppler", "pdfplumber")
+                        if lane in cast(set[str], item["lanes"])
+                    ],
+                ),
+            )
+        )
+    return tokens, texts
+
+
+def _mark_token_image(
+    image_path: Path,
+    tokens: Sequence[VisionToken],
+    crop_bbox: BBox,
+    dpi: int,
+) -> None:
+    try:
+        with Image.open(image_path) as opened:
+            image = opened.convert("RGB")
+    except OSError as exc:
+        raise VisionReadError(f"vision image is unavailable for token marking: {exc}") from exc
+    draw = ImageDraw.Draw(image)
+    scale = dpi / 72
+    line_width = max(2, round(dpi / 300))
+    font = ImageFont.load_default(size=max(12, round(dpi * 4 / 72)))
+    colors = ("#d7191c", "#2c7bb6", "#1a9641", "#fdae61", "#762a83")
+    for index, token in enumerate(tokens):
+        x0, top, x1, bottom = token.bbox
+        left = max(0, min(image.width - 1, round((x0 - crop_bbox[0]) * scale)))
+        upper = max(0, min(image.height - 1, round((top - crop_bbox[1]) * scale)))
+        right = max(left + 1, min(image.width - 1, round((x1 - crop_bbox[0]) * scale)))
+        lower = max(upper + 1, min(image.height - 1, round((bottom - crop_bbox[1]) * scale)))
+        color = colors[index % len(colors)]
+        draw.rectangle((left, upper, right, lower), outline=color, width=line_width)
+        label_bbox = draw.textbbox((0, 0), token.token_id, font=font)
+        label_width = label_bbox[2] - label_bbox[0] + line_width * 2
+        label_height = label_bbox[3] - label_bbox[1] + line_width * 2
+        label_left = min(max(0, left), max(0, image.width - label_width))
+        label_top = max(0, upper - label_height)
+        draw.rectangle(
+            (
+                label_left,
+                label_top,
+                label_left + label_width,
+                label_top + label_height,
+            ),
+            fill=color,
+        )
+        draw.text(
+            (label_left + line_width, label_top + line_width),
+            token.token_id,
+            fill="white",
+            font=font,
+        )
+    image.save(image_path, format="PNG")
+
+
+def _embedded_font_names(pdf_path: Path, page_number: int) -> set[str] | None:
+    command = [
+        *shlex.split(os.environ.get(_PDFFONTS_ENV, "pdffonts")),
+        "-f",
+        str(page_number),
+        "-l",
+        str(page_number),
+        str(pdf_path),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired, UnicodeError, ValueError):
+        return None
+    if result.returncode:
+        return None
+    embedded: set[str] = set()
+    for line in result.stdout.splitlines()[2:]:
+        columns = line.split()
+        if len(columns) >= 7 and columns[3].casefold() == "yes":
+            embedded.add(columns[0])
+    return embedded
+
+
+def _char_box(value: Mapping[str, object]) -> BBox | None:
+    coordinates = tuple(value.get(key) for key in ("x0", "top", "x1", "bottom"))
+    if not all(isinstance(number, (int, float)) for number in coordinates):
+        return None
+    bbox = cast(
+        BBox,
+        tuple(float(cast(float | int, number)) for number in coordinates),
+    )
+    if bbox[0] >= bbox[2] or bbox[1] >= bbox[3]:
+        return None
+    return bbox
+
+
+def _word_character(
+    word: PdfWord,
+    character_index: int,
+    characters: Sequence[Mapping[str, object]],
+) -> Mapping[str, object] | None:
+    if not word.text:
+        return None
+    target_x = word.x0 + (character_index + 0.5) * (word.x1 - word.x0) / len(word.text)
+    candidates: list[tuple[float, Mapping[str, object]]] = []
+    for character in characters:
+        bbox = _char_box(character)
+        if bbox is None or character.get("text") != word.text[character_index]:
+            continue
+        if (
+            bbox[0] < word.x1 + 0.75
+            and bbox[2] > word.x0 - 0.75
+            and bbox[1] < word.bottom + 0.75
+            and bbox[3] > word.top - 0.75
+        ):
+            candidates.append((abs((bbox[0] + bbox[2]) / 2 - target_x), character))
+    return min(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def _font_identity(character: Mapping[str, object]) -> tuple[str, float] | None:
+    font_name = character.get("fontname")
+    font_size = character.get("size")
+    if not isinstance(font_name, str) or not isinstance(font_size, (int, float)):
+        return None
+    if not math.isfinite(float(font_size)) or float(font_size) <= 0:
+        return None
+    return font_name, float(font_size)
+
+
+def _render_glyph_signature(
+    pdf_path: Path,
+    page_number: int,
+    page_width: float,
+    page_height: float,
+    character: Mapping[str, object],
+    rasterizer: Rasterizer,
+    output: Path,
+) -> tuple[float, ...] | None:
+    bbox = _char_box(character)
+    if bbox is None:
+        return None
+    padding = 0.35
+    glyph_bbox = (
+        max(0.0, bbox[0] - padding),
+        max(0.0, bbox[1] - padding),
+        min(page_width, bbox[2] + padding),
+        min(page_height, bbox[3] + padding),
+    )
+    try:
+        if rasterizer == "pdfium":
+            _render_pdfium(
+                pdf_path,
+                output,
+                page_number,
+                glyph_bbox,
+                page_width,
+                page_height,
+                _GLYPH_DPI,
+            )
+        else:
+            _render_pdftoppm(pdf_path, output, page_number, glyph_bbox, _GLYPH_DPI)
+        with Image.open(output) as image:
+            return glyph_signature(image)
+    except Exception:
+        return None
+
+
+def _glyph_unavailable(
+    character: str,
+    message: str,
+) -> list[VisionGlyphFinding]:
+    return [
+        VisionGlyphFinding(
+            code="glyph_template_unavailable",
+            character=character,
+            lane=lane,
+            message=message,
+        )
+        for lane in ("pdftoppm", "pdfium")
+    ]
+
+
+def _glyph_findings_for_region(
+    pdf_path: Path,
+    extraction: DatasheetExtraction,
+    extraction_path: Path,
+    page_number: int,
+    bbox: BBox,
+) -> list[VisionGlyphFinding]:
+    occurrences: list[tuple[str, PdfWord, str, int]] = []
+    for extraction_lane in ("poppler", "pdfplumber"):
+        words = page_words(
+            extraction,
+            extraction_path.resolve().parent,
+            page_number,
+            lanes=(extraction_lane,),
+        )
+        for word in words:
+            if (
+                word.x0 >= bbox[2]
+                or word.x1 <= bbox[0]
+                or word.top >= bbox[3]
+                or word.bottom <= bbox[1]
+            ):
+                continue
+            occurrences.extend(
+                (character, word, extraction_lane, index)
+                for index, character in enumerate(word.text)
+                if character in _GLYPH_GROUPS
+            )
+    if not occurrences:
+        return []
+
+    page_metadata = {page.page: page for page in extraction.pages}
+    page = page_metadata.get(page_number)
+    if page is None:
+        return [
+            finding
+            for character, _word, _lane, _index in occurrences
+            for finding in _glyph_unavailable(character, "page geometry is unavailable")
+        ]
+    try:
+        with pdfplumber.open(str(pdf_path)) as document:
+            page_characters = [
+                [cast(Mapping[str, object], character) for character in pdf_page.chars]
+                for pdf_page in document.pages
+            ]
+    except Exception as exc:
+        return [
+            finding
+            for character, _word, _lane, _index in occurrences
+            for finding in _glyph_unavailable(character, f"PDF glyph data is unavailable: {exc}")
+        ]
+
+    embedded_fonts: dict[int, set[str] | None] = {}
+    findings: list[VisionGlyphFinding] = []
+    signature_cache: dict[tuple[int, BBox, str, str, float], tuple[float, ...] | None] = {}
+    with tempfile.TemporaryDirectory(prefix="circuit-glyph-") as temporary:
+        temporary_dir = Path(temporary)
+        for occurrence_index, (expected, word, extraction_lane, character_index) in enumerate(
+            occurrences
+        ):
+            source_character = _word_character(
+                word,
+                character_index,
+                page_characters[page_number - 1] if page_number <= len(page_characters) else [],
+            )
+            if source_character is None:
+                findings.extend(
+                    _glyph_unavailable(
+                        expected,
+                        f"{extraction_lane} token has no matching embedded-font character",
+                    )
+                )
+                continue
+            identity = _font_identity(source_character)
+            if identity is None:
+                findings.extend(
+                    _glyph_unavailable(
+                        expected,
+                        f"{extraction_lane} token has no matching embedded-font character",
+                    )
+                )
+                continue
+            font_name, font_size = identity
+            if page_number not in embedded_fonts:
+                embedded_fonts[page_number] = _embedded_font_names(pdf_path, page_number)
+            embedded = embedded_fonts[page_number]
+            if embedded is None or font_name not in embedded:
+                findings.extend(
+                    _glyph_unavailable(
+                        expected,
+                        f"font {font_name!r} is not confirmed embedded by pdffonts",
+                    )
+                )
+                continue
+
+            candidates: dict[str, Mapping[str, object]] = {}
+            candidate_pages: dict[str, int] = {}
+            for candidate in _GLYPH_GROUPS[expected]:
+                for candidate_page, characters in enumerate(page_characters, start=1):
+                    candidate_page_record = page_metadata.get(candidate_page)
+                    if candidate_page_record is None:
+                        continue
+                    page_embedded = embedded_fonts.get(candidate_page)
+                    if candidate_page not in embedded_fonts:
+                        page_embedded = _embedded_font_names(pdf_path, candidate_page)
+                        embedded_fonts[candidate_page] = page_embedded
+                    if page_embedded is None or font_name not in page_embedded:
+                        continue
+                    matching = next(
+                        (
+                            value
+                            for value in characters
+                            if value.get("text") == candidate
+                            and (candidate_identity := _font_identity(value)) is not None
+                            and candidate_identity[0] == font_name
+                            and math.isclose(
+                                candidate_identity[1], font_size, rel_tol=0, abs_tol=0.05
+                            )
+                        ),
+                        None,
+                    )
+                    if matching is not None:
+                        candidates[candidate] = matching
+                        candidate_pages[candidate] = candidate_page
+                        break
+            if set(candidates) != set(_GLYPH_GROUPS[expected]):
+                missing = sorted(set(_GLYPH_GROUPS[expected]) - set(candidates))
+                findings.extend(
+                    _glyph_unavailable(
+                        expected,
+                        "embedded-font glyph templates are unavailable for: " + ", ".join(missing),
+                    )
+                )
+                continue
+
+            for rasterizer in ("pdftoppm", "pdfium"):
+
+                def signature(
+                    candidate_page: int,
+                    candidate_character: Mapping[str, object],
+                    engine: str,
+                    cache: dict[tuple[int, BBox, str, str, float], tuple[float, ...] | None],
+                    occurrence: int = occurrence_index,
+                ) -> tuple[float, ...] | None:
+                    candidate_bbox = _char_box(candidate_character)
+                    candidate_identity = _font_identity(candidate_character)
+                    if candidate_bbox is None or candidate_identity is None:
+                        return None
+                    character_text = cast(str, candidate_character.get("text", ""))
+                    cache_key = (
+                        candidate_page,
+                        candidate_bbox,
+                        engine,
+                        character_text,
+                        candidate_identity[1],
+                    )
+                    if cache_key not in cache:
+                        page_record = page_metadata[candidate_page]
+                        cache_path = temporary_dir / (
+                            f"{occurrence}-{candidate_page}-{engine}-{len(cache)}.png"
+                        )
+                        cache[cache_key] = _render_glyph_signature(
+                            pdf_path,
+                            candidate_page,
+                            page_record.width_pt,
+                            page_record.height_pt,
+                            candidate_character,
+                            cast(Rasterizer, engine),
+                            cache_path,
+                        )
+                    return cache[cache_key]
+
+                sample = signature(
+                    page_number,
+                    source_character,
+                    rasterizer,
+                    signature_cache,
+                )
+                templates = {
+                    candidate: signature(
+                        candidate_pages[candidate],
+                        candidate_character,
+                        rasterizer,
+                        signature_cache,
+                    )
+                    for candidate, candidate_character in candidates.items()
+                }
+                if sample is None or any(template is None for template in templates.values()):
+                    findings.append(
+                        VisionGlyphFinding(
+                            code="glyph_template_unavailable",
+                            character=expected,
+                            lane=rasterizer,
+                            message="1200-dpi embedded-font glyph crop could not be rendered",
+                        )
+                    )
+                    continue
+                scores = {
+                    candidate: normalized_cross_correlation(
+                        sample, cast(tuple[float, ...], template)
+                    )
+                    for candidate, template in templates.items()
+                }
+                if len(scores) != len(candidates) or any(
+                    score is None for score in scores.values()
+                ):
+                    findings.append(
+                        VisionGlyphFinding(
+                            code="glyph_template_unavailable",
+                            character=expected,
+                            lane=rasterizer,
+                            message="1200-dpi embedded-font glyph crop could not be rendered",
+                        )
+                    )
+                    continue
+                ranked = sorted(
+                    ((candidate, cast(float, score)) for candidate, score in scores.items()),
+                    key=lambda item: (-item[1], item[0]),
+                )
+                winner, best_score = ranked[0]
+                margin = best_score - ranked[1][1]
+                if winner != expected or margin < _GLYPH_SCORE_MARGIN:
+                    findings.append(
+                        VisionGlyphFinding(
+                            code="glyph_ambiguous",
+                            character=expected,
+                            lane=rasterizer,
+                            message=(
+                                f"embedded-font match selected {winner!r} "
+                                f"(score={best_score:.4f}, margin={margin:.4f})"
+                            ),
+                        )
+                    )
+    return findings
 
 
 def _render_pdftoppm(
@@ -640,6 +1206,7 @@ def create_read_batch(
     )
     batch_dir.mkdir(parents=True, exist_ok=False)
     items: list[VisionReadItem] = []
+    token_texts_by_read: dict[str, dict[str, str]] = {}
     first_crop_size: tuple[int, int] | None = None
     rasterizer: Rasterizer = "pdfium" if lane == "b" else "pdftoppm"
     for request in normalized_requests:
@@ -668,6 +1235,29 @@ def create_read_batch(
             )
         else:
             _render_pdftoppm(pdf_path, image_path, request.page, crop_bbox, dpi)
+        if request.kind == "som_tokens":
+            tokens, token_texts = _tokens_in_bbox(
+                extraction,
+                extraction_path.resolve().parent,
+                request.page,
+                request.bbox,
+            )
+            token_texts_by_read[read_id] = token_texts
+        else:
+            tokens = []
+        if request.kind == "som_tokens":
+            if not tokens:
+                raise VisionReadError(
+                    f"no mechanical word tokens are available for page {request.page}"
+                )
+            _mark_token_image(image_path, tokens, crop_bbox, dpi)
+        glyph_findings = _glyph_findings_for_region(
+            pdf_path,
+            extraction,
+            extraction_path,
+            request.page,
+            request.bbox,
+        )
         with Image.open(image_path) as image:
             if first_crop_size is None:
                 first_crop_size = image.size
@@ -686,6 +1276,8 @@ def create_read_batch(
                 image_sha256=_sha256(image_path.read_bytes()),
                 prompt=prompt,
                 prompt_sha256=_sha256(prompt.encode("utf-8")),
+                tokens=tokens,
+                glyph_findings=glyph_findings,
             )
         )
     assert first_crop_size is not None
@@ -731,7 +1323,12 @@ def create_read_batch(
         control_answer_sha256=_sha256(f"{control_salt}{normalized_control_answer}".encode()),
         control_read_sha256=_sha256(f"{control_salt}{control_read_id}".encode()),
     )
-    return _write_batch(batch_dir, batch, _control_root_for_source(extraction_path, lane))
+    return _write_batch(
+        batch_dir,
+        batch,
+        _control_root_for_source(extraction_path, lane),
+        token_texts=token_texts_by_read or None,
+    )
 
 
 def _load_batch(batch_path: Path) -> VisionBatch:
@@ -814,6 +1411,8 @@ def _load_batch(batch_path: Path) -> VisionBatch:
             raise VisionReadError(
                 "persisted vision batch items must omit field and control; recreate the batch"
             )
+        if raw_item.get("glyph_findings", []) != []:
+            raise VisionReadError("persisted vision batch must omit private glyph findings")
         read_id = raw_item.get("read_id")
         if not isinstance(read_id, str) or not read_id:
             raise VisionReadError("vision batch item has an invalid read_id")
@@ -843,11 +1442,108 @@ def _load_batch(batch_path: Path) -> VisionBatch:
         raise VisionReadError(f"vision batch is invalid: {exc}") from exc
     if sum(item.control for item in batch.items) != 1:
         raise VisionReadError("vision batch must identify exactly one control read")
+    _token_texts, glyph_findings = _load_private_state(batch_path, batch)
+    batch = batch.model_copy(
+        update={
+            "items": [
+                item.model_copy(update={"glyph_findings": glyph_findings.get(item.read_id, [])})
+                for item in batch.items
+            ]
+        }
+    )
     return batch
 
 
+def _load_private_state(
+    batch_path: Path,
+    batch: VisionBatch,
+) -> tuple[dict[str, dict[str, str]], dict[str, list[VisionGlyphFinding]]]:
+    som_items = [item for item in batch.items if item.kind == "som_tokens"]
+    reference = batch.private_state_path
+    digest = batch.private_state_sha256
+    if bool(reference) != bool(digest) or (
+        digest and re.fullmatch(r"[0-9a-f]{64}", digest) is None
+    ):
+        raise VisionReadError("vision batch has an invalid private state sidecar reference")
+    if not reference:
+        raise VisionReadError("vision batch has no private state sidecar; recreate it")
+    reference_path = Path(reference)
+    if reference_path.is_absolute():
+        raise VisionReadError("vision batch private state sidecar path is invalid")
+    try:
+        state_path = (batch_path.parent / reference_path).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise VisionReadError(
+            f"vision private state sidecar is missing or unreadable: {exc}"
+        ) from exc
+    if (
+        state_path.name != f"{batch.batch_id}.json"
+        or state_path.parent.name != ".vision-token-map"
+        or state_path.is_relative_to(batch_path.parent.resolve())
+    ):
+        raise VisionReadError("vision batch private state sidecar path is invalid")
+    try:
+        state_bytes = state_path.read_bytes()
+    except OSError as exc:
+        raise VisionReadError(
+            f"vision private state sidecar is missing or unreadable: {exc}"
+        ) from exc
+    if _sha256(state_bytes) != digest:
+        raise VisionReadError("vision private state sidecar SHA-256 mismatch")
+    try:
+        state_value: object = json.loads(state_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VisionReadError(f"vision private state sidecar is invalid: {exc}") from exc
+    if not isinstance(state_value, dict):
+        raise VisionReadError("vision private state sidecar is invalid")
+    state = cast(dict[str, object], state_value)
+    if (
+        set(state) != {"batch_id", "token_texts", "glyph_findings"}
+        or state.get("batch_id") != batch.batch_id
+        or not isinstance(state.get("token_texts"), dict)
+        or not isinstance(state.get("glyph_findings"), dict)
+    ):
+        raise VisionReadError("vision private state sidecar is invalid")
+    raw_texts = cast(dict[object, object], state["token_texts"])
+    expected = {item.read_id: {token.token_id for token in item.tokens} for item in som_items}
+    if any(not token_ids for token_ids in expected.values()):
+        raise VisionReadError("Set-of-Mark batch contains no tokens")
+    if set(raw_texts) != set(expected):
+        raise VisionReadError("vision private token map does not match its batch")
+    token_texts_by_read: dict[str, dict[str, str]] = {}
+    for read_id, token_ids in expected.items():
+        value = raw_texts[read_id]
+        if not isinstance(value, dict):
+            raise VisionReadError("vision private state sidecar is invalid")
+        words = cast(dict[object, object], value)
+        if set(words) != token_ids or any(
+            not isinstance(text, str) or not text.strip() for text in words.values()
+        ):
+            raise VisionReadError("vision private token map does not match its batch")
+        token_texts_by_read[read_id] = {
+            str(token_id): cast(str, text) for token_id, text in words.items()
+        }
+    raw_glyphs = cast(dict[object, object], state["glyph_findings"])
+    item_ids = {item.read_id for item in batch.items}
+    if not set(raw_glyphs).issubset(item_ids):
+        raise VisionReadError("vision private glyph findings do not match their batch")
+    glyph_findings: dict[str, list[VisionGlyphFinding]] = {}
+    for read_id, value in raw_glyphs.items():
+        if not isinstance(read_id, str) or not isinstance(value, list) or not value:
+            raise VisionReadError("vision private glyph findings are invalid")
+        try:
+            glyph_findings[read_id] = [
+                VisionGlyphFinding.model_validate(finding) for finding in cast(list[object], value)
+            ]
+        except ValueError as exc:
+            raise VisionReadError(f"vision private glyph findings are invalid: {exc}") from exc
+    return token_texts_by_read, glyph_findings
+
+
 def _normalize_answer(
-    item: VisionReadItem, answer: str
+    item: VisionReadItem,
+    answer: str,
+    token_texts: Mapping[str, str] | None = None,
 ) -> tuple[NormalizedAnswer, Literal["ok", "unparseable"]]:
     if item.kind == "transcribe":
         normalized = unicodedata.normalize("NFKC", answer)
@@ -857,6 +1553,50 @@ def _normalize_answer(
     try:
         parsed = json.loads(answer)
     except json.JSONDecodeError:
+        return answer, "unparseable"
+    if item.kind == "som_tokens":
+        if token_texts is None:
+            raise VisionReadError("Set-of-Mark token text is unavailable")
+        token_text = {token_id: _token_text_key(text) for token_id, text in token_texts.items()}
+
+        def resolve(value: object) -> str:
+            submitted_text: str | None = None
+            token_id: object = value
+            if isinstance(value, dict):
+                token_value = cast(dict[object, object], value)
+                if set(token_value) not in ({"token_id"}, {"token_id", "text"}):
+                    raise VisionReadError("Set-of-Mark values require token_id and optional text")
+                token_id = token_value.get("token_id")
+                if "text" in token_value:
+                    text_value = token_value["text"]
+                    if not isinstance(text_value, str):
+                        raise VisionReadError("Set-of-Mark token text must be a string")
+                    submitted_text = _token_text_key(text_value)
+            if not isinstance(token_id, str) or token_id not in token_text:
+                raise VisionReadError(f"unknown Set-of-Mark token ID: {token_id!r}")
+            resolved = token_text[token_id]
+            if submitted_text is not None and submitted_text != resolved:
+                raise VisionReadError(
+                    f"Set-of-Mark text does not match token {token_id}: {submitted_text!r}"
+                )
+            return resolved
+
+        if isinstance(parsed, dict):
+            parsed_mapping = cast(dict[object, object], parsed)
+            if not all(isinstance(key, str) for key in parsed_mapping):
+                return answer, "unparseable"
+            if not parsed_mapping:
+                raise VisionReadError("Set-of-Mark answers must reference at least one token ID")
+            return {cast(str, key): resolve(value) for key, value in parsed_mapping.items()}, "ok"
+        if isinstance(parsed, list):
+            parsed_rows = cast(list[object], parsed)
+            if not all(isinstance(row, list) for row in parsed_rows):
+                return answer, "unparseable"
+            if not any(cast(list[object], row) for row in parsed_rows):
+                raise VisionReadError("Set-of-Mark answers must reference at least one token ID")
+            return [
+                [resolve(value) for value in cast(list[object], row)] for row in parsed_rows
+            ], "ok"
         return answer, "unparseable"
     if item.kind == "table":
         if not isinstance(parsed, list):
@@ -954,6 +1694,7 @@ def record_answers(
     answers: Mapping[str, str | VisionAnswerInput | dict[str, object]],
 ) -> VisionAnswerRecord:
     batch = _load_batch(batch_path)
+    token_texts_by_read, _glyph_findings = _load_private_state(batch_path, batch)
     read_ids = {item.read_id for item in batch.items}
     if set(answers) != read_ids:
         raise VisionReadError("answers must cover exactly all read IDs")
@@ -986,7 +1727,11 @@ def record_answers(
     status: dict[str, Literal["ok", "unparseable"]] = {}
     control_passed = False
     for item in batch.items:
-        value, state = _normalize_answer(item, answer_texts[item.read_id])
+        value, state = _normalize_answer(
+            item,
+            answer_texts[item.read_id],
+            token_texts_by_read.get(item.read_id),
+        )
         normalized[item.read_id] = value
         status[item.read_id] = state
         if item.control:

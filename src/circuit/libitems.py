@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import sexpr
 
@@ -14,6 +14,10 @@ PadType = Literal["smd", "thru_hole", "np_thru_hole", "connect"]
 GraphicKind = Literal["line", "rect", "circle", "arc", "poly"]
 Point = tuple[float, float]
 Vector3 = tuple[float, float, float]
+
+
+def _empty_keepouts() -> list[list[Point]]:
+    return []
 
 
 class LibItemError(ValueError):
@@ -64,6 +68,7 @@ class FootprintDef(BaseModel):
     attributes: list[str]
     pads: list[PadDef]
     graphics: list[GraphicDef]
+    keepouts: list[list[Point]] = Field(default_factory=_empty_keepouts)
     models: list[ModelRef]
     properties: dict[str, str]
 
@@ -308,11 +313,22 @@ def parse_footprint(path: Path) -> FootprintDef:
             _parse_graphic(node, cast(GraphicKind, kind)) for node in _lists(root, name_kind)
         )
     models = [_parse_model(node) for node in _lists(root, "model")]
+    keepouts: list[list[Point]] = []
+    for zone in _lists(root, "zone"):
+        if _first(zone, "keepout") is None:
+            continue
+        polygon = _first(zone, "polygon")
+        points = _first(polygon or [], "pts")
+        if points is not None:
+            keepouts.append(
+                [_point(point, label="keepout polygon") for point in _lists(points, "xy")]
+            )
     return FootprintDef(
         name=name,
         attributes=attributes,
         pads=pads,
         graphics=graphics,
+        keepouts=keepouts,
         models=models,
         properties=_properties(root),
     )

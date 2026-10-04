@@ -1,0 +1,113 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "lmv321-sot23-5",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "1IN+",
+    "2": "GND",
+    "3": "1IN-",
+    "4": "OUT",
+    "5": "VCC+"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 2.75,
+      "nom": null,
+      "max": 3.05
+    },
+    "body_width": {
+      "min": 1.45,
+      "nom": null,
+      "max": 1.75
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.45
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.95,
+      "max": null
+    },
+    "lead_span": {
+      "min": 2.6,
+      "nom": null,
+      "max": 3.0
+    },
+    "lead_length": {
+      "min": 0.3,
+      "nom": null,
+      "max": 0.6
+    },
+    "lead_width": {
+      "min": 0.3,
+      "nom": null,
+      "max": 0.5
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -1.3,
+        -0.95
+      ],
+      "size": [
+        1.1,
+        0.6
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -1.3,
+        0.0
+      ],
+      "size": [
+        1.1,
+        0.6
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -1.3,
+        0.95
+      ],
+      "size": [
+        1.1,
+        0.6
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        1.3,
+        0.95
+      ],
+      "size": [
+        1.1,
+        0.6
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        1.3,
+        -0.95
+      ],
+      "size": [
+        1.1,
+        0.6
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-e76c0a5a-998a-4609-9927-22b9b6f9bb85",
+  "notes": "DBV0005A package outline (page 31) and example board layout (page 32). Frame: KiCad top view, pin 1 top-left."
+}

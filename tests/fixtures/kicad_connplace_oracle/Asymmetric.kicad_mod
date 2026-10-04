@@ -1,0 +1,8 @@
+(footprint "Asymmetric" (version 20241229) (generator "pcbnew")
+  (layer "F.Cu")
+  (property "Reference" "REF**" (at 0 -3 0) (layer "F.SilkS") (hide yes))
+  (property "Value" "Asymmetric" (at 0 3 0) (layer "F.Fab") (hide yes))
+  (fp_line (start 1.25 -0.75) (end 3.5 1) (stroke (width 0.05) (type default)) (layer "Dwgs.User") (uuid "39754f13-514c-50d1-a56b-33b3643f27d5"))
+(fp_line (start 0 0) (end 4 0) (stroke (width 0.05) (type default)) (layer "Dwgs.User") (uuid "23ea1706-05b0-5490-9b38-1ea85627f88e"))
+(fp_rect (start -2 -1) (end 3 2.5) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd") (uuid "110da2d1-af88-58ad-830f-0f8edfcdfbfd"))
+)

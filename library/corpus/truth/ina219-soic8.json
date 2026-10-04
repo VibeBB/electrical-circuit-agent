@@ -1,0 +1,149 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "ina219-soic8",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "A1",
+    "2": "A0",
+    "3": "SDA",
+    "4": "SCL",
+    "5": "VS",
+    "6": "GND",
+    "7": "IN-",
+    "8": "IN+"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 4.81,
+      "nom": null,
+      "max": 5.0
+    },
+    "body_width": {
+      "min": 3.81,
+      "nom": null,
+      "max": 3.98
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.75
+    },
+    "pitch": {
+      "min": null,
+      "nom": 1.27,
+      "max": null
+    },
+    "lead_span": {
+      "min": 5.8,
+      "nom": null,
+      "max": 6.19
+    },
+    "lead_length": {
+      "min": 0.41,
+      "nom": null,
+      "max": 1.27
+    },
+    "lead_width": {
+      "min": 0.31,
+      "nom": null,
+      "max": 0.51
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -2.7,
+        -1.905
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -2.7,
+        -0.635
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -2.7,
+        0.635
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -2.7,
+        1.905
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        2.7,
+        1.905
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        2.7,
+        0.635
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        2.7,
+        -0.635
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        2.7,
+        -1.905
+      ],
+      "size": [
+        1.55,
+        0.6
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-04524c7a-fab9-409d-a7c6-f8318aaff299",
+  "notes": "D0008A package outline (page 33) and example board layout (page 34). Frame: KiCad top view, pin 1 top-left. SOIC pin order differs from the SOT-23 variant."
+}

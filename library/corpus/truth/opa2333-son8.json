@@ -1,0 +1,165 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "opa2333-son8",
+  "package_family": "no_lead_dual",
+  "pins": {
+    "1": "OUT A",
+    "2": "-IN A",
+    "3": "+IN A",
+    "4": "V-",
+    "5": "+IN B",
+    "6": "-IN B",
+    "7": "OUT B",
+    "8": "V+",
+    "9": "Thermal Die Pad"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 2.9,
+      "nom": null,
+      "max": 3.1
+    },
+    "body_width": {
+      "min": 2.9,
+      "nom": null,
+      "max": 3.1
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.0
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.65,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": {
+      "min": 0.3,
+      "nom": null,
+      "max": 0.5
+    },
+    "lead_width": {
+      "min": 0.25,
+      "nom": null,
+      "max": 0.35
+    },
+    "exposed_pad_length": {
+      "min": 2.35,
+      "nom": 2.4,
+      "max": 2.45
+    },
+    "exposed_pad_width": {
+      "min": 1.6,
+      "nom": 1.65,
+      "max": 1.7
+    }
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -1.4,
+        -0.975
+      ],
+      "size": [
+        0.6,
+        0.3
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -1.4,
+        -0.325
+      ],
+      "size": [
+        0.6,
+        0.3
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -1.4,
+        0.325
+      ],
+      "size": [
+        0.6,
+        0.3
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -1.4,
+        0.975
+      ],
+      "size": [
+        0.6,
+        0.3
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        1.4,
+        0.975
+      ],
+      "size": [
+        0.6,
+        0.3
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        1.4,
+        0.325
+      ],
+      "size": [
+        0.6,
+        0.3
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        1.4,
+        -0.325
+      ],
+      "size": [
+        0.6,
+        0.3
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        1.4,
+        -0.975
+      ],
+      "size": [
+        0.6,
+        0.3
+      ]
+    },
+    {
+      "number": "9",
+      "center": [
+        0.0,
+        0.0
+      ],
+      "size": [
+        1.65,
+        2.4
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-be09daa3-21bf-4bbb-97fd-5de27e14fa78",
+  "notes": "DRB0008B package outline (page 40) and example board layout (page 41). Frame: KiCad top view, pin 1 top-left. Exposed thermal die pad numbered 9 to match the land-pattern pad count."
+}

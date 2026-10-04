@@ -1,0 +1,98 @@
+{
+  "artifact_kind": "circuit_part_spec",
+  "mpn": "TPS62130RGTR",
+  "manufacturer": "Texas Instruments",
+  "datasheet": {
+    "path": "datasheet.pdf",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "revision": "F",
+    "extraction_path": "extraction/extraction.json",
+    "origin": "user_provided"
+  },
+  "authoring": "authoring",
+  "package": {
+    "family": "chip",
+    "drawing_id": "TPS62130-SYNTHETIC",
+    "pin_count": 2,
+    "pitch": {
+      "nom": 1.0,
+      "reading": {
+        "alternative_evidence": "0000000000000000"
+      }
+    },
+    "body_length": {
+      "nom": 2.0,
+      "reading": {
+        "alternative_evidence": "0000000000000000"
+      }
+    },
+    "body_width": {
+      "nom": 1.0,
+      "reading": {
+        "alternative_evidence": "0000000000000000"
+      }
+    },
+    "height": {
+      "nom": 0.5,
+      "reading": {
+        "alternative_evidence": "0000000000000000"
+      }
+    },
+    "lead_length": {
+      "nom": 0.5,
+      "reading": {
+        "alternative_evidence": "0000000000000000"
+      }
+    },
+    "lead_width": {
+      "nom": 0.5,
+      "reading": {
+        "alternative_evidence": "0000000000000000"
+      }
+    },
+    "drawing_view": "top",
+    "pin1_corner": "top_left",
+    "pin1_reading": {
+      "alternative_evidence": "0000000000000000"
+    }
+  },
+  "pins": [
+    {
+      "number": "1",
+      "name": "GND",
+      "electrical_type": "power_in",
+      "reading": {
+        "alternative_evidence": "0000000000000000"
+      }
+    },
+    {
+      "number": "2",
+      "name": "SW",
+      "electrical_type": "output",
+      "reading": {
+        "alternative_evidence": "0000000000000000"
+      }
+    }
+  ],
+  "pin_table": {
+    "page": 1,
+    "table": 0,
+    "number_col": 0,
+    "name_col": 1
+  },
+  "orderable": [
+    {
+      "mpn": "TPS62130RGTR",
+      "package_designator": "SYNTHETIC",
+      "pin_count": 2,
+      "row": {
+        "table": 0,
+        "row": 1,
+        "col": 0
+      },
+      "reading": {
+        "alternative_evidence": "0000000000000000"
+      }
+    }
+  ]
+}

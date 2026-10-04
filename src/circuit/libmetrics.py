@@ -47,6 +47,17 @@ class CorrectionRecord(BaseModel):
     event_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class ReviewerCatchTrialMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    reviewer: str = Field(min_length=1)
+    trials: int = Field(ge=0)
+    catches: int = Field(ge=0)
+    misses: int = Field(ge=0)
+    upper95_miss_rate: float = Field(ge=0, le=1)
+    advisory: bool
+
+
 class LibraryMetrics(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -61,6 +72,10 @@ class LibraryMetrics(BaseModel):
     critical_single_oracle: list[str]
     release_relaxation_supported: bool
     findings: list[str]
+    reviewer_catch_trials: list[ReviewerCatchTrialMetrics] = Field(
+        default_factory=lambda: cast(list[ReviewerCatchTrialMetrics], [])
+    )
+    reviewer_advisories: list[str] = Field(default_factory=list)
 
 
 def clopper_pearson_upper95(n: int, k: int) -> float:
@@ -327,8 +342,10 @@ def _correction_escapes(
     return escapes, findings
 
 
-def compute_metrics(project: Path) -> LibraryMetrics:
+def compute_metrics(project: Path, *, reviewer_advisory_threshold: float = 0.2) -> LibraryMetrics:
     """Compute metrics for a project root containing the PR-B review journal."""
+    if not math.isfinite(reviewer_advisory_threshold) or not 0 <= reviewer_advisory_threshold <= 1:
+        raise ValueError("reviewer advisory threshold must be between 0 and 1")
     project = project.expanduser().resolve()
     library_dir = project / "library"
     findings: list[str] = []
@@ -378,6 +395,30 @@ def compute_metrics(project: Path) -> LibraryMetrics:
         findings.append("escape_rate_upper95_not_below_0_01")
     if critical_single_oracle:
         findings.append("critical_single_oracle_mutation")
+    reviewer_counts: dict[str, list[int]] = {}
+    for reviewer, caught in libreview.review_trial_outcomes(library_dir):
+        counts = reviewer_counts.setdefault(reviewer, [0, 0])
+        counts[0] += 1
+        counts[1] += int(not caught)
+    reviewer_metrics = [
+        ReviewerCatchTrialMetrics(
+            reviewer=reviewer,
+            trials=counts[0],
+            catches=counts[0] - counts[1],
+            misses=counts[1],
+            upper95_miss_rate=clopper_pearson_upper95(counts[0], counts[1]),
+            advisory=(
+                counts[0] >= 5
+                and clopper_pearson_upper95(counts[0], counts[1]) > reviewer_advisory_threshold
+            ),
+        )
+        for reviewer, counts in sorted(reviewer_counts.items(), key=lambda item: item[0].casefold())
+    ]
+    reviewer_advisories = [
+        f"reviewer_catch_trial_advisory:{item.reviewer}"
+        for item in reviewer_metrics
+        if item.advisory
+    ]
     supported = (
         n >= 299
         and upper95 < 0.01
@@ -398,6 +439,8 @@ def compute_metrics(project: Path) -> LibraryMetrics:
         critical_single_oracle=critical_single_oracle,
         release_relaxation_supported=supported,
         findings=list(dict.fromkeys(findings)),
+        reviewer_catch_trials=reviewer_metrics,
+        reviewer_advisories=reviewer_advisories,
     )
 
 
@@ -418,7 +461,8 @@ def require_relaxation_supported(
     except (OSError, ValueError) as exc:
         raise LibraryMetricsError("review_relaxation_not_supported_by_metrics") from exc
     if (
-        metrics != computed
+        metrics.model_dump(exclude={"reviewer_catch_trials", "reviewer_advisories"})
+        != computed.model_dump(exclude={"reviewer_catch_trials", "reviewer_advisories"})
         or metrics.corpus_manifest_sha256 != current_manifest_hash
         or metrics.mutation_report_sha256 != current_report_hash
         or not metrics.release_relaxation_supported

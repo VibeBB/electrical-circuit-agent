@@ -1,0 +1,101 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "tlv1117lv-sot223",
+  "package_family": "gullwing_tab",
+  "pins": {
+    "1": "GND",
+    "2": "OUT",
+    "3": "IN",
+    "4": "OUT"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 6.3,
+      "nom": null,
+      "max": 6.7
+    },
+    "body_width": {
+      "min": 3.3,
+      "nom": null,
+      "max": 3.7
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.8
+    },
+    "pitch": {
+      "min": null,
+      "nom": 2.3,
+      "max": null
+    },
+    "lead_span": {
+      "min": 6.7,
+      "nom": null,
+      "max": 7.3
+    },
+    "lead_length": {
+      "min": 0.75,
+      "nom": null,
+      "max": null
+    },
+    "lead_width": {
+      "min": 0.66,
+      "nom": null,
+      "max": 0.84
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -2.9,
+        -2.3
+      ],
+      "size": [
+        2.15,
+        0.95
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -2.9,
+        0.0
+      ],
+      "size": [
+        2.15,
+        0.95
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -2.9,
+        2.3
+      ],
+      "size": [
+        2.15,
+        0.95
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        2.9,
+        0.0
+      ],
+      "size": [
+        2.15,
+        3.25
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-1a204de0-41ce-4993-8139-3d821c2129db",
+  "notes": "DCY0004A package outline (page 22) and example board layout (page 23). Frame: KiCad top view, pin 1 top-left. Pad 4 is the output tab."
+}

@@ -7,17 +7,58 @@ advisory lanes degrade, never guess.
 
 from __future__ import annotations
 
+import math
 import os
 import shlex
 import subprocess
+from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import cast
+
+from PIL import Image, ImageOps
 
 _PDFTOPPM_ENV = "CIRCUIT_PDFTOPPM"
 _RSVG_ENV = "CIRCUIT_RSVG_CONVERT"
+_GLYPH_GRID = (32, 48)
 
 
 class RasterizeError(RuntimeError):
     """Raised when a file cannot be rasterized."""
+
+
+def glyph_signature(image: Image.Image) -> tuple[float, ...] | None:
+    """Return a fixed-size, ink-normalized glyph signature."""
+    grayscale = ImageOps.grayscale(image)
+
+    def binarize(value: int) -> int:
+        return 255 if value < 160 else 0
+
+    binary = grayscale.point(binarize)  # pyright: ignore[reportUnknownMemberType]
+    ink_bbox = binary.getbbox()
+    if ink_bbox is None:
+        return None
+    cropped = binary.crop(ink_bbox)
+    resized = cropped.resize(  # pyright: ignore[reportUnknownMemberType]
+        _GLYPH_GRID, Image.Resampling.LANCZOS
+    )
+    pixels = cast(Iterable[int], resized.getdata())
+    return tuple(float(value) / 255 for value in pixels)
+
+
+def normalized_cross_correlation(first: Sequence[float], second: Sequence[float]) -> float | None:
+    """Compute zero-mean normalized cross-correlation without array dependencies."""
+    if len(first) != _GLYPH_GRID[0] * _GLYPH_GRID[1] or len(first) != len(second):
+        return None
+    first_mean = sum(first) / len(first)
+    second_mean = sum(second) / len(second)
+    first_centered = [value - first_mean for value in first]
+    second_centered = [value - second_mean for value in second]
+    first_energy = sum(value * value for value in first_centered)
+    second_energy = sum(value * value for value in second_centered)
+    denominator = math.sqrt(first_energy * second_energy)
+    if denominator == 0:
+        return None
+    return sum(a * b for a, b in zip(first_centered, second_centered, strict=True)) / denominator
 
 
 def _command(env_name: str, default: str) -> list[str]:

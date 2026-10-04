@@ -9,15 +9,15 @@ import os
 import re
 import shutil
 import tempfile
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import authoring, kicad_cli, occt, visionread
+from . import authoring, humanrequest, kicad_cli, occt, visionread
 from . import pinout as pinout_oracle
 from .datasheet import load_extraction
 from .klc import KlcReport, run_klc
@@ -195,6 +195,10 @@ class VerificationInputs(BaseModel):
     pin_source_sha256s: list[str | None] = Field(default_factory=_empty_pin_source_hashes)
 
 
+def _empty_human_requests() -> list[humanrequest.HumanRequest]:
+    return []
+
+
 class LibraryVerification(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -206,8 +210,13 @@ class LibraryVerification(BaseModel):
     footprint: VerifiedFootprint
     models: list[VerifiedModel]
     findings: list[VerifyFinding]
+    human_requests: list[humanrequest.HumanRequest] = Field(default_factory=_empty_human_requests)
     test_board: TestBoard | None = None
     pin_source_comparison: PinSourceComparison | None = None
+
+
+class _GeneratedModelManifest(BaseModel):
+    parameters: dict[str, object]
 
 
 _SYMBOL_TYPE_ALIASES = {
@@ -1149,6 +1158,41 @@ def _check_pad_geometry(
 ) -> dict[str, tuple[float, float, float, float]]:
     expected_boxes = _reference_boxes(reference.pads)
     actual_boxes = _pad_boxes(footprint.pads)
+    actual_pads_by_number: dict[str, list[PadDef]] = defaultdict(list)
+    for pad in footprint.pads:
+        actual_pads_by_number[pad.number].append(pad)
+    wrong_layer_numbers: set[str] = set()
+    for expected in reference.pads:
+        candidates = actual_pads_by_number.get(expected.number, [])
+        if not candidates or expected.pad_type == "unknown":
+            continue
+        expected_box = expected_boxes[expected.number]
+        expected_x = (expected_box[0] + expected_box[2]) / 2
+        expected_y = (expected_box[1] + expected_box[3]) / 2
+        actual = min(
+            (math.hypot(pad.x - expected_x, pad.y - expected_y), pad) for pad in candidates
+        )[1]
+        copper_layers = {layer for layer in actual.layers if layer.endswith(".Cu")}
+        has_wildcard_copper = "*.Cu" in actual.layers
+        if expected.pad_type == "smd":
+            layer_match = (
+                "F.Cu" in copper_layers and "B.Cu" not in copper_layers and not has_wildcard_copper
+            )
+        elif expected.pad_type == "thru_hole":
+            layer_match = has_wildcard_copper or {"F.Cu", "B.Cu"} <= copper_layers
+        else:
+            layer_match = not copper_layers and not has_wildcard_copper
+        if not layer_match:
+            wrong_layer_numbers.add(expected.number)
+    if wrong_layer_numbers:
+        _finding(
+            findings,
+            "footprint_pad_layer_mismatch",
+            "error",
+            "footprint",
+            "PartSpec-derived pad copper layers differ from the footprint for pad(s) "
+            + ", ".join(sorted(wrong_layer_numbers)),
+        )
     center_delta = 0.0
     size_delta = 0.0
     for number in expected_boxes.keys() & actual_boxes.keys():
@@ -1283,6 +1327,421 @@ def _check_pad_types(
             )
 
 
+def _connector_human_request(
+    spec: PartSpec,
+    code: str,
+    unknown: str,
+) -> humanrequest.HumanRequest:
+    return humanrequest.build_request(
+        kind="library_review",
+        subject={
+            "manufacturer": spec.manufacturer,
+            "mpn": spec.mpn,
+            "revision": spec.datasheet.revision,
+        },
+        reason=unknown,
+        evidence=[
+            {
+                "kind": "document",
+                "ref": spec.datasheet.path,
+                "sha256": spec.datasheet.sha256,
+                "summary": "PartSpec datasheet evidence",
+            }
+        ],
+        known=[f"Connector {spec.mpn} is documented in the PartSpec."],
+        unknown=[unknown],
+        agent_assessment=(
+            "The connector check found a mechanical feature with unresolved plating or "
+            "geometry. It cannot determine whether the hole is plated or whether the land "
+            "pattern is safe to manufacture, so it will not infer a pad type from appearance. "
+            "Verify this feature using the connector's authoritative datasheet or approved "
+            "mechanical drawing before releasing the footprint."
+        ),
+        recommendation="Provide the mating-part or connector datasheet",
+        recommendation_rationale=(
+            "Unverified connector geometry or plating can cause unsafe mating or assembly."
+        ),
+        alternatives=[
+            {
+                "option": "Provide the mating-part or connector datasheet",
+                "risks": ["Placement remains unverified until the evidence is checked."],
+            },
+            {
+                "option": "Provide a manufacturer-approved mechanical drawing",
+                "risks": ["The drawing must identify the exact connector and mating variant."],
+            },
+        ],
+        recommended=0,
+        details={"kind": "library_review", "finding_codes": [code]},
+    )
+
+
+def _check_connector(
+    spec: PartSpec,
+    footprint: FootprintDef,
+    reference: LandPatternResult,
+    findings: list[VerifyFinding],
+    human_requests: list[humanrequest.HumanRequest],
+) -> None:
+    connector = spec.connector
+    if connector is None:
+        return
+    if connector.mating_envelope is None:
+        message = "mating envelope, travel, and access clearance are not evidenced"
+        _finding(
+            findings,
+            "connector_mating_envelope_unknown",
+            "error",
+            "connector.mating_envelope",
+            message,
+        )
+        human_requests.append(
+            _connector_human_request(spec, "connector_mating_envelope_unknown", message)
+        )
+    expected_by_number = {
+        pad.number: pad for pad in reference.pads if pad.number and pad.kind == "signal"
+    }
+    actual_by_number: dict[str, list[PadDef]] = {}
+    for pad in footprint.pads:
+        if pad.number and pad.type != "np_thru_hole":
+            actual_by_number.setdefault(pad.number, []).append(pad)
+    mapped_numbers = list(connector.numbering.manufacturer_to_kicad.values())
+    for number in mapped_numbers:
+        expected = expected_by_number.get(number)
+        actual = actual_by_number.get(number, [])
+        if expected is None or not actual:
+            _finding(
+                findings,
+                "connector_numbering_mismatch",
+                "error",
+                f"connector.contact.{number}",
+                "manufacturer contact has no matching numbered footprint pad",
+            )
+            continue
+        expected_position = (expected.x, expected.y)
+        nearest = min(
+            actual,
+            key=lambda pad: math.dist((pad.x, pad.y), expected_position),
+        )
+        if math.dist((nearest.x, nearest.y), expected_position) > 0.02:
+            _finding(
+                findings,
+                "connector_numbering_mismatch",
+                "error",
+                f"connector.contact.{number}",
+                "KiCad pad number is not at the mapped manufacturer contact position",
+            )
+    for row in connector.contacts:
+        row_numbers = [connector.numbering.manufacturer_to_kicad[number] for number in row.numbers]
+        expected_order = sorted(row_numbers, key=lambda number: expected_by_number[number].x)
+        row_pads = [pad for pad in footprint.pads if pad.number in row_numbers]
+        observed_order = [pad.number for pad in sorted(row_pads, key=lambda pad: (pad.x, pad.y))]
+        if len(expected_order) > 1 and observed_order == list(reversed(expected_order)):
+            _finding(
+                findings,
+                "connector_numbering_mirrored",
+                "error",
+                "connector.numbering",
+                "footprint contact order is mirrored relative to the manufacturer numbering view",
+            )
+        expected_drill = _dimension_value(row.drill) if row.drill is not None else None
+        for manufacturer_number in row.numbers:
+            number = connector.numbering.manufacturer_to_kicad[manufacturer_number]
+            expected = expected_by_number.get(number)
+            candidates = actual_by_number.get(number, [])
+            if expected is None or not candidates:
+                continue
+            expected_position = (expected.x, expected.y)
+            pad = min(
+                candidates,
+                key=lambda item: math.dist((item.x, item.y), expected_position),
+            )
+            expected_type = "thru_hole" if expected_drill is not None else "smd"
+            if pad.type != expected_type:
+                _finding(
+                    findings,
+                    "connector_pad_type_mismatch",
+                    "error",
+                    f"footprint.pad.{number}",
+                    f"contact pad type {pad.type} does not match connector mount {expected_type}",
+                )
+            if expected_drill is not None:
+                if pad.drill is None or abs(pad.drill - expected_drill) > 0.05:
+                    _finding(
+                        findings,
+                        "tht_drill_mismatch",
+                        "error",
+                        f"footprint.pad.{number}",
+                        "through-hole drill differs from the connector specification "
+                        "by more than 0.05 mm",
+                    )
+                elif (min(pad.width, pad.height) - pad.drill) / 2 < 0.15 - 1e-6:
+                    _finding(
+                        findings,
+                        "tht_annular_ring",
+                        "error",
+                        f"footprint.pad.{number}",
+                        "through-hole annular ring is below 0.15 mm",
+                    )
+    for feature in connector.mechanical:
+        if feature.drill is not None and feature.plated is None:
+            _finding(
+                findings,
+                "connector_plating_unresolved",
+                "error",
+                f"connector.mechanical.{feature.kind}",
+                "mechanical feature plating is unresolved",
+            )
+            human_requests.append(
+                _connector_human_request(
+                    spec,
+                    "connector_plating_unresolved",
+                    f"Plating is unresolved for the {feature.kind} connector feature.",
+                )
+            )
+        x = _dimension_value(feature.x)
+        y = _dimension_value(feature.y)
+        if x is None or y is None:
+            _finding(
+                findings,
+                "connector_mechanical_mismatch",
+                "error",
+                f"connector.mechanical.{feature.kind}",
+                "mechanical feature position is unavailable",
+            )
+            continue
+        feature_position = (x, y)
+        candidates = (
+            [pad for pad in footprint.pads if not pad.number]
+            if feature.number is None
+            else [pad for pad in footprint.pads if pad.number == feature.number]
+        )
+        candidate = min(
+            candidates,
+            key=lambda pad: math.dist((pad.x, pad.y), feature_position),
+            default=None,
+        )
+        has_geometry = (
+            feature.number is not None or feature.drill is not None or feature.pad_width is not None
+        )
+        if not has_geometry:
+            continue
+        if candidate is None or math.dist((candidate.x, candidate.y), feature_position) > 0.02:
+            _finding(
+                findings,
+                "connector_mechanical_mismatch",
+                "error",
+                f"connector.mechanical.{feature.kind}",
+                "specified mechanical feature is missing from the footprint",
+            )
+            continue
+        expected_type = (
+            "thru_hole"
+            if feature.drill is not None and feature.plated is True
+            else "np_thru_hole"
+            if feature.drill is not None and feature.plated is False
+            else "smd"
+        )
+        if feature.plated is not None and candidate.type != expected_type:
+            _finding(
+                findings,
+                "connector_mechanical_mismatch",
+                "error",
+                f"footprint.pad.{candidate.number}",
+                f"mechanical pad type {candidate.type} does not match {expected_type}",
+            )
+        if feature.drill is not None and feature.plated is True:
+            expected_drill = _dimension_value(feature.drill)
+            candidate_drill = candidate.drill
+            if (
+                expected_drill is None
+                or candidate_drill is None
+                or abs(candidate_drill - expected_drill) > 0.05
+            ):
+                _finding(
+                    findings,
+                    "tht_drill_mismatch",
+                    "error",
+                    f"footprint.pad.{candidate.number}",
+                    "mechanical drill differs from the connector specification "
+                    "by more than 0.05 mm",
+                )
+            elif (min(candidate.width, candidate.height) - candidate_drill) / 2 < 0.15 - 1e-6:
+                _finding(
+                    findings,
+                    "tht_annular_ring",
+                    "error",
+                    f"footprint.pad.{candidate.number}",
+                    "mechanical annular ring is below 0.15 mm",
+                )
+        expected_width = (
+            _dimension_value(feature.pad_width)
+            if feature.pad_width is not None
+            else _dimension_value(feature.drill)
+            if feature.drill is not None
+            else None
+        )
+        expected_height = (
+            _dimension_value(feature.pad_height)
+            if feature.pad_height is not None
+            else _dimension_value(feature.drill)
+            if feature.drill is not None
+            else None
+        )
+        if (
+            expected_width is not None
+            and expected_height is not None
+            and (
+                abs(candidate.width - expected_width) > 0.02
+                or abs(candidate.height - expected_height) > 0.02
+            )
+        ):
+            _finding(
+                findings,
+                "connector_mechanical_mismatch",
+                "error",
+                f"footprint.pad.{candidate.number}",
+                "mechanical pad size does not match the connector specification",
+            )
+    edge = connector.board_edge
+    if edge is not None:
+        offset = _dimension_value(edge.offset)
+        property_value = footprint.properties.get("circuit_board_edge", "")
+        property_matches = False
+        pieces = property_value.split()
+        if offset is not None and len(pieces) == 2 and pieces[0] == edge.side:
+            try:
+                property_matches = abs(float(pieces[1]) - offset) <= 0.1
+            except ValueError:
+                property_matches = False
+        line_matches = False
+        if offset is not None:
+            for graphic in footprint.graphics:
+                if (
+                    graphic.layer != "Dwgs.User"
+                    or graphic.kind != "line"
+                    or len(graphic.points) < 2
+                ):
+                    continue
+                first, second = graphic.points[:2]
+                if edge.side in {"+x", "-x"}:
+                    line_matches |= (
+                        abs(first[0] - second[0]) <= 0.1
+                        and abs((first[0] + second[0]) / 2 - offset) <= 0.1
+                    )
+                else:
+                    line_matches |= (
+                        abs(first[1] - second[1]) <= 0.1
+                        and abs((first[1] + second[1]) / 2 - offset) <= 0.1
+                    )
+        if not property_matches:
+            _finding(
+                findings,
+                "connector_board_edge_mismatch",
+                "error",
+                "footprint.circuit_board_edge",
+                "board-edge property does not match the connector PartSpec",
+            )
+        if not line_matches:
+            _finding(
+                findings,
+                "connector_board_edge_graphic_mismatch",
+                "error",
+                "footprint.Dwgs.User",
+                "board-edge drawing line does not match the connector PartSpec",
+            )
+    keepout = connector.copper_keepout
+    if keepout is not None:
+        x0, y0, x1, y1 = (
+            _dimension_value(keepout.x0),
+            _dimension_value(keepout.y0),
+            _dimension_value(keepout.x1),
+            _dimension_value(keepout.y1),
+        )
+        present = False
+        if x0 is not None and y0 is not None and x1 is not None and y1 is not None:
+            present = any(
+                len(points) >= 3
+                and min(x for x, _ in points) <= x0 + 0.02
+                and min(y for _, y in points) <= y0 + 0.02
+                and max(x for x, _ in points) >= x1 - 0.02
+                and max(y for _, y in points) >= y1 - 0.02
+                for points in footprint.keepouts
+            )
+        if not present:
+            _finding(
+                findings,
+                "coax_keepout_missing",
+                "error",
+                "footprint.zone",
+                "connector copper keepout region is missing",
+            )
+
+
+def _check_connector_model_features(
+    spec: PartSpec,
+    footprint: FootprintDef,
+    findings: list[VerifyFinding],
+    model_sha256: str,
+) -> None:
+    if spec.connector is None:
+        return
+    try:
+        reference = compute_land_pattern(spec)
+    except (ValueError, TypeError) as exc:
+        _finding(
+            findings,
+            "connector_model_mechanical_mismatch",
+            "error",
+            "model.connector",
+            f"connector land pattern is unavailable for independent model checks: {exc}",
+            model_sha256=model_sha256,
+        )
+        return
+    for expected in reference.pads:
+        candidates = (
+            [pad for pad in footprint.pads if pad.number == expected.number]
+            if expected.number
+            else [pad for pad in footprint.pads if not pad.number]
+        )
+        candidate = min(
+            candidates,
+            key=lambda pad: math.dist((pad.x, pad.y), (expected.x, expected.y)),
+            default=None,
+        )
+        subject = f"model.connector.pad.{expected.number or expected.kind}"
+        if (
+            candidate is None
+            or math.dist((candidate.x, candidate.y), (expected.x, expected.y)) > 0.02
+        ):
+            _finding(
+                findings,
+                "connector_model_mechanical_mismatch",
+                "error",
+                subject,
+                "connector land-pattern pad is missing or displaced in the model check",
+                model_sha256=model_sha256,
+            )
+            continue
+        if (
+            candidate.type != expected.pad_type
+            or (
+                expected.drill is not None
+                and (candidate.drill is None or abs(candidate.drill - expected.drill) > 0.05)
+            )
+            or abs(candidate.width - expected.width) > 0.02
+            or abs(candidate.height - expected.height) > 0.02
+        ):
+            _finding(
+                findings,
+                "connector_model_mechanical_mismatch",
+                "error",
+                subject,
+                "connector pad type, drill, or size differs from the independent model reference",
+                model_sha256=model_sha256,
+            )
+
+
 def _graphic_box(graphics: list[GraphicDef]) -> tuple[float, float, float, float] | None:
     if not any(graphic.points for graphic in graphics):
         return None
@@ -1316,6 +1775,19 @@ def nominal_body_box(spec: PartSpec) -> tuple[float, float, float, float] | None
     body_length = _dimension_value(spec.package.body_length)
     if body_width is None or body_length is None:
         return None
+    connector = spec.connector
+    if connector is not None:
+        face = _dimension_value(connector.mating_face)
+        if face is None:
+            return None
+        if connector.mating_axis == "+x":
+            return face - body_length, -body_width / 2, face, body_width / 2
+        if connector.mating_axis == "-x":
+            return -face, -body_width / 2, body_length - face, body_width / 2
+        if connector.mating_axis == "+y":
+            return -body_width / 2, face - body_length, body_width / 2, face
+        if connector.mating_axis == "-y":
+            return -body_width / 2, -face, body_width / 2, body_length - face
     return (-body_width / 2, -body_length / 2, body_width / 2, body_length / 2)
 
 
@@ -2696,12 +3168,13 @@ def _verify_model_geometry(
         body_bbox.x_max - body_bbox.x_min,
         body_bbox.y_max - body_bbox.y_min,
     )
+    connector_axis = spec.connector.mating_axis if spec.connector is not None else ""
     dimensions = (
         (
             (spec.package.body_length, body_actual[0]),
             (spec.package.body_width, body_actual[1]),
         )
-        if spec.package.family == "chip"
+        if spec.package.family == "chip" or connector_axis in {"+x", "-x"}
         else (
             (spec.package.body_width, body_actual[0]),
             (spec.package.body_length, body_actual[1]),
@@ -2722,13 +3195,19 @@ def _verify_model_geometry(
             "model body X/Y limits fail or the body could not be isolated",
             model_sha256=model_sha256,
         )
-    if abs(overall_bbox[2]) > 0.01:
+    expected_bottom = (
+        -3.0
+        if spec.package.family == "connector"
+        and any(pad.pad_type == "thru_hole" for pad in compute_land_pattern(spec).pads)
+        else 0.0
+    )
+    if abs(overall_bbox[2] - expected_bottom) > 0.01:
         _finding(
             findings,
             "model_body_dimension",
             "error",
             f"model.{path}",
-            "model overall bottom Z must be 0 ±0.01 mm",
+            "model overall bottom Z does not match the connector pin extension",
             model_sha256=model_sha256,
         )
     height_lower, height_upper = _model_dimension_bounds(spec.package.height, tolerance_mm)
@@ -2751,7 +3230,59 @@ def _verify_model_geometry(
     except Exception:
         color_marker = None
     marker = geometric_marker.quadrant if geometric_marker is not None else None
-    if spec.package.family != "chip":
+    connector = spec.connector
+    if connector is not None:
+        expected_face = _dimension_value(connector.mating_face)
+        actual_face = {
+            "+x": body_bbox.x_max,
+            "-x": body_bbox.x_min,
+            "+y": body_bbox.y_max,
+            "-y": body_bbox.y_min,
+            "+z": body_bbox.z_max,
+        }[connector.mating_axis]
+        if expected_face is None:
+            _finding(
+                findings,
+                "model_mating_axis_mismatch",
+                "error",
+                f"model.{path}",
+                "connector mating-face position is unavailable",
+                model_sha256=model_sha256,
+            )
+        else:
+            if connector.mating_axis in {"-x", "-y"}:
+                expected_face = -expected_face
+                actual_face = -actual_face
+            if abs(actual_face - expected_face) > 0.05:
+                _finding(
+                    findings,
+                    "model_mating_axis_mismatch",
+                    "error",
+                    f"model.{path}",
+                    "model body mating-face position differs from the connector PartSpec",
+                    model_sha256=model_sha256,
+                )
+        manifest_path = Path(f"{resolved}.gen.json")
+        marker = None
+        try:
+            manifest = _GeneratedModelManifest.model_validate(
+                json.loads(manifest_path.read_text(encoding="utf-8"))
+            )
+            marker_value = manifest.parameters.get("mating_face_marker")
+            if isinstance(marker_value, str):
+                marker = marker_value
+        except (OSError, json.JSONDecodeError, ValidationError):
+            marker = None
+        if marker != f"mating_face:{connector.mating_axis}":
+            _finding(
+                findings,
+                "model_mating_axis_mismatch",
+                "error",
+                f"model.{path}",
+                "model generation manifest does not identify the connector mating face",
+                model_sha256=model_sha256,
+            )
+    elif spec.package.family != "chip":
         mismatched_markers = [
             value
             for value in (marker, color_marker)
@@ -2799,6 +3330,7 @@ def _verify_model_geometry(
         findings,
         terminal_bindings,
     )
+    _check_connector_model_features(spec, footprint, findings, model_sha256)
     courtyard = _graphic_box(
         [graphic for graphic in footprint.graphics if graphic.layer == "F.CrtYd"]
     )
@@ -3167,6 +3699,7 @@ def verify_library_part(
         raise ValueError("tolerance_mm must be finite and non-negative")
     rules = rules or load_rules("builtin:ipc7351b", Path("."))
     findings: list[VerifyFinding] = []
+    human_requests: list[humanrequest.HumanRequest] = []
     spec_hash = part_spec_sha256(spec_path) if spec_path.is_file() else ""
     pin_source_comparison: PinSourceComparison | None = None
     descriptor_inputs: list[PinSourceInput] = []
@@ -3406,6 +3939,8 @@ def verify_library_part(
                 findings,
             )
         _check_pad_types(spec, footprint, findings)
+        if spec.package.family == "connector":
+            _check_connector(spec, footprint, reference, findings, human_requests)
         _check_courtyard_and_fab(spec, footprint, findings)
         _check_silk_clearance(footprint, findings)
         _check_exposed_pad_size(spec, footprint, findings)
@@ -3630,6 +4165,7 @@ def verify_library_part(
         ),
         models=verified_models,
         findings=findings,
+        human_requests=human_requests,
         test_board=test_board_report,
         pin_source_comparison=pin_source_comparison,
     )

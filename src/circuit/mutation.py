@@ -99,6 +99,9 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "table_lane_disagreement",
         "value_mismatch",
         "view_label_mismatch",
+        "connector_mating_envelope_unknown",
+        "connector_plating_unresolved",
+        "connector_placement_part_spec_missing",
     ),
     "pin_bijection": (
         "duplicate_pin",
@@ -133,6 +136,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "symbol_property",
         "testboard_erc",
         "testboard_pinmap",
+        "connector_numbering_mismatch",
     ),
     "orientation": (
         "pin1_location",
@@ -152,6 +156,11 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "pinout_winding_nonstandard",
         "symbol_permutation_diagnosis",
         "symbol_pinout_name_mismatch",
+        "connector_numbering_mirrored",
+        "connector_board_edge_mismatch",
+        "connector_board_edge_property_mismatch",
+        "connector_not_at_board_edge",
+        "connector_mating_clearance",
     ),
     "land_geometry": (
         "courtyard_enclosure",
@@ -175,9 +184,28 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "footprint_pitch",
         "ep_size",
         "silk_over_pad",
+        "connector_pad_type_mismatch",
+        "connector_drill_mismatch",
+        "connector_annular_ring",
+        "connector_mechanical_missing",
+        "connector_mechanical_pad_type",
+        "connector_mechanical_mismatch",
+        "tht_drill_mismatch",
+        "tht_annular_ring",
+        "footprint_pad_layer_mismatch",
+        "connector_board_edge_graphic_mismatch",
+        "connector_mating_board_interference",
+        "coax_keepout_missing",
     ),
     "export_oracle": (
         "assembly_attribute",
+        "export_gerber_pad_mismatch",
+        "export_gerber_layer_mismatch",
+        "export_mask_mismatch",
+        "export_paste_mismatch",
+        "export_drill_mismatch",
+        "export_drill_missing",
+        "export_oracle_unparsed",
         "model_export_mismatch",
         "model_export_missing",
         "model_export_unavailable",
@@ -213,6 +241,9 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "model_terminals_unseparable",
         "model_transform_not_identity",
         "model_unresolved",
+        "connector_model_mating_face",
+        "model_mating_axis_mismatch",
+        "connector_model_mechanical_mismatch",
     ),
     "rule_profile": (
         "ep_paste_coverage",
@@ -239,6 +270,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
     ),
     "vision": (
         "glyph_loss_ambiguous",
+        "glyph_template_unavailable",
         "pinout_vision_mismatch",
         "vision_compare_mismatch",
         "vision_control_failed",
@@ -330,6 +362,18 @@ class MutationError(ValueError):
 
 def _number(value: float) -> str:
     return format(value, ".12g")
+
+
+def _dimension_value(dimension: Dimension) -> float:
+    if dimension.nom is not None:
+        return dimension.nom
+    if dimension.min is not None and dimension.max is not None:
+        return (dimension.min + dimension.max) / 2
+    if dimension.min is not None:
+        return dimension.min
+    if dimension.max is not None:
+        return dimension.max
+    raise MutationError("dimension has no usable value")
 
 
 def _quoted(value: str) -> sexpr.QuotedString:
@@ -536,25 +580,36 @@ def _copy_spec_evidence(spec: PartSpec, source_dir: Path, target_dir: Path) -> N
                 return
             if not isinstance(batch_payload, dict):
                 return
-            state_reference = cast(dict[str, object], batch_payload).get("control_state_path")
-            if not isinstance(state_reference, str):
-                return
-            state_path = Path(state_reference)
-            if state_path.is_absolute():
-                return
-            source_state = (source.parent / state_path).resolve()
-            if not source_state.is_relative_to(source_dir.resolve()) or not source_state.is_file():
-                return
-            relative_state = source_state.relative_to(source_dir.resolve())
-            target_state = target_dir / relative_state
-            target_state.parent.mkdir(parents=True, exist_ok=True)
-            if not target_state.exists():
-                shutil.copyfile(source_state, target_state)
+            for state_key in ("control_state_path", "private_state_path"):
+                state_reference = cast(dict[str, object], batch_payload).get(state_key)
+                if not isinstance(state_reference, str):
+                    continue
+                state_path = Path(state_reference)
+                if state_path.is_absolute():
+                    continue
+                source_state = (source.parent / state_path).resolve()
+                if (
+                    not source_state.is_relative_to(source_dir.resolve())
+                    or not source_state.is_file()
+                ):
+                    continue
+                relative_state = source_state.relative_to(source_dir.resolve())
+                target_state = target_dir / relative_state
+                target_state.parent.mkdir(parents=True, exist_ok=True)
+                if not target_state.exists():
+                    shutil.copyfile(source_state, target_state)
             return
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
 
     visit(spec.model_dump(mode="python"))
+    for directory in (source_dir, *source_dir.parents):
+        observation_log = directory / "observations" / "circuit" / "image-observations.jsonl"
+        if observation_log.is_file():
+            target_log = target_dir / "observations" / "circuit" / "image-observations.jsonl"
+            target_log.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(observation_log, target_log)
+            break
 
 
 class _LibraryVerifier:
@@ -1188,6 +1243,29 @@ def _footprint_pad_shift(
     }
 
 
+def _footprint_pad_wrong_copper_layer(
+    artifacts: MutationArtifacts,
+    rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    candidates = [
+        index
+        for index, pad in enumerate(artifacts.footprint.pads)
+        if pad.type == "smd" and "F.Cu" in pad.layers
+    ]
+    if not candidates:
+        raise MutationError("footprint has no front-side SMD pad")
+    index = rng.choice(candidates)
+    pads = list(artifacts.footprint.pads)
+    pad = pads[index]
+    layers = ["B.Cu" if layer == "F.Cu" else layer for layer in pad.layers]
+    pads[index] = pad.model_copy(update={"layers": layers})
+    return _transform_footprint(artifacts, pads), {
+        "pad": pad.number,
+        "from_layer": "F.Cu",
+        "to_layer": "B.Cu",
+    }
+
+
 def _footprint_pitch_scale(
     artifacts: MutationArtifacts,
     _rng: random.Random,
@@ -1514,6 +1592,208 @@ def _footprint_swap_pad_numbers(
     }
 
 
+def _connector_numbering_mirror(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    connector = artifacts.spec.connector
+    if connector is None:
+        raise MutationError("connector PartSpec is required")
+    pads = list(artifacts.footprint.pads)
+    mirrored_numbers: list[str] = []
+    for row in connector.contacts:
+        numbers = [connector.numbering.manufacturer_to_kicad[number] for number in row.numbers]
+        indices = [
+            index
+            for index, pad in enumerate(pads)
+            if pad.number in numbers and pad.type != "np_thru_hole"
+        ]
+        if len(indices) < 2:
+            continue
+        x0 = min(pads[index].x for index in indices)
+        x1 = max(pads[index].x for index in indices)
+        for index in indices:
+            pad = pads[index]
+            pads[index] = pad.model_copy(update={"x": x0 + x1 - pad.x})
+            mirrored_numbers.append(pad.number)
+    if not mirrored_numbers:
+        raise MutationError("connector has no multi-contact row to mirror")
+    return _transform_footprint(artifacts, pads), {
+        "pads": ",".join(sorted(mirrored_numbers)),
+    }
+
+
+def _connector_tht_drill_shrink(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    index = next(
+        (
+            index
+            for index, pad in enumerate(artifacts.footprint.pads)
+            if pad.type == "thru_hole" and pad.drill is not None and pad.drill > 0.2
+        ),
+        None,
+    )
+    if index is None:
+        raise MutationError("connector footprint has no shrinkable plated drill")
+    pads = list(artifacts.footprint.pads)
+    pad = pads[index]
+    drill = pad.drill
+    if drill is None:
+        raise MutationError("connector footprint has no plated drill")
+    pads[index] = pad.model_copy(update={"drill": drill - 0.2})
+    return _transform_footprint(artifacts, pads), {
+        "pad": pad.number,
+        "drill_delta_mm": -0.2,
+    }
+
+
+def _connector_npth_to_pth(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    pads = list(artifacts.footprint.pads)
+    index = next(
+        (index for index, pad in enumerate(pads) if pad.type == "np_thru_hole"),
+        None,
+    )
+    if index is None:
+        raise MutationError("connector footprint has no non-plated hole")
+    pad = pads[index]
+    pads[index] = pad.model_copy(update={"type": "thru_hole"})
+    return _transform_footprint(artifacts, pads), {"pad": pad.number}
+
+
+def _connector_mounting_pad_drop(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    connector = artifacts.spec.connector
+    if connector is None:
+        raise MutationError("connector PartSpec is required")
+    feature = next(
+        (feature for feature in connector.mechanical if feature.kind == "mounting"),
+        None,
+    )
+    if feature is None:
+        raise MutationError("connector has no mounting feature")
+    x, y = _dimension_value(feature.x), _dimension_value(feature.y)
+    candidates = [
+        (index, pad)
+        for index, pad in enumerate(artifacts.footprint.pads)
+        if (pad.number == feature.number if feature.number is not None else not pad.number)
+    ]
+    selected = min(
+        candidates,
+        key=lambda item: math.dist((item[1].x, item[1].y), (x, y)),
+        default=None,
+    )
+    if selected is None or math.dist((selected[1].x, selected[1].y), (x, y)) > 0.02:
+        raise MutationError("connector mounting pad is absent")
+    pads = list(artifacts.footprint.pads)
+    removed = pads.pop(selected[0])
+    return _transform_footprint(artifacts, pads), {
+        "pad": removed.number,
+        "kind": "mounting",
+    }
+
+
+def _connector_board_edge_offset_shift(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    connector = artifacts.spec.connector
+    if connector is None or connector.board_edge is None:
+        raise MutationError("connector board-edge specification is required")
+    edge = connector.board_edge
+    offset = _dimension_value(edge.offset)
+    properties = dict(artifacts.footprint.properties)
+    properties["circuit_board_edge"] = f"{edge.side} {offset + 0.5:.4f}".rstrip("0").rstrip(".")
+    graphics = [
+        graphic.model_copy(
+            update={
+                "points": [
+                    (
+                        x + 0.5 if edge.side in {"+x", "-x"} else x,
+                        y + 0.5 if edge.side in {"+y", "-y"} else y,
+                    )
+                    for x, y in graphic.points
+                ]
+            }
+        )
+        if (
+            graphic.layer == "Dwgs.User"
+            and graphic.kind == "line"
+            and graphic.points
+            and abs(
+                (
+                    sum(point[0] for point in graphic.points) / len(graphic.points)
+                    if edge.side in {"+x", "-x"}
+                    else sum(point[1] for point in graphic.points) / len(graphic.points)
+                )
+                - offset
+            )
+            <= 0.1
+        )
+        else graphic
+        for graphic in artifacts.footprint.graphics
+    ]
+    footprint = artifacts.footprint.model_copy(
+        update={"properties": properties, "graphics": graphics}
+    )
+    changed = MutationArtifacts(
+        artifacts.spec,
+        artifacts.symbol,
+        footprint,
+        artifacts.model,
+        artifacts.model_path,
+        artifacts.source_spec_path,
+        artifacts.spec_check_path,
+    )
+    return changed, {"side": edge.side, "offset_delta_mm": 0.5}
+
+
+def _connector_mating_axis_flip(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    connector = artifacts.spec.connector
+    if connector is None or connector.board_edge is None:
+        raise MutationError("connector board-edge specification is required")
+    old_axis = connector.mating_axis
+    new_axis = {
+        "+x": "-x",
+        "-x": "+x",
+        "+y": "-y",
+        "-y": "+y",
+    }[old_axis]
+    edge = connector.board_edge
+    offset = edge.offset
+    flipped_offset = offset.model_copy(
+        update={
+            "min": -offset.max if offset.max is not None else None,
+            "nom": -offset.nom if offset.nom is not None else None,
+            "max": -offset.min if offset.min is not None else None,
+        }
+    )
+    flipped_edge = edge.model_copy(update={"side": new_axis, "offset": flipped_offset})
+    flipped_connector = connector.model_copy(
+        update={"mating_axis": new_axis, "board_edge": flipped_edge}
+    )
+    spec = artifacts.spec.model_copy(update={"connector": flipped_connector})
+    changed = MutationArtifacts(
+        spec,
+        artifacts.symbol,
+        artifacts.footprint,
+        artifacts.model,
+        artifacts.model_path,
+        artifacts.source_spec_path,
+        artifacts.spec_check_path,
+    )
+    return changed, {"from": old_axis, "to": new_axis}
+
+
 def _part_spec_package_update(
     artifacts: MutationArtifacts,
     updates: dict[str, object],
@@ -1740,6 +2020,10 @@ def _has_asymmetric_pad(artifacts: MutationArtifacts) -> bool:
     )
 
 
+def _has_front_smd_pad(artifacts: MutationArtifacts) -> bool:
+    return any(pad.type == "smd" and "F.Cu" in pad.layers for pad in artifacts.footprint.pads)
+
+
 def _has_custom_pad(artifacts: MutationArtifacts) -> bool:
     return any(
         pad.shape == "custom" and pad.polygon is not None for pad in artifacts.footprint.pads
@@ -1763,6 +2047,34 @@ def _has_tab(artifacts: MutationArtifacts) -> bool:
     return artifacts.spec.package.tab is not None
 
 
+def _has_connector_numbered_row(artifacts: MutationArtifacts) -> bool:
+    connector = artifacts.spec.connector
+    return connector is not None and any(len(row.numbers) > 1 for row in connector.contacts)
+
+
+def _has_connector_tht_pad(artifacts: MutationArtifacts) -> bool:
+    return any(
+        pad.type == "thru_hole" and pad.drill is not None and pad.drill > 0.2
+        for pad in artifacts.footprint.pads
+    )
+
+
+def _has_connector_npth_pad(artifacts: MutationArtifacts) -> bool:
+    return any(pad.type == "np_thru_hole" for pad in artifacts.footprint.pads)
+
+
+def _has_connector_mounting_feature(artifacts: MutationArtifacts) -> bool:
+    connector = artifacts.spec.connector
+    return connector is not None and any(
+        feature.kind == "mounting" for feature in connector.mechanical
+    )
+
+
+def _has_connector_board_edge(artifacts: MutationArtifacts) -> bool:
+    connector = artifacts.spec.connector
+    return connector is not None and connector.board_edge is not None
+
+
 MUTATION_OPERATORS: tuple[MutationOperator, ...] = (
     MutationOperator("symbol_adjacent_pin_swap", "symbol", True, _symbol_adjacent_pin_swap),
     MutationOperator("symbol_pin_name_swap", "symbol", True, _symbol_pin_name_swap),
@@ -1774,6 +2086,13 @@ MUTATION_OPERATORS: tuple[MutationOperator, ...] = (
     MutationOperator("footprint_rotate_180", "footprint", True, _footprint_rotation(180)),
     MutationOperator("footprint_rotate_270", "footprint", True, _footprint_rotation(270)),
     MutationOperator("footprint_pad_shift_0_1mm", "footprint", True, _footprint_pad_shift),
+    MutationOperator(
+        "footprint_pad_wrong_copper_layer",
+        "footprint",
+        True,
+        _footprint_pad_wrong_copper_layer,
+        _has_front_smd_pad,
+    ),
     MutationOperator("footprint_pitch_scale_1_02", "footprint", True, _footprint_pitch_scale),
     MutationOperator("footprint_ep_size_delta_20_percent", "footprint", True, _footprint_ep_size),
     MutationOperator("footprint_mm_to_inch", "footprint", True, _footprint_unit_scale(1 / 25.4)),
@@ -1784,6 +2103,48 @@ MUTATION_OPERATORS: tuple[MutationOperator, ...] = (
     ),
     MutationOperator(
         "footprint_swapped_pad_numbers", "footprint", True, _footprint_swap_pad_numbers
+    ),
+    MutationOperator(
+        "connector_numbering_mirror",
+        "footprint",
+        True,
+        _connector_numbering_mirror,
+        _has_connector_numbered_row,
+    ),
+    MutationOperator(
+        "tht_drill_shrink",
+        "footprint",
+        True,
+        _connector_tht_drill_shrink,
+        _has_connector_tht_pad,
+    ),
+    MutationOperator(
+        "npth_to_pth",
+        "footprint",
+        True,
+        _connector_npth_to_pth,
+        _has_connector_npth_pad,
+    ),
+    MutationOperator(
+        "mounting_pad_drop",
+        "footprint",
+        True,
+        _connector_mounting_pad_drop,
+        _has_connector_mounting_feature,
+    ),
+    MutationOperator(
+        "board_edge_offset_shift",
+        "footprint",
+        True,
+        _connector_board_edge_offset_shift,
+        _has_connector_board_edge,
+    ),
+    MutationOperator(
+        "mating_axis_flip",
+        "part_spec",
+        True,
+        _connector_mating_axis_flip,
+        _has_connector_board_edge,
     ),
     MutationOperator(
         "pad_rotation_change",

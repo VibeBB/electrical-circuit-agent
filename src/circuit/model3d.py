@@ -13,7 +13,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from . import occt
-from .landpattern import Side, bga_pin_positions, standard_pin_placements
+from .landpattern import Side, bga_pin_positions, compute_land_pattern, standard_pin_placements
 from .partspec import Dimension, PartSpec
 
 GENERATOR_VERSION = "2"
@@ -27,6 +27,7 @@ _SUPPORTED = {
     "tabbed_dpak",
     "sod",
     "bga",
+    "connector",
 }
 
 
@@ -161,6 +162,16 @@ def expected_terminals(spec: PartSpec) -> list[ExpectedTerminal]:
     family = spec.package.family
     if family not in _SUPPORTED:
         raise Model3dError("unsupported_family")
+    if family == "connector":
+        land = compute_land_pattern(spec)
+        terminals: list[ExpectedTerminal] = []
+        for pad in land.pads:
+            if pad.pad_type == "unknown":
+                raise Model3dError("connector_plating_unresolved")
+            if not pad.number or pad.pad_type == "np_thru_hole":
+                continue
+            terminals.append(ExpectedTerminal(pad.number, (pad.x, pad.y), (pad.width, pad.height)))
+        return terminals
     derived_nominals: dict[str, str] = {}
     body_length = _nominal(spec.package.body_length, "body_length", derived_nominals)
     body_width = _nominal(spec.package.body_width, "body_width", derived_nominals)
@@ -249,6 +260,28 @@ def expected_terminals(spec: PartSpec) -> list[ExpectedTerminal]:
             )
         )
     return terminals
+
+
+def connector_body_bounds(
+    spec: PartSpec,
+    body_length: float,
+    body_width: float,
+    height: float,
+) -> tuple[float, float, float, float, float, float]:
+    connector = spec.connector
+    if connector is None:
+        raise Model3dError("connector specification is required")
+    face = _nominal(connector.mating_face, "connector.mating_face", {})
+    axis = connector.mating_axis
+    if axis == "+x":
+        return face - body_length, -body_width / 2, 0.0, face, body_width / 2, height
+    if axis == "-x":
+        return -face, -body_width / 2, 0.0, body_length - face, body_width / 2, height
+    if axis == "+y":
+        return -body_width / 2, face - body_length, 0.0, body_width / 2, face, height
+    if axis == "-y":
+        return -body_width / 2, -face, 0.0, body_width / 2, body_length - face, height
+    return -body_width / 2, -body_length / 2, 0.0, body_width / 2, body_length / 2, height
 
 
 def _validate_pitch(
@@ -440,17 +473,17 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
         )
         lead_length = (
             _nominal(spec.package.lead_length, "lead_length", derived_nominals)
-            if spec.package.lead_length is not None
+            if spec.package.lead_length is not None and family != "connector"
             else (0.0 if family == "bga" else None)
         )
         lead_width = (
             _nominal(spec.package.lead_width, "lead_width", derived_nominals)
-            if family not in {"chip", "bga"} and spec.package.lead_width is not None
+            if family not in {"chip", "bga", "connector"} and spec.package.lead_width is not None
             else None
         )
-        if lead_length is None:
+        if lead_length is None and family != "connector":
             raise Model3dError("package.lead_length is required for package terminals")
-        if family not in {"chip", "bga"} and lead_width is None:
+        if family not in {"chip", "bga", "connector"} and lead_width is None:
             raise Model3dError("package.lead_width is required for this family")
         if (
             family.startswith("gullwing_") or family in {"sot223", "tabbed_dpak", "sod"}
@@ -464,33 +497,47 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
             and lead_span < max(body_width, body_length)
         ):
             raise Model3dError("package.lead_span must enclose the gullwing body extents")
-        numbered_positions = _numbered_pin_positions(spec)
+        numbered_positions = [] if family == "connector" else _numbered_pin_positions(spec)
         expected_by_number = {item.number: item for item in expected_terminals(spec)}
-        _validate_pitch(
-            spec,
-            numbered_positions,
-            body_width=body_width,
-            body_length=body_length,
-            pitch=pitch,
-            lead_width=lead_width,
-        )
-        body_bottom = max(standoff, ball_diameter or 0.03)
+        if family != "connector":
+            _validate_pitch(
+                spec,
+                numbered_positions,
+                body_width=body_width,
+                body_length=body_length,
+                pitch=pitch,
+                lead_width=lead_width,
+            )
+        body_bottom = 0.0 if family == "connector" else max(standoff, ball_diameter or 0.03)
         body_top = height
         if body_top <= body_bottom:
             raise Model3dError("height must exceed the body bottom")
-        body_x = body_length if family == "chip" else body_width
-        body_y = body_width if family == "chip" else body_length
-        body = occt.box(
-            -body_x / 2,
-            -body_y / 2,
-            body_bottom,
-            body_x,
-            body_y,
-            body_top - body_bottom,
-        )
+        if family == "connector":
+            bx0, by0, bz0, bx1, by1, bz1 = connector_body_bounds(
+                spec,
+                body_length,
+                body_width,
+                body_top,
+            )
+            body_x, body_y = bx1 - bx0, by1 - by0
+            body = occt.box(bx0, by0, bz0, body_x, body_y, bz1 - bz0)
+        else:
+            body_x = body_length if family == "chip" else body_width
+            body_y = body_width if family == "chip" else body_length
+            body = occt.box(
+                -body_x / 2,
+                -body_y / 2,
+                body_bottom,
+                body_x,
+                body_y,
+                body_top - body_bottom,
+            )
         terminals: list[occt.Shape] = []
         terminal_map: list[dict[str, object]] = []
         bga_positions = bga_pin_positions(spec) if family == "bga" else []
+        terminal_numbers = [number for number, _, _ in numbered_positions] + [
+            number for number, _, _ in bga_positions
+        ]
         if family == "bga":
             if ball_diameter is None:
                 raise Model3dError("package.ball_grid.ball_diameter is required")
@@ -502,6 +549,54 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
                         "number": number,
                         "terminal_center_mm": [x, y],
                         "terminal_size_mm": [ball_diameter, ball_diameter],
+                        "solid_index": solid_index,
+                    }
+                )
+        connector_pad_by_number = (
+            {pad.number: pad for pad in compute_land_pattern(spec).pads if pad.number}
+            if family == "connector"
+            else {}
+        )
+        if family == "connector":
+            for number, expected in expected_by_number.items():
+                pad = connector_pad_by_number.get(number)
+                if pad is None:
+                    raise Model3dError(f"connector land pattern has no pad {number}")
+                if pad.pad_type == "unknown":
+                    raise Model3dError("connector_plating_unresolved")
+                solid_index = len(terminals) + 1
+                if pad.pad_type == "thru_hole":
+                    if pad.drill is None:
+                        raise Model3dError("connector_drill_missing")
+                    terminals.append(
+                        occt.cylinder(
+                            expected.center_xy[0],
+                            expected.center_xy[1],
+                            -3.0,
+                            pad.drill * 0.4,
+                            3.2,
+                        )
+                    )
+                else:
+                    size_x, size_y = expected.size_xy
+                    terminals.append(
+                        occt.box(
+                            expected.center_xy[0] - size_x / 2,
+                            expected.center_xy[1] - size_y / 2,
+                            0.0,
+                            size_x,
+                            size_y,
+                            min(0.2, height),
+                        )
+                    )
+                terminal_numbers.append(number)
+                terminal_map.append(
+                    {
+                        "number": number,
+                        "terminal_center_mm": list(expected.center_xy),
+                        "terminal_size_mm": list(expected.size_xy),
+                        "terminal_type": pad.pad_type,
+                        "drill_mm": pad.drill,
                         "solid_index": solid_index,
                     }
                 )
@@ -558,9 +653,6 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
                     "solid_index": solid_index,
                 }
             )
-        terminal_numbers = [number for number, _, _ in numbered_positions] + [
-            number for number, _, _ in bga_positions
-        ]
         tab_number = spec.package.tab.number if spec.package.tab is not None else None
         for auxiliary in expected_by_number.values():
             if auxiliary.number in terminal_numbers:
@@ -594,7 +686,14 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
             )
         marker_corner: str | None = None
         marker_note: str | None = None
-        if family != "chip":
+        mating_face_marker = None
+        if family == "connector":
+            connector = spec.connector
+            if connector is None:
+                raise Model3dError("connector specification is required")
+            mating_face_marker = f"mating_face:{connector.mating_axis}"
+            marker_note = "mating face is identified in the generated model manifest"
+        elif family != "chip":
             marker_corner = spec.package.pin1_corner
             radius = max(0.15, min(0.5, 0.1 * min(body_width, body_length)))
             x = -body_width * 0.32 if marker_corner.endswith("left") else body_width * 0.32
@@ -641,6 +740,7 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
                 "terminal_map": terminal_map,
                 "marker": marker_corner,
                 "marker_note": marker_note,
+                "mating_face_marker": mating_face_marker,
             },
         }
         manifest_path.write_text(
@@ -653,7 +753,7 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
             spec_sha256=spec_sha,
             footprint_sha256=footprint_sha,
             generator_version=GENERATOR_VERSION,
-            marker=marker_corner,
+            marker=mating_face_marker or marker_corner,
             marker_note=marker_note,
         )
     except Model3dError:

@@ -234,7 +234,7 @@ def test_protect_blocks_git_and_web_access_to_confidential_artifacts(tmp_path: P
     assert _run_protect_hook(listed_payload).returncode == 2
 
 
-_VISION_CONTROL_READS: tuple[dict[str, Any], ...] = (
+_VISION_PRIVATE_STATE_READS: tuple[dict[str, Any], ...] = (
     {
         "tool_name": "terminal",
         "tool_input": {"command": "cat /project/.vision-control/x.json"},
@@ -250,6 +250,14 @@ _VISION_CONTROL_READS: tuple[dict[str, Any], ...] = (
     {
         "tool_name": "circuit_vision_answer",
         "tool_input": {"batch_path": "/project/.vision-control/x.json"},
+    },
+    {
+        "tool_name": "terminal",
+        "tool_input": {"command": "cat /project/.vision-token-map/x.json"},
+    },
+    {
+        "tool_name": "file_editor",
+        "tool_input": {"command": "view", "path": "/project/.vision-token-map/x.json"},
     },
 )
 
@@ -277,11 +285,11 @@ _CORPUS_TRUTH_READS: tuple[dict[str, Any], ...] = (
 )
 
 
-def test_main_agent_guard_denies_vision_control_reads() -> None:
-    for payload in _VISION_CONTROL_READS:
+def test_main_agent_guard_denies_vision_private_state_reads() -> None:
+    for payload in _VISION_PRIVATE_STATE_READS:
         result = _run_protect_hook(payload)
         assert result.returncode == 2, payload
-        assert "vision control state is inaccessible" in result.stderr
+        assert "vision private state is inaccessible" in result.stderr
 
 
 def test_main_agent_guard_denies_corpus_truth_and_scoring() -> None:
@@ -292,8 +300,8 @@ def test_main_agent_guard_denies_corpus_truth_and_scoring() -> None:
 
 
 @pytest.mark.parametrize("lane", ["a", "b"])
-def test_author_lane_guard_denies_vision_control_reads(lane: str) -> None:
-    for payload in _VISION_CONTROL_READS:
+def test_author_lane_guard_denies_vision_private_state_reads(lane: str) -> None:
+    for payload in _VISION_PRIVATE_STATE_READS:
         result = _run_author_lane_guard(payload, lane)
         assert result.returncode == 2, (lane, payload)
         assert "blind authoring lane context is isolated" in result.stderr

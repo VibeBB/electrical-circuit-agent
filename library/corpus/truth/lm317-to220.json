@@ -1,0 +1,87 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "lm317-to220",
+  "package_family": "through_hole_inline",
+  "pins": {
+    "1": "ADJUST",
+    "2": "OUTPUT",
+    "3": "INPUT"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 4.4,
+      "nom": null,
+      "max": 4.7
+    },
+    "body_width": {
+      "min": 9.96,
+      "nom": null,
+      "max": 10.36
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 19.65
+    },
+    "pitch": {
+      "min": null,
+      "nom": 2.54,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": {
+      "min": 0.77,
+      "nom": null,
+      "max": 0.9
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -2.54,
+        0.0
+      ],
+      "size": [
+        1.7,
+        1.7
+      ],
+      "drill": 1.2,
+      "shape": "rect"
+    },
+    {
+      "number": "2",
+      "center": [
+        0.0,
+        0.0
+      ],
+      "size": [
+        1.7,
+        1.7
+      ],
+      "drill": 1.2,
+      "shape": "circle"
+    },
+    {
+      "number": "3",
+      "center": [
+        2.54,
+        0.0
+      ],
+      "size": [
+        1.7,
+        1.7
+      ],
+      "drill": 1.2,
+      "shape": "circle"
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-079d20d7-8787-45aa-b610-c2bce66031e4",
+  "notes": "KCS0003B package outline (page 38) and example board layout (page 39). Frame: KiCad top view, pin 1 top-left. Through-hole: pad 1 square 1.7 mm, pads 2-3 round 1.7 mm, 1.2 mm drill."
+}

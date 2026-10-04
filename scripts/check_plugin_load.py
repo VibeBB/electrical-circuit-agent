@@ -62,6 +62,7 @@ EXPECTED_CIRCUIT_MCP_TOOLS = {
     "circuit_model_generate",
     "circuit_model_inspect",
     "circuit_model_compare",
+    "circuit_connector_placement_check",
     "circuit_human_request_create",
     "circuit_human_request_status",
 }

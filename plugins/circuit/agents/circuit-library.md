@@ -50,7 +50,8 @@ Use `circuit_symbol_write` and `circuit_footprint_write` to create project-owned
 KiCad items. Do not hand-write KiCad S-expressions; manufacturer CAD may only be
 imported with `circuit_library_import`.
 
-Never read or search `library/corpus` or any `.vision-control` path. Do not
+Never read or search `library/corpus` or any `.vision-control` or
+`.vision-token-map` path. Do not
 inspect corpus truth, control answers, or sealed lane inputs while the blind
 authors are working. Treat `libraries/`, installed KiCad libraries, and CERN
 libraries as read-only; use project-owned copies and preserve source

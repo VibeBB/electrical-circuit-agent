@@ -82,10 +82,23 @@ impression for every image, including the control image; failed submissions
 write no answers. The fixed table prompt returns normalized rows of cell
 strings, which PartSpec checks compare with the cited pin and orderable cells.
 Pinout labels are also checked against freshly derived geometry when available.
-Control identity is stored in exclusive, hash-bound `.vision-control/` sidecars
-outside batches and authoring lanes, so later processes can re-derive reads.
-Agent pre-tool guards deny references to those sidecars as context isolation,
-not as a security boundary; see
+Set-of-Mark reads use `kind: "som_tokens"` to number words extracted by both
+mechanical lanes; answers reference those token IDs, which are resolved to the
+bound lane text. The ID-to-text map is stored in a hash-bound
+`.vision-token-map/` sidecar outside the batch and authoring lanes. Ambiguous
+glyphs are rendered at 1200 dpi in both rasterizer lanes and compared with
+same-size glyphs from the PDF's embedded font using 32×48 zero-mean
+normalized cross-correlation. A best-match margin below 0.03 is ambiguous.
+Glyph findings are kept in the same private sidecar so they do not disclose
+extracted characters to the vision reader. If the embedded font or a required
+template is unavailable, the check fails closed rather than substituting a
+system font. Impressions must contain at least 240 characters and two
+sentences.
+Control identity, token text, and glyph findings are stored in exclusive,
+hash-bound `.vision-control/` and `.vision-token-map/` sidecars outside
+batches and authoring lanes, so later processes can re-derive reads. Agent
+pre-tool guards deny references to those sidecars as context isolation, not as
+a security boundary; see
 [ADR-0028](adr/ADR-0028-tool-managed-vision-and-blind-authoring.md).
 Image reads and author commits are recorded by their post-tool hooks when
 observation logging is enabled. Configure
@@ -201,6 +214,15 @@ The sealed golden corpus lives at `library/corpus/corpus.json`; a project-local
 files and approvals are separately hash-bound. New entries start unconfirmed,
 and corpus truth is not available to authoring lanes. Score with
 `circuit_corpus_score`; a missing PDF or unconfirmed truth is not a pass.
+For isolated scoring, run `scripts/score_corpus_isolated.py` with an entry ID,
+the candidate library root, and relative PartSpec, footprint, symbol, and STEP
+paths. It uses the digest-locked `circuit-tools` image by default (or a
+preloaded `circuit-tools:ci` image supplied with `--image`), refuses to run
+inside an authoring lane, and fails if Docker or the image is unavailable.
+The container has no network, a read-only root filesystem, and read-only
+corpus, source, and candidate mounts; only its `/tmp` tmpfs and the output
+directory are writable. The JSON report binds the score to the image digest,
+manifest SHA-256, and every truth-file SHA-256.
 
 Seeded critical mutations exercise symbols, footprints, PartSpecs, and STEP
 models against the deterministic verification stack. A critical mutation is

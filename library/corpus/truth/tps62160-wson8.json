@@ -1,0 +1,165 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "tps62160-wson8",
+  "package_family": "no_lead_dual",
+  "pins": {
+    "1": "PGND",
+    "2": "VIN",
+    "3": "EN",
+    "4": "AGND",
+    "5": "FB",
+    "6": "VOS",
+    "7": "SW",
+    "8": "PG",
+    "9": "Thermal Pad"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 1.9,
+      "nom": null,
+      "max": 2.1
+    },
+    "body_width": {
+      "min": 1.9,
+      "nom": null,
+      "max": 2.1
+    },
+    "height": {
+      "min": 0.7,
+      "nom": null,
+      "max": 0.8
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.5,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": {
+      "min": 0.2,
+      "nom": null,
+      "max": 0.4
+    },
+    "lead_width": {
+      "min": 0.18,
+      "nom": null,
+      "max": 0.32
+    },
+    "exposed_pad_length": {
+      "min": 1.5,
+      "nom": 1.6,
+      "max": 1.7
+    },
+    "exposed_pad_width": {
+      "min": 0.8,
+      "nom": 0.9,
+      "max": 1.0
+    }
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -0.95,
+        -0.75
+      ],
+      "size": [
+        0.5,
+        0.25
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -0.95,
+        -0.25
+      ],
+      "size": [
+        0.5,
+        0.25
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -0.95,
+        0.25
+      ],
+      "size": [
+        0.5,
+        0.25
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        -0.95,
+        0.75
+      ],
+      "size": [
+        0.5,
+        0.25
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        0.95,
+        0.75
+      ],
+      "size": [
+        0.5,
+        0.25
+      ]
+    },
+    {
+      "number": "6",
+      "center": [
+        0.95,
+        0.25
+      ],
+      "size": [
+        0.5,
+        0.25
+      ]
+    },
+    {
+      "number": "7",
+      "center": [
+        0.95,
+        -0.25
+      ],
+      "size": [
+        0.5,
+        0.25
+      ]
+    },
+    {
+      "number": "8",
+      "center": [
+        0.95,
+        -0.75
+      ],
+      "size": [
+        0.5,
+        0.25
+      ]
+    },
+    {
+      "number": "9",
+      "center": [
+        0.0,
+        0.0
+      ],
+      "size": [
+        0.9,
+        1.6
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-2080b073-32ac-44ac-aaba-1a1a0e8203ca",
+  "notes": "DSG0008A package outline (page 39) and example board layout (page 40). Frame: KiCad top view, pin 1 top-left."
+}

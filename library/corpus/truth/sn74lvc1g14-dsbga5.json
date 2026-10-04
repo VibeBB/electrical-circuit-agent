@@ -1,0 +1,101 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "sn74lvc1g14-dsbga5",
+  "package_family": "bga",
+  "pins": {
+    "A1": "DNU",
+    "A2": "VCC",
+    "B1": "A",
+    "C1": "GND",
+    "C2": "Y"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "bottom",
+  "dimensions": {
+    "body_length": {
+      "min": 1.358,
+      "nom": null,
+      "max": 1.418
+    },
+    "body_width": {
+      "min": 0.858,
+      "nom": null,
+      "max": 0.918
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 0.5
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.5,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "A1",
+      "center": [
+        -0.25,
+        -0.5
+      ],
+      "size": [
+        0.23,
+        0.23
+      ]
+    },
+    {
+      "number": "A2",
+      "center": [
+        0.25,
+        -0.5
+      ],
+      "size": [
+        0.23,
+        0.23
+      ]
+    },
+    {
+      "number": "B1",
+      "center": [
+        -0.25,
+        0.0
+      ],
+      "size": [
+        0.23,
+        0.23
+      ]
+    },
+    {
+      "number": "C1",
+      "center": [
+        -0.25,
+        0.5
+      ],
+      "size": [
+        0.23,
+        0.23
+      ]
+    },
+    {
+      "number": "C2",
+      "center": [
+        0.25,
+        0.5
+      ],
+      "size": [
+        0.23,
+        0.23
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-f47f6eea-a136-420e-9940-24bdc1f001b2",
+  "notes": "YZP0005 package outline (page 32) and example board layout (page 33). Frame: KiCad top view, pin 1 top-left. Pinout figure is a bottom view; position B2 is unpopulated. Pads are 0.23 mm round lands."
+}

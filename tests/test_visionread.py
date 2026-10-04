@@ -11,16 +11,18 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from circuit.datasheet import DatasheetExtraction, PageExtraction
+from circuit.datasheet import DatasheetExtraction, LaneResult, PageExtraction, PdfWord
 from circuit.visionread import (
     VisionAnswerInput,
     VisionAnswerRecord,
     VisionBatch,
+    VisionGlyphFinding,
     VisionKind,
     VisionReadError,
     VisionReadItem,
     VisionReadRequest,
     _dpi,  # pyright: ignore[reportPrivateUsage]
+    _glyph_findings_for_region,  # pyright: ignore[reportPrivateUsage]
     _render_pdfium,  # pyright: ignore[reportPrivateUsage]
     _render_pdftoppm,  # pyright: ignore[reportPrivateUsage]
     _write_batch,  # pyright: ignore[reportPrivateUsage]
@@ -99,6 +101,29 @@ def _extraction(tmp_path: Path) -> Path:
         tools={},
     )
     extraction_path = tmp_path / "extraction.json"
+    extraction_path.write_text(extraction.model_dump_json(), encoding="utf-8")
+    return extraction_path
+
+
+def _extraction_with_words(tmp_path: Path, words: list[PdfWord]) -> Path:
+    extraction_path = _extraction(tmp_path)
+    extraction = DatasheetExtraction.model_validate_json(
+        extraction_path.read_text(encoding="utf-8")
+    )
+    for lane_name in ("poppler", "pdfplumber"):
+        words_path = tmp_path / f"{lane_name}-words.json"
+        words_path.write_text(
+            json.dumps([word.model_dump(mode="json") for word in words]),
+            encoding="utf-8",
+        )
+        extraction.pages[0].lanes.append(
+            LaneResult(
+                lane=lane_name,
+                status="ok",
+                words_path=words_path.name,
+                word_count=len(words),
+            )
+        )
     extraction_path.write_text(extraction.model_dump_json(), encoding="utf-8")
     return extraction_path
 
@@ -454,6 +479,312 @@ def test_table_prompt_and_normalization_are_fixed(
     assert record.status[item.read_id] == "ok"
     assert record.normalized[item.read_id] == [["Pin No.", "Name"], ["1", "SW OUT"]]
     assert record.impressions[item.read_id] == FIXTURE_IMPRESSION
+
+
+def test_som_batch_numbers_and_overlays_mechanical_tokens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuit import visionread
+
+    _stub_rasterizers(monkeypatch)
+    glyph_finding = VisionGlyphFinding(
+        code="glyph_template_unavailable",
+        character="1",
+        lane="pdftoppm",
+        message="embedded-font template is unavailable",
+    )
+
+    def unavailable_glyph_findings(*_args: object) -> list[VisionGlyphFinding]:
+        return [glyph_finding]
+
+    monkeypatch.setattr(
+        visionread,
+        "_glyph_findings_for_region",
+        unavailable_glyph_findings,
+    )
+    extraction_path = _extraction_with_words(
+        tmp_path,
+        [
+            PdfWord(text="VCC", x0=20, top=55, x1=25, bottom=60),
+            PdfWord(text="1", x0=26, top=55, x1=30, bottom=60),
+        ],
+    )
+    batch = create_read_batch(
+        extraction_path,
+        [VisionReadRequest(field="pin_table", page=1, bbox=(20, 55, 30, 65), kind="som_tokens")],
+        out_dir=tmp_path / "som",
+    )
+    item = next(entry for entry in batch.items if not entry.control)
+    image_path = (tmp_path / "som" / item.image_path).resolve()
+
+    assert [(token.token_id, token.lanes) for token in item.tokens] == [
+        ("t1", ["poppler", "pdfplumber"]),
+        ("t2", ["poppler", "pdfplumber"]),
+    ]
+    assert item.prompt.startswith("Read the marked tokens")
+    assert item.glyph_findings == [glyph_finding]
+    payload = json.loads((tmp_path / "som" / "batch.json").read_text(encoding="utf-8"))
+    assert all("text" not in token for read in payload["items"] for token in read["tokens"])
+    assert all(not read["glyph_findings"] for read in payload["items"])
+    private_state_path = (tmp_path / "som" / payload["private_state_path"]).resolve()
+    assert private_state_path.parent.name == ".vision-token-map"
+    assert not private_state_path.is_relative_to((tmp_path / "som").resolve())
+    assert (
+        hashlib.sha256(private_state_path.read_bytes()).hexdigest()
+        == payload["private_state_sha256"]
+    )
+    private_state = json.loads(private_state_path.read_text(encoding="utf-8"))
+    assert private_state["token_texts"][item.read_id] == {"t1": "VCC", "t2": "1"}
+    assert private_state["glyph_findings"][item.read_id] == [glyph_finding.model_dump(mode="json")]
+    loaded_batch = visionread._load_batch(  # pyright: ignore[reportPrivateUsage]
+        tmp_path / "som" / "batch.json"
+    )
+    loaded_item = next(entry for entry in loaded_batch.items if not entry.control)
+    assert loaded_item.glyph_findings == [glyph_finding]
+    with Image.open(image_path) as image:
+        assert image.convert("RGB").getbbox() is not None
+        assert any(pixel != (255, 255, 255) for pixel in image.convert("RGB").getdata())
+
+
+def test_som_answers_resolve_token_ids_to_bound_lane_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _som_batch(tmp_path, monkeypatch)
+    item = next(entry for entry in batch.items if not entry.control)
+    answers: dict[str, dict[str, object]] = {
+        entry.read_id: {
+            "answer": (
+                '{"pin_number":"t2","pin_name":{"token_id":"t1","text":"VCC"}}'
+                if entry.read_id == item.read_id
+                else FIXTURE_CONTROL
+            ),
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for entry in batch.items
+    }
+
+    record = record_answers(batch_path, answers)
+
+    assert record.status[item.read_id] == "ok"
+    assert record.normalized[item.read_id] == {"pin_number": "1", "pin_name": "VCC"}
+
+
+@pytest.mark.parametrize(
+    ("answer", "message"),
+    [
+        ('{"pin_name":"t99"}', "unknown Set-of-Mark token ID"),
+        ('{"pin_name":{"token_id":"t1","text":"wrong"}}', "does not match token"),
+        ("{}", "at least one token ID"),
+    ],
+)
+def test_som_answers_reject_unknown_ids_and_submitted_text_mismatches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: str,
+    message: str,
+) -> None:
+    batch_path, batch = _som_batch(tmp_path, monkeypatch)
+    item = next(entry for entry in batch.items if not entry.control)
+    answers: dict[str, dict[str, object]] = {
+        entry.read_id: {
+            "answer": answer if entry.read_id == item.read_id else FIXTURE_CONTROL,
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for entry in batch.items
+    }
+
+    with pytest.raises(VisionReadError, match=message):
+        record_answers(batch_path, answers)
+    assert not (batch_path.parent / "answers.json").exists()
+
+
+@pytest.mark.parametrize(
+    "impression",
+    [
+        "Clear. Legible.",
+        (
+            "The marks are clear, the image is legible, the border does not obscure text, the "
+            "spacing appears regular, and no unusual glyphs or unexpected line breaks can be "
+            "seen, while the surrounding table layout offers enough context for a reader to "
+            "distinguish labels and values without guessing, despite the close crop around the "
+            "edges."
+        ),
+    ],
+)
+def test_som_answers_keep_the_minimum_prose_impression_rule(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    impression: str,
+) -> None:
+    batch_path, batch = _som_batch(tmp_path, monkeypatch)
+    item = next(entry for entry in batch.items if not entry.control)
+    answers: dict[str, dict[str, object]] = {
+        entry.read_id: {
+            "answer": ('{"pin_name":"t1"}' if entry.read_id == item.read_id else FIXTURE_CONTROL),
+            "impression": impression,
+        }
+        for entry in batch.items
+    }
+
+    with pytest.raises(VisionReadError, match="read_ids"):
+        record_answers(batch_path, answers)
+    assert not (batch_path.parent / "answers.json").exists()
+
+
+def test_som_private_state_sidecar_is_hash_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_path, batch = _som_batch(tmp_path, monkeypatch)
+    item = next(entry for entry in batch.items if not entry.control)
+    payload = json.loads(batch_path.read_text(encoding="utf-8"))
+    private_state_path = (batch_path.parent / payload["private_state_path"]).resolve()
+    private_state_path.write_text(
+        private_state_path.read_text(encoding="utf-8") + " ",
+        encoding="utf-8",
+    )
+    answers: dict[str, dict[str, object]] = {
+        entry.read_id: {
+            "answer": '{"pin_name":"t1"}' if entry.read_id == item.read_id else FIXTURE_CONTROL,
+            "impression": FIXTURE_IMPRESSION,
+        }
+        for entry in batch.items
+    }
+
+    with pytest.raises(VisionReadError, match="private state sidecar SHA-256 mismatch"):
+        record_answers(batch_path, answers)
+
+
+def _som_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, VisionBatch]:
+    from circuit import visionread
+
+    _stub_rasterizers(monkeypatch)
+
+    def no_glyph_findings(*_args: object) -> list[VisionGlyphFinding]:
+        return []
+
+    monkeypatch.setattr(visionread, "_glyph_findings_for_region", no_glyph_findings)
+    extraction_path = _extraction_with_words(
+        tmp_path,
+        [
+            PdfWord(text="VCC", x0=20, top=55, x1=25, bottom=60),
+            PdfWord(text="1", x0=26, top=55, x1=30, bottom=60),
+        ],
+    )
+    batch = create_read_batch(
+        extraction_path,
+        [VisionReadRequest(field="pin_table", page=1, bbox=(20, 55, 30, 65), kind="som_tokens")],
+        out_dir=tmp_path / "som",
+    )
+    return tmp_path / "som" / "batch.json", batch
+
+
+def test_ambiguous_glyphs_without_pdf_font_data_fail_closed(
+    tmp_path: Path,
+) -> None:
+    extraction_path = _extraction_with_words(
+        tmp_path,
+        [PdfWord(text="1", x0=20, top=55, x1=25, bottom=60)],
+    )
+    extraction = DatasheetExtraction.model_validate_json(
+        extraction_path.read_text(encoding="utf-8")
+    )
+
+    findings = _glyph_findings_for_region(
+        tmp_path / "part.pdf",
+        extraction,
+        extraction_path,
+        1,
+        (20, 55, 30, 65),
+    )
+
+    assert findings
+    assert {finding.code for finding in findings} == {"glyph_template_unavailable"}
+    assert {finding.lane for finding in findings} == {"pdftoppm", "pdfium"}
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_ambiguous_glyph_matching_uses_embedded_font_templates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ambiguous: bool,
+) -> None:
+    from circuit import visionread
+
+    extraction_path = _extraction_with_words(
+        tmp_path,
+        [PdfWord(text="1", x0=24, top=55, x1=26, bottom=65)],
+    )
+    extraction = DatasheetExtraction.model_validate_json(
+        extraction_path.read_text(encoding="utf-8")
+    )
+    characters = [
+        {
+            "text": character,
+            "x0": x0,
+            "top": 55,
+            "x1": x0 + 2,
+            "bottom": 65,
+            "fontname": "EmbeddedTest",
+            "size": 10.0,
+        }
+        for character, x0 in (("1", 24), ("l", 28), ("I", 32))
+    ]
+
+    class FakeDocument:
+        def __init__(self) -> None:
+            self.pages = [SimpleNamespace(chars=characters)]
+
+        def __enter__(self) -> FakeDocument:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def open_fake_document(_path: str | Path) -> FakeDocument:
+        return FakeDocument()
+
+    def embedded_font_names(*_args: object) -> set[str]:
+        return {"EmbeddedTest"}
+
+    monkeypatch.setattr(visionread.pdfplumber, "open", open_fake_document)
+    monkeypatch.setattr(visionread, "_embedded_font_names", embedded_font_names)
+
+    def render_signature(
+        _pdf: Path,
+        _page: int,
+        _width: float,
+        _height: float,
+        character: dict[str, object],
+        _rasterizer: str,
+        _output: Path,
+    ) -> tuple[float, ...]:
+        if ambiguous:
+            return tuple(float(index < 8) for index in range(32 * 48))
+        target = {"1": 0, "l": 1, "I": 2}[str(character["text"])]
+        return tuple(float(index == target) for index in range(32 * 48))
+
+    monkeypatch.setattr(visionread, "_render_glyph_signature", render_signature)
+    findings = _glyph_findings_for_region(
+        tmp_path / "part.pdf",
+        extraction,
+        extraction_path,
+        1,
+        (20, 55, 35, 65),
+    )
+
+    assert (
+        {finding.code for finding in findings} == {"glyph_ambiguous"}
+        if ambiguous
+        else findings == []
+    )
+    if ambiguous:
+        assert {finding.lane for finding in findings} == {"pdftoppm", "pdfium"}
 
 
 def test_pin_labels_prompt_has_no_trailing_quote(

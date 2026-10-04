@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from pathlib import Path
 from uuid import UUID
@@ -22,6 +23,7 @@ from circuit.partspec import (
 
 REPO_ROOT = Path(__file__).parents[1]
 CORPUS_ROOT = REPO_ROOT / "library" / "corpus"
+_DATASHEET_SHA256_SNAPSHOT = "584ef469c312b3ec7cbf67ba94b3f8801caf303d04212e1c41e55b123af60013"
 
 
 def _reading(text: str) -> Reading:
@@ -74,18 +76,82 @@ def _partspec(pin_name: str = "VCC") -> PartSpec:
 
 def test_manifest_and_seeded_truth_files_validate() -> None:
     manifest = corpus.load_manifest(CORPUS_ROOT / "corpus.json")
-    assert [entry.id for entry in manifest.entries] == [
-        "tps62130-vqfn16",
-        "mcp1700-sot23",
-        "lm358-soic8",
-    ]
+    assert len(manifest.entries) == 40
     assert all(entry.truth_status == "unconfirmed" for entry in manifest.entries)
+    canaries: set[str] = set()
+    datasheet_hashes = [(entry.id, entry.datasheet.sha256) for entry in manifest.entries]
     for entry in manifest.entries:
+        assert len(entry.datasheet.sha256) == 64
+        assert all(character in "0123456789abcdef" for character in entry.datasheet.sha256)
         truth, digest = corpus.load_truth(CORPUS_ROOT, entry)
         assert truth.id == entry.id
         assert digest == corpus.sha256(CORPUS_ROOT / entry.truth_path)
         canary_uuid = truth.canary.removeprefix("CIRCUIT-CORPUS-CANARY-")
         assert str(UUID(canary_uuid, version=4)) == canary_uuid
+        assert truth.canary not in canaries
+        canaries.add(truth.canary)
+    snapshot = hashlib.sha256(
+        json.dumps(datasheet_hashes, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+    assert snapshot == _DATASHEET_SHA256_SNAPSHOT
+
+
+def test_tht_corpus_pads_compare_drill_and_shape() -> None:
+    manifest = corpus.load_manifest(CORPUS_ROOT / "corpus.json")
+    entry = next(item for item in manifest.entries if item.id == "lm317-to220")
+    truth, _ = corpus.load_truth(CORPUS_ROOT, entry)
+
+    def footprint_for_truth(*, mutate: bool = False) -> libitems.FootprintDef:
+        pads: list[libitems.PadDef] = []
+        for pad in truth.expected_pads:
+            drill = pad.drill
+            shape = pad.shape or "rect"
+            if mutate and pad.number == "1" and drill is not None:
+                drill += 0.02
+            if mutate and pad.number == "2":
+                shape = "rect" if shape != "rect" else "circle"
+            pads.append(
+                libitems.PadDef(
+                    number=pad.number,
+                    type="thru_hole",
+                    shape=shape,
+                    x=pad.center[0],
+                    y=pad.center[1],
+                    rotation=0,
+                    width=pad.size[0],
+                    height=pad.size[1],
+                    drill=drill,
+                    layers=["*.Cu"],
+                )
+            )
+        return libitems.FootprintDef(
+            name="",
+            attributes=[],
+            pads=pads,
+            graphics=[],
+            models=[],
+            properties={},
+        )
+
+    symbol = libitems.SymbolDef(name="", pins=[], properties={})
+    model = occt.box(0, 0, 0, 0.001, 0.001, 0.001)
+    correct = corpus.score_part(truth, _partspec(), footprint_for_truth(), symbol, model)
+    assert not {
+        finding.code
+        for finding in correct.findings
+        if finding.code in {"corpus_pad_drill_mismatch", "corpus_pad_shape_mismatch"}
+    }
+
+    incorrect = corpus.score_part(
+        truth,
+        _partspec(),
+        footprint_for_truth(mutate=True),
+        symbol,
+        model,
+    )
+    mismatch_codes = {finding.code for finding in incorrect.findings}
+    assert "corpus_pad_drill_mismatch" in mismatch_codes
+    assert "corpus_pad_shape_mismatch" in mismatch_codes
 
 
 def test_mcp1700_truth_stays_incomplete_without_datasheet_geometry() -> None:

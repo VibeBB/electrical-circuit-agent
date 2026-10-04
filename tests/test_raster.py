@@ -3,8 +3,14 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageDraw
 
-from circuit.raster import RasterizeError, rasterize
+from circuit.raster import (
+    RasterizeError,
+    glyph_signature,
+    normalized_cross_correlation,
+    rasterize,
+)
 
 
 def _stub(tmp_path: Path, name: str, body: str) -> Path:
@@ -109,3 +115,28 @@ def test_rasterize_fails_closed_on_bad_inputs(
     monkeypatch.setenv("CIRCUIT_PDFTOPPM", str(fail_stub))
     with pytest.raises(RasterizeError):
         rasterize(pdf, tmp_path / "out")
+
+
+def test_glyph_signature_binarizes_crops_and_resamples_to_fixed_grid() -> None:
+    image = Image.new("L", (48, 64), 255)
+    ImageDraw.Draw(image).rectangle((14, 12, 30, 52), outline=0, width=3)
+
+    signature = glyph_signature(image)
+
+    assert signature is not None
+    assert len(signature) == 32 * 48
+    assert normalized_cross_correlation(signature, signature) == pytest.approx(1.0)
+
+
+def test_zero_mean_ncc_ranks_matching_glyphs_and_fails_on_degenerate_inputs() -> None:
+    size = 32 * 48
+    first = tuple(float(index == 0) for index in range(size))
+    matching = first
+    different = tuple(float(index == 1) for index in range(size))
+
+    assert normalized_cross_correlation(first, matching) == pytest.approx(1.0)
+    different_score = normalized_cross_correlation(first, different)
+    assert different_score is not None
+    assert different_score < 0.01
+    assert normalized_cross_correlation(first[:-1], first) is None
+    assert normalized_cross_correlation((1.0,) * size, (1.0,) * size) is None

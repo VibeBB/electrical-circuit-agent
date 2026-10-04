@@ -70,6 +70,7 @@ EXPECTED_OPERATORS = {
     "footprint_rotate_180",
     "footprint_rotate_270",
     "footprint_pad_shift_0_1mm",
+    "footprint_pad_wrong_copper_layer",
     "footprint_pitch_scale_1_02",
     "footprint_ep_size_delta_20_percent",
     "footprint_mm_to_inch",
@@ -77,6 +78,12 @@ EXPECTED_OPERATORS = {
     "footprint_removed_pad",
     "footprint_duplicated_pad_number",
     "footprint_swapped_pad_numbers",
+    "connector_numbering_mirror",
+    "tht_drill_shrink",
+    "npth_to_pth",
+    "mounting_pad_drop",
+    "board_edge_offset_shift",
+    "mating_axis_flip",
     "partspec_min_nom_max_column_shift",
     "partspec_drawing_view_flip",
     "partspec_pin1_corner_rotation",
@@ -1003,6 +1010,7 @@ def _known_good_library_fixture(
         spec=spec,
         stub_cli=not run_export_oracle,
         record_authoring=True,
+        record_comparisons=False,
     )
     spec, _, spec_path, _, symbol_path, footprint_path = case
     exposed_pad = spec.package.exposed_pad
@@ -1156,6 +1164,7 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
         "footprint_rotate_180": ("land_geometry", "model_geometry", "orientation"),
         "footprint_rotate_270": ("land_geometry", "model_geometry", "orientation"),
         "footprint_pad_shift_0_1mm": ("land_geometry", "model_geometry"),
+        "footprint_pad_wrong_copper_layer": ("land_geometry",),
         "footprint_pitch_scale_1_02": ("land_geometry", "model_geometry"),
         "footprint_ep_size_delta_20_percent": ("land_geometry",),
         "pad_rotation_change": ("land_geometry", "model_geometry"),

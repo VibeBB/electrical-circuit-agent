@@ -4,10 +4,14 @@ from pathlib import Path
 import pytest
 
 from circuit import kicad_cli, libtestboard
-from circuit.libitems import FootprintDef, GraphicDef, PadDef
+from circuit.gerber import GerberFeature
+from circuit.libitems import FootprintDef, GraphicDef, PadDef, parse_footprint
 from circuit.libtestboard import (
     _check_pinmap,  # pyright: ignore[reportPrivateUsage]
     _check_position_file,  # pyright: ignore[reportPrivateUsage]
+    _compare_export_features,  # pyright: ignore[reportPrivateUsage]
+    _drill_expected,  # pyright: ignore[reportPrivateUsage]
+    _expected_export_feature,  # pyright: ignore[reportPrivateUsage]
     _parse_ipcd356,  # pyright: ignore[reportPrivateUsage]
     _paste_findings,  # pyright: ignore[reportPrivateUsage]
     build_test_board,
@@ -17,6 +21,8 @@ from circuit.partspec import (
     DatasheetRef,
     Dimension,
     ExposedPad,
+    LandPad,
+    LandPattern,
     OrderableVariant,
     PackageSpec,
     PartSpec,
@@ -163,6 +169,259 @@ def test_ipcd356_parser_resolves_extended_net_names(tmp_path: Path) -> None:
     record = _parse_ipcd356(output)[0]
 
     assert record[:3] == ("Exposed?Thermal?Pad", "17", "U1")
+
+
+def test_manufacturing_oracle_uses_part_spec_geometry_and_kicad_bottom_flip() -> None:
+    smd = LandPad(
+        number="1",
+        x=1.0,
+        y=2.0,
+        width=2.0,
+        height=1.0,
+        shape="rect",
+    )
+    plated = LandPad(
+        number="2",
+        x=1.0,
+        y=2.0,
+        width=1.0,
+        height=1.0,
+        shape="circle",
+        pad_type="thru_hole",
+        drill=0.6,
+    )
+    front = _expected_export_feature(smd, side="F.Cu", rotation_deg=0)
+    bottom = _expected_export_feature(smd, side="B.Cu", rotation_deg=90)
+    plated_front = _expected_export_feature(plated, side="F.Cu", rotation_deg=0)
+
+    assert (front.x, front.y, front.width, front.height) == pytest.approx((1, -2, 2, 1))
+    assert (bottom.x, bottom.y, bottom.width, bottom.height) == pytest.approx((-2, 1, 1, 2))
+    assert plated_front.area == pytest.approx(math.pi * (1.0**2 - 0.6**2) / 4)
+    assert (
+        _compare_export_features(
+            [front],
+            [GerberFeature(x=1, y=-2, width=2, height=1, area=2, shape="R")],
+            label="front copper",
+        )
+        is None
+    )
+    assert _drill_expected(
+        [plated],
+        side="B.Cu",
+        rotation_deg=90,
+        pad_type="thru_hole",
+    ) == [(-2.0, -1.0, 0.6, "2")]
+
+
+def test_board_footprint_rotates_stored_pad_angles_after_flipping(tmp_path: Path) -> None:
+    footprint_path = tmp_path / "FixtureFootprint.kicad_mod"
+    footprint_path.write_text(_footprint(), encoding="utf-8")
+
+    for side in ("F.Cu", "B.Cu"):
+        board_footprint = libtestboard._board_footprint(  # pyright: ignore[reportPrivateUsage]
+            footprint_path,
+            footprint_name="FixtureFootprint",
+            net_ids={},
+            number_to_name={},
+            rotation_deg=90,
+            side=side,
+        )
+        pad_nodes = [
+            node
+            for node in board_footprint[1:]
+            if isinstance(node, list) and node and node[0] == "pad"
+        ]
+        assert len(pad_nodes) == 2
+        for pad_node in pad_nodes:
+            pad_at = next(
+                (
+                    child
+                    for child in pad_node[1:]
+                    if isinstance(child, list) and child and child[0] == "at"
+                ),
+                None,
+            )
+            assert pad_at is not None and len(pad_at) >= 4
+            assert isinstance(pad_at[3], str)
+            assert float(pad_at[3]) == pytest.approx(90)
+
+
+def test_paste_oracle_checks_only_active_layer_and_rejects_inactive_openings() -> None:
+    pad = LandPad(
+        number="1",
+        x=0.0,
+        y=0.0,
+        width=1.0,
+        height=1.0,
+        shape="rect",
+    )
+    opening = GerberFeature(x=0.0, y=0.0, width=1.0, height=1.0, area=1.0, shape="R")
+    rules = load_rules("builtin:ipc7351b", Path("tests/data/corpus_parts"))
+
+    assert (
+        libtestboard._paste_mismatch(  # pyright: ignore[reportPrivateUsage]
+            [pad],
+            [],
+            component_side="F.Cu",
+            layer="F.Paste",
+            rotation_deg=0,
+            rules=rules,
+            exposed_numbers=set(),
+        )
+        is not None
+    )
+    assert (
+        libtestboard._paste_mismatch(  # pyright: ignore[reportPrivateUsage]
+            [pad],
+            [],
+            component_side="F.Cu",
+            layer="B.Paste",
+            rotation_deg=0,
+            rules=rules,
+            exposed_numbers=set(),
+        )
+        is None
+    )
+    assert (
+        libtestboard._paste_mismatch(  # pyright: ignore[reportPrivateUsage]
+            [pad],
+            [opening],
+            component_side="F.Cu",
+            layer="B.Paste",
+            rotation_deg=0,
+            rules=rules,
+            exposed_numbers=set(),
+        )
+        is not None
+    )
+
+
+def test_paste_oracle_allows_gerber_area_rounding_within_two_percent() -> None:
+    pad = LandPad(
+        number="1",
+        x=0.0,
+        y=0.0,
+        width=0.86,
+        height=0.86,
+        shape="roundrect",
+    )
+    expected_area = pad.width * pad.height - (4 - math.pi) * (pad.width * 0.25) ** 2
+    rules = load_rules("builtin:ipc7351b", Path("tests/data/corpus_parts"))
+
+    rounded_opening = GerberFeature(
+        x=0.0,
+        y=0.0,
+        width=0.86,
+        height=0.86,
+        area=expected_area * 1.001,
+        shape="macro",
+    )
+    oversized_opening = GerberFeature(
+        x=0.0,
+        y=0.0,
+        width=0.86,
+        height=0.86,
+        area=expected_area * 1.03,
+        shape="macro",
+    )
+
+    assert (
+        libtestboard._paste_mismatch(  # pyright: ignore[reportPrivateUsage]
+            [pad],
+            [rounded_opening],
+            component_side="F.Cu",
+            layer="F.Paste",
+            rotation_deg=0,
+            rules=rules,
+            exposed_numbers=set(),
+        )
+        is None
+    )
+    assert (
+        libtestboard._paste_mismatch(  # pyright: ignore[reportPrivateUsage]
+            [pad],
+            [oversized_opening],
+            component_side="F.Cu",
+            layer="F.Paste",
+            rotation_deg=0,
+            rules=rules,
+            exposed_numbers=set(),
+        )
+        is not None
+    )
+
+
+def test_manufacturing_drill_export_uses_kicad_separate_th_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    package = spec.package.model_copy(update={"family": "chip", "lead_length": _dimension(0.1)})
+    spec = spec.model_copy(
+        update={
+            "package": package,
+            "land_pattern": LandPattern(
+                source="datasheet",
+                dimensions={"pad_pitch": _dimension(1.0)},
+                pads=[
+                    LandPad(
+                        number="1",
+                        x=-0.5,
+                        y=0.0,
+                        width=0.8,
+                        height=1.0,
+                        shape="rect",
+                    )
+                ],
+            ),
+        }
+    )
+    footprint_path = tmp_path / "FixtureFootprint.kicad_mod"
+    footprint_path.write_text(_footprint(), encoding="utf-8")
+    footprint = parse_footprint(footprint_path)
+    calls: list[list[str]] = []
+
+    def run(args: list[str]) -> kicad_cli.CompletedRun:
+        calls.append(args)
+        return kicad_cli.CompletedRun(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(kicad_cli, "run", run)
+    libtestboard._manufacturing_export(  # pyright: ignore[reportPrivateUsage]
+        tmp_path,
+        tmp_path / "exports",
+        spec=spec,
+        footprint_path=footprint_path,
+        footprint=footprint,
+        rules=load_rules("builtin:ipc7351b", tmp_path / "rules"),
+    )
+
+    drill_commands = [args for args in calls if args[:3] == ["pcb", "export", "drill"]]
+    assert len(drill_commands) == 6
+    assert all("--excellon-separate-th" in args for args in drill_commands)
+
+
+def test_manufacturing_oracle_fails_closed_for_unsupported_part_spec(
+    tmp_path: Path,
+) -> None:
+    checks, findings, artifacts = libtestboard._manufacturing_export(  # pyright: ignore[reportPrivateUsage]
+        tmp_path,
+        tmp_path / "exports",
+        spec=_spec(),
+        footprint_path=tmp_path / "footprint.kicad_mod",
+        footprint=FootprintDef(
+            name="FixtureFootprint",
+            attributes=[],
+            pads=[],
+            graphics=[],
+            models=[],
+            properties={},
+        ),
+        rules=load_rules("builtin:ipc7351b", tmp_path / "rules"),
+    )
+
+    assert checks and not checks[0].passed
+    assert findings[0].code == "export_oracle_unparsed"
+    assert artifacts == []
 
 
 def test_part_spec_terminals_must_fit_ipcd356_readback_pads(
@@ -421,6 +680,17 @@ def test_build_test_board_runs_pinmap_readback_assembly_drc_and_erc(
     observed: dict[str, str] = {}
 
     monkeypatch.setattr(kicad_cli, "version", lambda: "KiCad 11 fixture")
+
+    def no_manufacturing_export(
+        *_args: object, **_kwargs: object
+    ) -> tuple[list[libtestboard.TestBoardCheck], list[libtestboard.TestBoardFinding], list[Path]]:
+        return [], [], []
+
+    monkeypatch.setattr(
+        libtestboard,
+        "_manufacturing_export",
+        no_manufacturing_export,
+    )
 
     def export_netlist(source: Path, output: Path) -> Path:
         schematic = source.read_text(encoding="utf-8")

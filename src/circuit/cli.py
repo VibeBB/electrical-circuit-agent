@@ -4,6 +4,7 @@ Subcommands:
   doctor       probe the tool environment (JSON verdict)
   intake       validate an intake.json against a design brief (JSON verdict)
   sch-lint     lint a .kicad_sch for readability defects (JSON verdict)
+  datasheet-revision-check  compare a PartSpec with its manufacturer source
   connectivity emit the wire-agent ConnectivitySource contract (JSON verdict)
   firmware-export  emit MCU pin connectivity for firmware-agent (JSON verdict)
   firmware-check   check a firmware-agent pin map against the circuit (JSON verdict)
@@ -32,6 +33,7 @@ from . import (
     libreview,
     netlist,
     partspec,
+    revwatch,
     sch_lint,
 )
 from .advisory import VisualChecklist
@@ -148,6 +150,26 @@ def cmd_review_record(args: argparse.Namespace) -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _fail("review-record", str(exc))
     return _emit({"verdict": PASS, "record": str(path)})
+
+
+def cmd_datasheet_revision_check(args: argparse.Namespace) -> int:
+    spec_path = Path(args.part_spec)
+    try:
+        spec = partspec.load_part_spec(spec_path)
+        result = revwatch.check_revision(
+            spec,
+            revwatch.fetch_current_revision,
+            spec_path=spec_path,
+        )
+        if args.out:
+            output = Path(args.out)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        return _fail("datasheet-revision-check", str(exc))
+    payload = result.model_dump(mode="json")
+    payload["verdict"] = FAIL if any(item.severity == "error" for item in result.findings) else PASS
+    return _emit(payload)
 
 
 def cmd_library_review(args: argparse.Namespace) -> int:
@@ -338,6 +360,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     review_record_parser.add_argument("--summary", default=None)
     review_record_parser.add_argument("--out", default=None, help="output dir (default: image dir)")
     review_record_parser.set_defaults(handler=cmd_review_record)
+
+    revision_parser = subparsers.add_parser(
+        "datasheet-revision-check",
+        help="compare a PartSpec datasheet binding with the current manufacturer source",
+    )
+    revision_parser.add_argument("--part-spec", required=True)
+    revision_parser.add_argument("--out", default=None)
+    revision_parser.set_defaults(handler=cmd_datasheet_revision_check)
 
     library_review_parser = subparsers.add_parser(
         "library-review", help="build or inspect a hash-bound library human-review packet"

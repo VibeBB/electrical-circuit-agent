@@ -25,6 +25,12 @@ deterministic gates. Supported exports are `gerbers`, `drill`, `pos`,
 `dxf`, `ipc2581`, `odb`, `gencad`, `vrml`, `glb`, and `fp_svg`
 (footprint-library directory to per-footprint SVG).
 
+Before accepting a PCB layout containing connectors, call
+`circuit_connector_placement_check` with the board and a reference-to-PartSpec
+map. A connector with an unknown mating envelope or no PartSpec fails closed;
+resolve its HumanRequest and every board-edge or mating-clearance finding before
+running DRC.
+
 A vision-capable review records each inspected image as a
 `circuit-reports/review-visual-<slug>.advisory.json` with `tool: "vision_review"`
 and `detail` `{image_path, image_sha256, model, checklist, impression,

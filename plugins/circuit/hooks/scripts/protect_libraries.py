@@ -3,7 +3,7 @@
 Only path-bearing arguments decide the design and library-write verdict:
 file bodies such as file_text/new_str may legitimately mention design suffixes
 or library paths, so payload content is not scanned for those rules.
-Vision-control and corpus references are blocked in every tool input. For the
+Vision-state and corpus references are blocked in every tool input. For the
 terminal, library writes are detected from shell-level operators rather than
 path mentions so read-only library commands remain available.
 """
@@ -71,12 +71,14 @@ def _path_values(tool_input: dict[str, Any]) -> list[str]:
     return values
 
 
-def _references_vision_control(payload: dict[str, Any]) -> bool:
+def _references_vision_state(payload: dict[str, Any]) -> bool:
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
         return False
     return any(
-        ".vision-control" in value.replace("\\", "/").casefold() for value in _strings(tool_input)
+        sidecar in value.replace("\\", "/").casefold()
+        for value in _strings(tool_input)
+        for sidecar in (".vision-control", ".vision-token-map")
     )
 
 
@@ -406,8 +408,8 @@ def main() -> int:
     if _references_corpus(payload):
         print("golden corpus is inaccessible through agent tools", file=sys.stderr)
         return 2
-    if _references_vision_control(payload):
-        print("vision control state is inaccessible through agent tools", file=sys.stderr)
+    if _references_vision_state(payload):
+        print("vision private state is inaccessible through agent tools", file=sys.stderr)
         return 2
     project = project_dir(payload)
     confidential_paths = _confidential_paths(project)

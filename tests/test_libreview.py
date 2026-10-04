@@ -3,6 +3,7 @@ import json
 import math
 import os
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 from xml.etree import ElementTree as ET
@@ -10,7 +11,7 @@ from xml.etree import ElementTree as ET
 import pytest
 from PIL import Image
 
-from circuit import libreview
+from circuit import libreview, revwatch
 from circuit.datasheet import DatasheetExtraction, PageExtraction
 from circuit.landpattern import Density, LandPatternResult
 from circuit.libitems import FootprintDef, PadDef, SymbolDef, SymPin
@@ -46,6 +47,8 @@ from circuit.partspec import (
 )
 from circuit.pinsource import PinSourceInput
 from pinout_fixtures import geometry_for_names, pinout_drawing
+
+review_internal: Any = cast(Any, libreview)
 
 
 def _reading(
@@ -188,6 +191,180 @@ def _write_event(
 
 def _expected_answers(spec: PartSpec, packet: str) -> dict[str, str]:
     return {item.question_id: item.expected for item in libreview.blind_questions(spec, packet)}
+
+
+def _install_review_trial(
+    library: Path,
+    packet: str,
+    *,
+    seed: int | None = 86,
+) -> tuple[PartSpec, libreview.ReviewTrialState, list[dict[str, Any]]]:
+    base = _spec()
+    package = base.package.model_copy(
+        update={
+            "body_length": Dimension(
+                min=3.8,
+                nom=4.0,
+                max=4.2,
+                label="length",
+                reading=_reading("3.8 to 4.2 body length"),
+            )
+        }
+    )
+    spec = base.model_copy(update={"package": package})
+    packet_dir = library / "reviews" / spec.mpn / packet
+    body_crop_path = packet_dir / "crops" / "body-length.png"
+    body_crop_path.parent.mkdir(parents=True, exist_ok=True)
+    body_crop_path.write_bytes(b"body length evidence")
+    body_crop_sha256 = hashlib.sha256(body_crop_path.read_bytes()).hexdigest()
+    crop = review_internal._CropRecord(
+        field="package.body_length",
+        page=1,
+        path="crops/body-length.png",
+        sha256=body_crop_sha256,
+        source_png_sha256="b" * 64,
+        bbox=(10, 10, 30, 20),
+        crop_bbox=(0, 0, 40, 30),
+        scale=1.0,
+    )
+    dimensions = review_internal._dimension_records(spec, {crop.field: crop}, {})
+    state = review_internal._seeded_review_trial(
+        spec,
+        packet,
+        dimensions,
+        {crop.field: crop},
+        seed=seed,
+    )
+    assert state is not None
+    repeated = review_internal._seeded_review_trial(
+        spec,
+        packet,
+        review_internal._dimension_records(spec, {crop.field: crop}, {}),
+        {crop.field: crop},
+        seed=state.seed,
+    )
+    assert repeated == state
+    review_internal._write_review_trial_state(library, state)
+    packet_questions = [
+        *libreview.blind_questions(spec, packet),
+        *state.questions,
+    ]
+    packet_dir.mkdir(parents=True, exist_ok=True)
+    manufacturer_crop_path = packet_dir / "crops" / "manufacturer.png"
+    manufacturer_crop_path.write_bytes(b"manufacturer evidence")
+    manufacturer_crop_sha256 = hashlib.sha256(manufacturer_crop_path.read_bytes()).hexdigest()
+    (packet_dir / "review.json").write_text(
+        json.dumps(
+            {
+                "artifact_kind": "circuit_library_review_packet",
+                "packet_id": packet,
+                "blind_questions": [
+                    item.model_dump(mode="json", exclude={"expected"}) for item in packet_questions
+                ],
+                "crops": [item.model_dump(mode="json") for item in (crop,)]
+                + [
+                    {
+                        "field": "manufacturer",
+                        "page": 1,
+                        "path": "crops/manufacturer.png",
+                        "sha256": manufacturer_crop_sha256,
+                    }
+                ],
+                "review_trial_state_sha256": review_internal._sha256(
+                    review_internal._review_trial_path(library, packet)
+                ),
+                "vision_review_images": [],
+                "dimensions": dimensions,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        next(item for item in dimensions if item["field"] == crop.field)[state.plants[0].column]
+        == state.plants[0].wrong_value
+    )
+    return spec, state, dimensions
+
+
+def test_review_trial_seed_is_private_and_independent_across_projects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seeds = [0xD15EA5E0ABCDEF12, 0x9182736455463728]
+
+    def next_seed(_bits: int) -> int:
+        return seeds.pop(0)
+
+    monkeypatch.setattr(review_internal.secrets, "randbits", next_seed)
+    packet = "c" * 16
+    projects = [tmp_path / "project-a" / "library", tmp_path / "project-b" / "library"]
+    states: list[libreview.ReviewTrialState] = []
+    for library in projects:
+        library.mkdir(parents=True)
+        _spec_value, state, _dimensions = _install_review_trial(library, packet, seed=None)
+        states.append(state)
+
+    first, second = states
+    assert first.packet_id == second.packet_id == packet
+    assert first.seed != second.seed
+    assert first.plants != second.plants
+    for library, state in zip(projects, states, strict=True):
+        packet_path = library / "reviews" / _spec().mpn / packet / "review.json"
+        packet_text = packet_path.read_text(encoding="utf-8")
+        assert '"seed"' not in packet_text
+        assert str(state.seed) not in packet_text
+        public_text_files = [
+            path
+            for path in packet_path.parent.rglob("*")
+            if path.is_file() and path.suffix in {".json", ".html", ".md", ".svg"}
+        ]
+        assert all(
+            str(state.seed) not in path.read_text(encoding="utf-8") for path in public_text_files
+        )
+        private_state = json.loads(
+            review_internal._review_trial_path(library, packet).read_text(encoding="utf-8")
+        )
+        assert private_state["seed"] == state.seed
+
+
+def test_review_trial_rebuild_reuses_private_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    packet = "d" * 16
+    spec, state, _dimensions = _install_review_trial(library, packet, seed=0xD15EA5E0ABCDEF12)
+    crop_path = library / "reviews" / spec.mpn / packet / "crops" / "body-length.png"
+    crop = review_internal._CropRecord(
+        field="package.body_length",
+        page=1,
+        path="crops/body-length.png",
+        sha256=hashlib.sha256(crop_path.read_bytes()).hexdigest(),
+        source_png_sha256="b" * 64,
+        bbox=(10, 10, 30, 20),
+        crop_bbox=(0, 0, 40, 30),
+        scale=1.0,
+    )
+    dimensions = review_internal._dimension_records(spec, {crop.field: crop}, {})
+
+    def unexpected_seed(_bits: int) -> int:
+        raise AssertionError("rebuilding a packet must reuse its stored seed")
+
+    monkeypatch.setattr(review_internal.secrets, "randbits", unexpected_seed)
+    reused, error = review_internal._review_trial_for_packet(
+        spec,
+        packet,
+        dimensions,
+        {crop.field: crop},
+        library,
+        library / "reviews" / spec.mpn / packet / "review.json",
+    )
+
+    assert error is None
+    assert reused == state
+    row = next(item for item in dimensions if item.get("field") == state.plants[0].field)
+    assert row[state.plants[0].column] == state.plants[0].wrong_value
 
 
 def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
@@ -996,6 +1173,47 @@ def test_review_status_approves_normalized_answers_and_rejects_corrections(
     assert status.reasons == []
 
 
+def test_datasheet_revision_change_blocks_review_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    spec = spec.model_copy(
+        update={
+            "datasheet": spec.datasheet.model_copy(
+                update={"source_url": "https://manufacturer.example/current.pdf"}
+            )
+        }
+    )
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
+    library = tmp_path / "library"
+    packet = "9" * 16
+    _write_event(
+        tmp_path,
+        library,
+        packet,
+        _message(packet, answers=_expected_answers(spec, packet)),
+    )
+    assert libreview.review_status(library, spec, packet).state == "approved"
+
+    snapshot = revwatch.DatasheetRevisionSnapshot(
+        revision="B",
+        pdf_sha256=hashlib.sha256(b"new datasheet").hexdigest(),
+        source_url="https://manufacturer.example/current.pdf",
+        retrieved_at=datetime.now(UTC),
+    )
+    result = revwatch.check_revision(
+        spec,
+        lambda _url: snapshot,
+        project_path=tmp_path,
+    )
+
+    assert result.approval_invalidated is True
+    status = libreview.review_status(library, spec, packet)
+    assert status.state == "invalid"
+    assert "datasheet_revision_changed" in status.reasons
+
+
 @pytest.mark.parametrize(
     ("source", "content", "reason"),
     [
@@ -1285,6 +1503,136 @@ def test_later_reject_overrides_approval_and_stale_packet_is_missing(
     assert libreview.review_status(library, spec, "6" * 16).state == "pending"
 
 
+def test_review_catch_trial_blocks_a_missed_approval_and_tracks_reviewer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
+    library = tmp_path / "library"
+    library.mkdir()
+    packet = "a" * 16
+    spec, state, _ = _install_review_trial(library, packet)
+    answers = _expected_answers(spec, packet)
+    answers[state.plants[0].question_id] = "yes"
+
+    _write_event(tmp_path, library, packet, _message(packet, answers=answers))
+    status = libreview.review_status(library, spec, packet)
+
+    assert status.state == "invalid"
+    assert any(item.code == "review_catch_trial_missed" for item in status.findings)
+    assert libreview.review_trial_outcomes(library) == [("Test Reviewer", False)]
+    trial_path = review_internal._review_trial_path(library, packet)
+    packet_path = library / "reviews" / spec.mpn / packet / "review.json"
+    assert trial_path.is_file()
+    assert "plants" not in json.loads(packet_path.read_text(encoding="utf-8"))
+    private_state = json.loads(trial_path.read_text(encoding="utf-8"))
+    private_state["plants"][0]["wrong_value"] += 1
+    trial_path.write_text(json.dumps(private_state), encoding="utf-8")
+    tampered_status = libreview.review_status(library, spec, packet)
+    assert tampered_status.state == "invalid"
+    assert "review_trial_state_hash_mismatch" in tampered_status.reasons
+
+
+def test_review_catch_trial_can_be_flagged_with_structured_finding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
+    library = tmp_path / "library"
+    library.mkdir()
+    packet = "b" * 16
+    spec, state, _ = _install_review_trial(library, packet)
+    answers = _expected_answers(spec, packet)
+    answers[state.plants[0].question_id] = "yes"
+    message = (
+        _message(packet, answers=answers)
+        + f"\nfinding: {state.plants[0].question_id} | displayed value differs from source"
+    )
+
+    _write_event(tmp_path, library, packet, message)
+    status = libreview.review_status(library, spec, packet)
+
+    assert status.state == "approved"
+    assert libreview.review_trial_outcomes(library) == [("Test Reviewer", True)]
+
+
+def test_reviewer_trial_outcome_uses_latest_decision_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
+    library = tmp_path / "library"
+    library.mkdir()
+    packet = "d" * 16
+    spec, state, _ = _install_review_trial(library, packet)
+    missed_answers = _expected_answers(spec, packet)
+    missed_answers[state.plants[0].question_id] = "yes"
+    missed_event = _write_event(
+        tmp_path,
+        library,
+        packet,
+        _message(packet, answers=missed_answers),
+        suffix="missed",
+    )
+    os.utime(missed_event, ns=(1_000_000_000, 1_000_000_000))
+    caught_answers = _expected_answers(spec, packet)
+    caught_answers[state.plants[0].question_id] = "no"
+    caught_event = _write_event(
+        tmp_path,
+        library,
+        packet,
+        _message(packet, answers=caught_answers),
+        suffix="caught",
+    )
+    os.utime(caught_event, ns=(2_000_000_000, 2_000_000_000))
+
+    assert libreview.review_trial_outcomes(library) == [("Test Reviewer", True)]
+
+
+def test_blink_view_alternates_same_registered_source_and_cad_frames() -> None:
+    rendered = review_internal._blink_html("crops/source.png", "overlay-cad.svg")
+
+    assert 'src="crops/source.png"' in rendered
+    assert 'src="overlay-cad.svg"' in rendered
+    assert "blink-cad" in rendered
+
+
+def test_apply_corrections_discards_matching_plant_before_updating_spec(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
+    library = tmp_path / "library"
+    library.mkdir()
+    packet = "c" * 16
+    spec, state, _ = _install_review_trial(library, packet)
+    spec_path = tmp_path / "part-spec.json"
+    spec_path.write_text(spec.model_dump_json(), encoding="utf-8")
+    plant = state.plants[0]
+    content = "\n".join(
+        [
+            f"CIRCUIT-LIBRARY-REVIEW {packet}",
+            "decision: reject",
+            "reviewer: Corrector",
+            (
+                f"correction: {plant.pointer} | {json.dumps(plant.wrong_value)} | "
+                f"{json.dumps(plant.right_value)} | planted item | page=1"
+            ),
+            'correction: /manufacturer | "Example" | "Corrected" | source correction | page=1',
+        ]
+    )
+    _write_event(tmp_path, library, packet, content)
+    decision = next(item for item in libreview.load_decisions(library, packet) if item.corrections)
+
+    result = libreview.apply_corrections(spec_path, decision)
+    corrected = libreview.load_part_spec(spec_path)
+
+    assert result.applied
+    assert result.applied_pointers == ["/manufacturer"]
+    assert corrected.manufacturer == "Corrected"
+    assert corrected.package.body_length == spec.package.body_length
+
+
 def _reject_with_correction(
     tmp_path: Path,
     library: Path,
@@ -1320,6 +1668,27 @@ def test_apply_corrections_is_validated_idempotent_and_regression_tracked(
     library = tmp_path / "library"
     library.mkdir()
     packet = "7" * 16
+    packet_dir = library / "reviews" / spec.mpn / packet
+    crop_path = packet_dir / "crops" / "source.png"
+    crop_path.parent.mkdir(parents=True)
+    crop_path.write_bytes(b"source crop")
+    crop_sha256 = hashlib.sha256(crop_path.read_bytes()).hexdigest()
+    (packet_dir / "review.json").write_text(
+        json.dumps(
+            {
+                "packet_id": packet,
+                "crops": [
+                    {
+                        "field": "manufacturer",
+                        "page": 1,
+                        "path": "crops/source.png",
+                        "sha256": crop_sha256,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     decision = _reject_with_correction(tmp_path, library, packet)
 
     first = libreview.apply_corrections(spec_path, decision)
@@ -1329,6 +1698,20 @@ def test_apply_corrections_is_validated_idempotent_and_regression_tracked(
     assert libreview.load_part_spec(spec_path).manufacturer == "Corrected"
     corpus = (library / "reviews" / "corrections.jsonl").read_text(encoding="utf-8")
     assert corpus.count('"event_sha256"') == 1
+    regressions = list((library / "regressions").glob("*.json"))
+    assert len(regressions) == 1
+    regression = libreview.ReviewRegressionCase.model_validate_json(regressions[0].read_bytes())
+    assert regression.spec_sha256
+    assert regression.pointer == "/manufacturer"
+    assert (regression.wrong_value, regression.right_value) == ("Example", "Corrected")
+    assert regression.evidence_crop_sha256 == crop_sha256
+    fixtures = libreview.export_correction_regression_fixtures(library)
+    assert len(fixtures) == 1
+    fixture = json.loads(fixtures[0].read_text(encoding="utf-8"))
+    assert fixture["artifact_kind"] == "circuit_mutation_fixture"
+    assert fixture["wrong_value"] == "Example"
+    assert fixture["right_value"] == "Corrected"
+    assert fixture["evidence_crop_sha256"] == crop_sha256
     assert libreview.correction_regressions(library, libreview.load_part_spec(spec_path)) == []
 
     reverted = libreview.load_part_spec(spec_path).model_dump(mode="json")

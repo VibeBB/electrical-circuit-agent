@@ -8,7 +8,9 @@ import html
 import json
 import math
 import os
+import random
 import re
+import secrets
 import tempfile
 from collections import Counter
 from collections.abc import Iterable, Sequence
@@ -19,7 +21,7 @@ from typing import Any, Literal, cast
 
 import pdfplumber
 from PIL import Image
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import (
     advisory,
@@ -28,7 +30,9 @@ from . import (
     datasheet,
     humanrequest,
     kicad_cli,
+    mutation,
     pinsource,
+    revwatch,
     visionread,
 )
 from . import pinout as pinout_oracle
@@ -101,6 +105,46 @@ class ReviewCorrection(BaseModel):
     page: int
 
 
+class ReviewTrialPlant(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    question_id: str
+    operator: str
+    pointer: str
+    field: str
+    column: Literal["min", "nom", "max"]
+    wrong_value: float
+    right_value: float
+    evidence_crop_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ReviewTrialState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact_kind: Literal["circuit_review_trial_state"] = "circuit_review_trial_state"
+    packet_id: str
+    seed: int
+    questions: list[BlindQuestion]
+    plants: list[ReviewTrialPlant]
+
+
+class ReviewRegressionCase(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact_kind: Literal["circuit_library_regression_case"] = "circuit_library_regression_case"
+    case_id: str = Field(pattern=r"^[0-9a-f]{24}$")
+    mpn: str = Field(min_length=1)
+    pdf_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pointer: str = Field(min_length=2)
+    field: str = Field(min_length=1)
+    wrong_value: Any
+    right_value: Any
+    evidence_crop_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    packet_id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    event_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ReviewDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -108,6 +152,7 @@ class ReviewDecision(BaseModel):
     decision: Literal["approve", "reject"] | None = None
     reviewer: str | None = None
     answers: dict[str, str]
+    findings: dict[str, str] = Field(default_factory=dict)
     corrections: list[ReviewCorrection]
     event_path: Path | None = None
     event_sha256: str | None = None
@@ -126,6 +171,7 @@ class ReviewStatus(BaseModel):
     state: Literal["approved", "rejected", "pending", "invalid"]
     reasons: list[str]
     decisions: list[ReviewDecision]
+    findings: list[ReviewFinding] = Field(default_factory=lambda: cast(list[ReviewFinding], []))
 
 
 class CorrectionResult(BaseModel):
@@ -1234,7 +1280,10 @@ def _validated_reject(decision: ReviewDecision) -> bool:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return False
     return (
-        parsed.valid and parsed.decision == "reject" and parsed.corrections == decision.corrections
+        parsed.valid
+        and parsed.decision == "reject"
+        and parsed.corrections == decision.corrections
+        and parsed.findings == decision.findings
     )
 
 
@@ -1252,6 +1301,7 @@ def _parse_decision(
     decision: Literal["approve", "reject"] | None = None
     reviewer: str | None = None
     answers: dict[str, str] = {}
+    findings: dict[str, str] = {}
     corrections: list[ReviewCorrection] = []
     for line in lines[1:]:
         value = line.strip()
@@ -1279,6 +1329,18 @@ def _parse_decision(
                     reasons.append(f"duplicate_answer:{question_id}")
                 else:
                     answers[question_id] = answer
+        elif value.startswith("finding:"):
+            match_finding = re.fullmatch(r"finding:\s*([^\s|]+)\s*\|\s*(.*?)\s*", value)
+            if match_finding is None:
+                reasons.append("finding_field_malformed")
+            else:
+                question_id, finding = match_finding.groups()
+                if not finding:
+                    reasons.append("finding_field_empty")
+                elif question_id in findings:
+                    reasons.append(f"duplicate_finding:{question_id}")
+                else:
+                    findings[question_id] = finding
         elif value.startswith("correction:"):
             try:
                 correction = _parse_correction(value)
@@ -1299,6 +1361,7 @@ def _parse_decision(
         decision=decision,
         reviewer=reviewer,
         answers=answers,
+        findings=findings,
         corrections=corrections,
         event_path=event_path,
         event_sha256=event_sha256,
@@ -1466,6 +1529,7 @@ def review_status(
     questions = blind_questions(spec, packet_id, authoring_comparison)
     packet_path = library_dir / "reviews" / _safe_field(spec.mpn) / packet_id / "review.json"
     packet_document: dict[str, object] = {}
+    persisted_questions: dict[str, dict[str, object]] = {}
     try:
         loaded_packet = json.loads(packet_path.read_text(encoding="utf-8"))
         if isinstance(loaded_packet, dict):
@@ -1478,12 +1542,32 @@ def review_status(
                         continue
                     item = cast(dict[str, object], raw_item)
                     question_id = item.get("question_id")
+                    if isinstance(question_id, str):
+                        persisted_questions[question_id] = item
                     if isinstance(question_id, str) and question_id.startswith("vision.compare_"):
                         vision_questions.append(BlindQuestion.model_validate(item))
                 packet_document = candidate_packet
                 questions.extend(vision_questions)
     except (OSError, json.JSONDecodeError, ValueError):
         packet_document = {}
+    trial_state, trial_state_error = _load_bound_review_trial_state(library_dir, packet_id)
+    planted_question_pattern = re.compile(r"^package\.[A-Za-z0-9_]+\.(?:min|nom|max)$")
+    if (
+        trial_state is None
+        and trial_state_error is None
+        and any(
+            planted_question_pattern.fullmatch(question_id) for question_id in persisted_questions
+        )
+    ):
+        trial_state_error = "review_trial_state_missing"
+    if trial_state is not None:
+        for question in trial_state.questions:
+            persisted = persisted_questions.get(question.question_id)
+            expected_persisted = question.model_dump(mode="json", exclude={"expected"})
+            if persisted != expected_persisted:
+                trial_state_error = "review_trial_packet_mismatch"
+                break
+            questions.append(question)
     decisions = load_decisions(library_dir, packet_id)
     expected = {question.question_id: question.expected for question in questions}
     valid_approvals: list[ReviewDecision] = []
@@ -1491,6 +1575,15 @@ def review_status(
     grammar_reasons: list[str] = []
     status_reasons: list[str] = []
     integrity_reasons: list[str] = []
+    trial_findings: list[ReviewFinding] = []
+    trial_question_ids: set[str] = set()
+    if trial_state is not None:
+        trial_question_ids = {question.question_id for question in trial_state.questions}
+    if trial_state_error is not None:
+        integrity_reasons.append(trial_state_error)
+    revision_blocker = revwatch.approval_blocker(library_dir, spec)
+    if revision_blocker is not None:
+        integrity_reasons.append(revision_blocker)
     for decision in decisions:
         if not decision.integrity_valid:
             integrity_reasons.extend(decision.reasons)
@@ -1509,21 +1602,67 @@ def review_status(
             if comparison_no:
                 valid_rejections.append(decision.model_copy(update={"decision": "reject"}))
                 continue
-            if decision.corrections:
+            missed_plants = (
+                [
+                    plant
+                    for plant in trial_state.plants
+                    if not _decision_catches_plant(decision, plant)
+                ]
+                if trial_state is not None
+                else []
+            )
+            for plant in missed_plants:
+                trial_findings.append(
+                    ReviewFinding(
+                        code="review_catch_trial_missed",
+                        severity="error",
+                        field=plant.field,
+                        message="approval did not flag the planted review item",
+                    )
+                )
+            trial_corrections_only = trial_state is not None and all(
+                any(
+                    correction.pointer == plant.pointer
+                    and _same_json(correction.old, plant.wrong_value)
+                    and _same_json(correction.new, plant.right_value)
+                    for plant in trial_state.plants
+                )
+                for correction in decision.corrections
+            )
+            if decision.corrections and not trial_corrections_only:
                 status_reasons.append("approval_must_not_include_corrections")
                 continue
             if set(decision.answers) != set(expected):
+                if trial_state_error is None:
+                    status_reasons.append("human_review_blind_mismatch")
+                continue
+            mismatched_answers = False
+            for question_id in expected:
+                answer = _normalise_answer(question_id, decision.answers[question_id])
+                if question_id in trial_question_ids:
+                    flagged = question_id in decision.findings or (
+                        trial_state is not None
+                        and any(
+                            plant.question_id == question_id
+                            and _decision_catches_plant(decision, plant)
+                            for plant in trial_state.plants
+                        )
+                    )
+                    if answer not in {"yes", "no"} or (answer != "no" and not flagged):
+                        mismatched_answers = True
+                        break
+                elif answer != _normalise_answer(question_id, expected[question_id]):
+                    mismatched_answers = True
+                    break
+            if mismatched_answers:
                 status_reasons.append("human_review_blind_mismatch")
                 continue
-            if any(
-                _normalise_answer(question_id, decision.answers[question_id])
-                != _normalise_answer(question_id, expected[question_id])
-                for question_id in expected
-            ):
-                status_reasons.append("human_review_blind_mismatch")
+            if missed_plants:
                 continue
             valid_approvals.append(decision)
 
+    if trial_findings and not valid_approvals:
+        status_reasons.append("review_catch_trial_missed")
     if valid_approvals:
         status_reasons.extend(_packet_vision_precheck(library_dir, packet_document, packet_id))
 
@@ -1544,6 +1683,7 @@ def review_status(
             state="approved",
             reasons=list(dict.fromkeys(grammar_reasons)),
             decisions=decisions,
+            findings=trial_findings,
         )
     if latest_rejection is not None and not blockers:
         return ReviewStatus(
@@ -1552,6 +1692,7 @@ def review_status(
             state="rejected",
             reasons=list(dict.fromkeys([*grammar_reasons, "human_review_rejected"])),
             decisions=decisions,
+            findings=trial_findings,
         )
     if blockers or grammar_reasons:
         status_reasons.extend(integrity_reasons)
@@ -1564,6 +1705,7 @@ def review_status(
             state="invalid",
             reasons=list(dict.fromkeys(status_reasons)),
             decisions=decisions,
+            findings=trial_findings,
         )
     return ReviewStatus(
         artifact_kind="circuit_library_review_status",
@@ -1571,6 +1713,7 @@ def review_status(
         state="pending",
         reasons=["human_review_missing"],
         decisions=decisions,
+        findings=trial_findings,
     )
 
 
@@ -1645,6 +1788,397 @@ def _atomic_write(path: Path, content: str) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def _review_trial_path(library_dir: Path, packet_id: str) -> Path:
+    project_root = confidential.project_root_for(library_dir)
+    return project_root / ".confidential" / "review-trials" / f"{packet_id}.json"
+
+
+def _load_review_trial_state(
+    library_dir: Path,
+    packet_id: str,
+) -> tuple[ReviewTrialState | None, str | None]:
+    path = _review_trial_path(library_dir, packet_id)
+    if not path.exists() and not path.is_symlink():
+        return None, None
+    if path.is_symlink() or not path.is_file():
+        return None, "review_trial_state_invalid"
+    try:
+        state = ReviewTrialState.model_validate_json(path.read_bytes())
+    except (OSError, ValueError):
+        return None, "review_trial_state_invalid"
+    if state.packet_id != packet_id or not state.plants:
+        return None, "review_trial_state_invalid"
+    return state, None
+
+
+def _load_bound_review_trial_state(
+    library_dir: Path,
+    packet_id: str,
+    *,
+    packet_path: Path | None = None,
+) -> tuple[ReviewTrialState | None, str | None]:
+    state, error = _load_review_trial_state(library_dir, packet_id)
+    if error is not None:
+        return None, error
+    packet_paths = (
+        [packet_path]
+        if packet_path is not None
+        else list((library_dir / "reviews").glob(f"*/{packet_id}/review.json"))
+    )
+    if not packet_paths:
+        return (None, None) if state is None else (None, "review_trial_state_hash_mismatch")
+    if len(packet_paths) != 1:
+        return None, "review_trial_state_hash_mismatch"
+    if packet_paths[0].is_symlink() or not packet_paths[0].is_file():
+        return None, "review_trial_state_hash_mismatch"
+    try:
+        packet_value = json.loads(packet_paths[0].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, "review_trial_state_hash_mismatch"
+    if not isinstance(packet_value, dict):
+        return None, "review_trial_state_hash_mismatch"
+    declared_hash = cast(dict[str, Any], packet_value).get("review_trial_state_sha256")
+    if state is None:
+        return (None, "review_trial_state_missing") if declared_hash is not None else (None, None)
+    sidecar_path = _review_trial_path(library_dir, packet_id)
+    if (
+        not isinstance(declared_hash, str)
+        or SHA256_RE.fullmatch(declared_hash) is None
+        or not sidecar_path.is_file()
+        or _sha256(sidecar_path) != declared_hash
+    ):
+        return None, "review_trial_state_hash_mismatch"
+    return state, None
+
+
+def _write_review_trial_state(library_dir: Path, state: ReviewTrialState) -> None:
+    confidential.ensure_confidential_store(confidential.project_root_for(library_dir))
+    path = _review_trial_path(library_dir, state.packet_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(state.model_dump(mode="json"), sort_keys=True, indent=2) + "\n"
+    if path.exists():
+        existing, error = _load_review_trial_state(library_dir, state.packet_id)
+        if error is not None or existing != state:
+            raise ValueError("review trial state already exists with different contents")
+        return
+    _atomic_write(path, serialized)
+
+
+def _seeded_review_trial(
+    spec: PartSpec,
+    packet_id: str,
+    dimensions: list[dict[str, Any]],
+    crops: dict[str, _CropRecord],
+    *,
+    seed: int | None = None,
+) -> ReviewTrialState | None:
+    trial_seed = secrets.randbits(64) if seed is None else seed
+    rng = random.Random(trial_seed)
+    operators = [
+        item
+        for item in mutation.MUTATION_OPERATORS
+        if item.name == "partspec_min_nom_max_column_shift"
+    ]
+    if not operators:
+        return None
+    operator = rng.choice(operators)
+    artifacts = mutation.MutationArtifacts(
+        spec=spec,
+        symbol=cast(Any, None),
+        footprint=cast(Any, None),
+        model=cast(Any, None),
+        model_path=Path(),
+    )
+    try:
+        mutated, record = operator.apply(artifacts, trial_seed)
+    except mutation.MutationError:
+        return None
+    field_name = record.params.get("field")
+    if not isinstance(field_name, str):
+        return None
+    field = f"package.{field_name}"
+    crop = crops.get(field)
+    dimension = getattr(spec.package, field_name, None)
+    mutated_dimension = getattr(mutated.spec.package, field_name, None)
+    if (
+        crop is None
+        or dimension is None
+        or mutated_dimension is None
+        or dimension.reading.page is None
+    ):
+        return None
+    changed_columns: list[Literal["min", "nom", "max"]] = [
+        column
+        for column in ("min", "nom", "max")
+        if getattr(dimension, column) != getattr(mutated_dimension, column)
+        and getattr(mutated_dimension, column) is not None
+        and getattr(dimension, column) is not None
+    ]
+    if not changed_columns:
+        return None
+    column = rng.choice(changed_columns)
+    right_value = float(getattr(dimension, column))
+    wrong_value = float(getattr(mutated_dimension, column))
+    question_id = f"{field}.{column}"
+    question = BlindQuestion(
+        question_id=question_id,
+        prompt=(
+            f"Does the cited datasheet support the displayed {column} value "
+            f"{wrong_value:g} mm for {field}?"
+        ),
+        page=dimension.reading.page,
+        bbox=dimension.reading.bbox,
+        expected="no",
+        evidence_field=field,
+    )
+    row = next((item for item in dimensions if item.get("field") == field), None)
+    if row is None:
+        return None
+    row[column] = wrong_value
+    plant = ReviewTrialPlant(
+        question_id=question_id,
+        operator=operator.name,
+        pointer=f"/{field.replace('.', '/')}/{column}",
+        field=field,
+        column=column,
+        wrong_value=wrong_value,
+        right_value=right_value,
+        evidence_crop_sha256=crop.sha256,
+    )
+    return ReviewTrialState(
+        packet_id=packet_id,
+        seed=trial_seed,
+        questions=[question],
+        plants=[plant],
+    )
+
+
+def _apply_review_trial_state(
+    spec: PartSpec,
+    state: ReviewTrialState,
+    dimensions: list[dict[str, Any]],
+    crops: dict[str, _CropRecord],
+) -> None:
+    questions = {question.question_id: question for question in state.questions}
+    for plant in state.plants:
+        field_name = plant.field.removeprefix("package.")
+        dimension = getattr(spec.package, field_name, None)
+        row = next((item for item in dimensions if item.get("field") == plant.field), None)
+        crop = crops.get(plant.field)
+        question = questions.get(plant.question_id)
+        if (
+            not field_name
+            or "." in field_name
+            or dimension is None
+            or row is None
+            or crop is None
+            or crop.sha256 != plant.evidence_crop_sha256
+            or question is None
+            or question.evidence_field != plant.field
+            or plant.question_id != f"{plant.field}.{plant.column}"
+            or getattr(dimension, plant.column) != plant.right_value
+            or plant.wrong_value == plant.right_value
+        ):
+            raise ValueError("stored review trial does not match current packet inputs")
+        row[plant.column] = plant.wrong_value
+
+
+def _review_trial_for_packet(
+    spec: PartSpec,
+    packet_id: str,
+    dimensions: list[dict[str, Any]],
+    crops: dict[str, _CropRecord],
+    library_dir: Path,
+    packet_path: Path,
+) -> tuple[ReviewTrialState | None, str | None]:
+    if packet_path.exists() or packet_path.is_symlink():
+        state, error = _load_bound_review_trial_state(
+            library_dir,
+            packet_id,
+            packet_path=packet_path,
+        )
+    else:
+        state, error = _load_review_trial_state(library_dir, packet_id)
+    if error is not None:
+        return None, error
+    if state is not None:
+        try:
+            _apply_review_trial_state(spec, state, dimensions, crops)
+        except ValueError:
+            return None, "review_trial_state_invalid"
+    else:
+        state = _seeded_review_trial(spec, packet_id, dimensions, crops)
+    if state is not None:
+        _write_review_trial_state(library_dir, state)
+    return state, None
+
+
+def _decision_catches_plant(decision: ReviewDecision, plant: ReviewTrialPlant) -> bool:
+    answer = decision.answers.get(plant.question_id, "").casefold().strip()
+    if answer == "no" or bool(decision.findings.get(plant.question_id, "").strip()):
+        return True
+    return any(
+        correction.pointer == plant.pointer
+        and _same_json(correction.old, plant.wrong_value)
+        and _same_json(correction.new, plant.right_value)
+        for correction in decision.corrections
+    )
+
+
+def review_trial_outcomes(library_dir: Path) -> list[tuple[str, bool]]:
+    """Return one latest caught/missed result per reviewer and private trial."""
+    trial_dir = _review_trial_path(library_dir, "placeholder").parent
+    if not trial_dir.is_dir():
+        return []
+    outcomes: list[tuple[str, bool]] = []
+    for path in sorted(trial_dir.glob("*.json")):
+        packet_id = path.stem
+        if PACKET_ID_RE.fullmatch(packet_id) is None:
+            continue
+        state, error = _load_bound_review_trial_state(library_dir, packet_id)
+        if error is not None or state is None:
+            continue
+        latest: dict[str, ReviewDecision] = {}
+        for decision in load_decisions(library_dir, packet_id):
+            if (
+                not decision.integrity_valid
+                or decision.reviewer is None
+                or decision.decision is None
+            ):
+                continue
+            current = latest.get(decision.reviewer)
+            if current is None or (decision.event_mtime_ns, decision.event_name) > (
+                current.event_mtime_ns,
+                current.event_name,
+            ):
+                latest[decision.reviewer] = decision
+        for reviewer, decision in sorted(latest.items()):
+            caught = all(_decision_catches_plant(decision, plant) for plant in state.plants)
+            outcomes.append((reviewer, caught))
+    return outcomes
+
+
+def _correction_field(spec: PartSpec, pointer: str) -> str | None:
+    try:
+        tokens = _pointer_tokens(pointer)
+    except ValueError:
+        return None
+    if len(tokens) >= 2 and tokens[0] == "package":
+        if tokens[1] == "exposed_pad" and len(tokens) >= 3:
+            return f"package.exposed_pad.{tokens[2]}"
+        if tokens[1] in {"drawing_id", "drawing_revision", "drawing_view", "pin1_corner"}:
+            return "package.drawing_view"
+        return f"package.{tokens[1]}"
+    if len(tokens) >= 2 and tokens[0] == "pins":
+        try:
+            index = _list_index(tokens[1], pointer)
+            return f"pins.{spec.pins[index].number}.reading"
+        except (IndexError, ValueError):
+            return None
+    if len(tokens) >= 2 and tokens[0] == "orderable":
+        try:
+            index = _list_index(tokens[1], pointer)
+        except (IndexError, ValueError):
+            return None
+        return f"orderable.{index}.row"
+    if tokens[:1] == ["pinout"]:
+        return "pinout"
+    return None
+
+
+def _correction_evidence_crop_sha256(
+    library_dir: Path,
+    packet_id: str,
+    spec: PartSpec,
+    correction: ReviewCorrection,
+) -> str | None:
+    packets = list((library_dir / "reviews").glob(f"*/{packet_id}/review.json"))
+    if len(packets) != 1:
+        return None
+    packet_path = packets[0]
+    try:
+        raw_packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw_packet, dict):
+        return None
+    crops = cast(dict[str, Any], raw_packet).get("crops")
+    if not isinstance(crops, list):
+        return None
+    field = _correction_field(spec, correction.pointer)
+    records: list[dict[str, Any]] = [
+        cast(dict[str, Any], item) for item in cast(list[object], crops) if isinstance(item, dict)
+    ]
+    exact = [
+        item
+        for item in records
+        if field is not None and item.get("field") == field and item.get("page") == correction.page
+    ]
+    candidates = exact or [item for item in records if item.get("page") == correction.page]
+    for item in candidates:
+        digest = item.get("sha256")
+        relative = item.get("path")
+        if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+            continue
+        if not isinstance(relative, str) or not relative:
+            continue
+        try:
+            unresolved_crop_path = packet_path.parent / relative
+            if unresolved_crop_path.is_symlink():
+                continue
+            crop_path = unresolved_crop_path.resolve(strict=True)
+            if (
+                not crop_path.is_relative_to(packet_path.parent.resolve())
+                or _sha256(crop_path) != digest
+            ):
+                continue
+        except OSError:
+            continue
+        return digest
+    return None
+
+
+def _regression_case_id(spec_sha256: str, pointer: str, event_sha256: str) -> str:
+    return hashlib.sha256(f"{spec_sha256}:{pointer}:{event_sha256}".encode()).hexdigest()[:24]
+
+
+def _write_regression_case(library_dir: Path, case: ReviewRegressionCase) -> None:
+    path = library_dir / "regressions" / f"{case.case_id}.json"
+    serialized = json.dumps(case.model_dump(mode="json"), sort_keys=True, indent=2) + "\n"
+    if path.exists():
+        existing = ReviewRegressionCase.model_validate_json(path.read_bytes())
+        if existing != case:
+            raise ValueError("regression case ID collides with different contents")
+        return
+    _atomic_write(path, serialized)
+
+
+def export_correction_regression_fixtures(library_dir: Path) -> list[Path]:
+    """Export correction regressions as deterministic mutation fixture records."""
+    output_dir = library_dir / "mutation-fixtures"
+    output: list[Path] = []
+    regression_dir = library_dir / "regressions"
+    if not regression_dir.is_dir():
+        return output
+    for source in sorted(regression_dir.glob("*.json")):
+        case = ReviewRegressionCase.model_validate_json(source.read_bytes())
+        path = output_dir / f"{case.case_id}.json"
+        document = {
+            "artifact_kind": "circuit_mutation_fixture",
+            "fixture_id": case.case_id,
+            "source_spec_sha256": case.spec_sha256,
+            "mpn": case.mpn,
+            "pdf_sha256": case.pdf_sha256,
+            "pointer": case.pointer,
+            "wrong_value": case.wrong_value,
+            "right_value": case.right_value,
+            "evidence_crop_sha256": case.evidence_crop_sha256,
+        }
+        _atomic_write(path, json.dumps(document, sort_keys=True, indent=2) + "\n")
+        output.append(path)
+    return output
+
+
 def apply_corrections(spec_path: Path, decision: ReviewDecision) -> CorrectionResult:
     if not _validated_reject(decision):
         return CorrectionResult(
@@ -1654,13 +2188,34 @@ def apply_corrections(spec_path: Path, decision: ReviewDecision) -> CorrectionRe
             applied_pointers=[],
             reasons=["correction_requires_valid_reject"],
         )
-    if not decision.corrections:
+    library_dir = spec_path.resolve().parent / "library"
+    trial_state, trial_state_error = _load_bound_review_trial_state(library_dir, decision.packet_id)
+    if trial_state_error is not None:
         return CorrectionResult(
             artifact_kind="circuit_library_review_correction",
             applied=False,
             packet_id=decision.packet_id,
             applied_pointers=[],
-            reasons=["no_corrections"],
+            reasons=[trial_state_error],
+        )
+    corrections = [
+        correction
+        for correction in decision.corrections
+        if trial_state is None
+        or not any(
+            correction.pointer == plant.pointer
+            and _same_json(correction.old, plant.wrong_value)
+            and _same_json(correction.new, plant.right_value)
+            for plant in trial_state.plants
+        )
+    ]
+    if not corrections:
+        return CorrectionResult(
+            artifact_kind="circuit_library_review_correction",
+            applied=False,
+            packet_id=decision.packet_id,
+            applied_pointers=[],
+            reasons=["no_part_spec_corrections"],
         )
     try:
         document = json.loads(spec_path.read_text(encoding="utf-8"))
@@ -1672,7 +2227,6 @@ def apply_corrections(spec_path: Path, decision: ReviewDecision) -> CorrectionRe
             applied_pointers=[],
             reasons=[f"spec_unreadable:{exc}"],
         )
-    library_dir = spec_path.resolve().parent / "library"
     corpus_path = library_dir / "reviews" / "corrections.jsonl"
     records: list[dict[str, Any]] = []
     if corpus_path.exists():
@@ -1711,7 +2265,7 @@ def apply_corrections(spec_path: Path, decision: ReviewDecision) -> CorrectionRe
     existing = {(str(record["event_sha256"]), str(record["pointer"])) for record in records}
     updated = copy.deepcopy(document)
     changed = False
-    for correction in decision.corrections:
+    for correction in corrections:
         try:
             current = _get_pointer(updated, correction.pointer)
         except (KeyError, IndexError, ValueError, TypeError):
@@ -1751,7 +2305,61 @@ def apply_corrections(spec_path: Path, decision: ReviewDecision) -> CorrectionRe
     spec = PartSpec.model_validate(updated)
     event_sha256 = decision.event_sha256 or ""
     additions: list[dict[str, Any]] = []
-    for correction in decision.corrections:
+    pending_corrections = [
+        correction
+        for correction in corrections
+        if (event_sha256, correction.pointer) not in existing
+    ]
+    regression_cases: list[ReviewRegressionCase] = []
+    if pending_corrections:
+        try:
+            original_spec = PartSpec.model_validate(document)
+            original_sha256 = part_spec_sha256(spec_path)
+        except (OSError, ValueError):
+            return CorrectionResult(
+                artifact_kind="circuit_library_review_correction",
+                applied=False,
+                packet_id=decision.packet_id,
+                applied_pointers=[],
+                reasons=["spec_unreadable_for_regression"],
+            )
+        for correction in pending_corrections:
+            crop_sha256 = _correction_evidence_crop_sha256(
+                library_dir,
+                decision.packet_id,
+                original_spec,
+                correction,
+            )
+            if crop_sha256 is None:
+                return CorrectionResult(
+                    artifact_kind="circuit_library_review_correction",
+                    applied=False,
+                    packet_id=decision.packet_id,
+                    applied_pointers=[],
+                    reasons=[f"correction_evidence_crop_missing:{correction.pointer}"],
+                )
+            case_id = _regression_case_id(
+                original_sha256,
+                correction.pointer,
+                event_sha256,
+            )
+            regression_cases.append(
+                ReviewRegressionCase(
+                    case_id=case_id,
+                    mpn=original_spec.mpn,
+                    pdf_sha256=original_spec.datasheet.sha256,
+                    spec_sha256=original_sha256,
+                    pointer=correction.pointer,
+                    field=_correction_field(original_spec, correction.pointer)
+                    or correction.pointer,
+                    wrong_value=correction.old,
+                    right_value=correction.new,
+                    evidence_crop_sha256=crop_sha256,
+                    packet_id=decision.packet_id,
+                    event_sha256=event_sha256,
+                )
+            )
+    for correction in corrections:
         key = (event_sha256, correction.pointer)
         if key in existing:
             continue
@@ -1769,6 +2377,8 @@ def apply_corrections(spec_path: Path, decision: ReviewDecision) -> CorrectionRe
             }
         )
         existing.add(key)
+    for case in regression_cases:
+        _write_regression_case(library_dir, case)
     if changed:
         _atomic_write(
             spec_path,
@@ -1787,21 +2397,21 @@ def apply_corrections(spec_path: Path, decision: ReviewDecision) -> CorrectionRe
         artifact_kind="circuit_library_review_correction",
         applied=True,
         packet_id=decision.packet_id,
-        applied_pointers=[item.pointer for item in decision.corrections],
+        applied_pointers=[item.pointer for item in corrections],
         reasons=[],
     )
 
 
 def correction_regressions(library_dir: Path, spec: PartSpec) -> list[ReviewFinding]:
     corpus_path = library_dir / "reviews" / "corrections.jsonl"
-    if not corpus_path.exists():
-        return []
+    records: list[Any] = []
     try:
-        records: list[Any] = [
-            json.loads(line)
-            for line in corpus_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        if corpus_path.exists():
+            records = [
+                json.loads(line)
+                for line in corpus_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
     except (OSError, json.JSONDecodeError) as exc:
         return [
             ReviewFinding(
@@ -1835,7 +2445,47 @@ def correction_regressions(library_dir: Path, spec: PartSpec) -> list[ReviewFind
                     message="current PartSpec value differs from the accepted correction",
                 )
             )
-    return findings
+    regression_dir = library_dir / "regressions"
+    if regression_dir.is_dir():
+        for path in sorted(regression_dir.glob("*.json")):
+            try:
+                case = ReviewRegressionCase.model_validate_json(path.read_bytes())
+            except (OSError, ValueError):
+                findings.append(
+                    ReviewFinding(
+                        code="correction_regressed",
+                        severity="error",
+                        field="regressions",
+                        message=f"regression case is unreadable: {path.name}",
+                    )
+                )
+                continue
+            if (
+                case.mpn.casefold() != spec.mpn.casefold()
+                or case.pdf_sha256 != spec.datasheet.sha256
+            ):
+                continue
+            try:
+                current = _get_pointer(spec.model_dump(mode="json"), case.pointer)
+            except (KeyError, IndexError, ValueError, TypeError):
+                current = object()
+            if not _same_json(current, case.right_value):
+                findings.append(
+                    ReviewFinding(
+                        code="correction_regressed",
+                        severity="error",
+                        field=case.field,
+                        message="current PartSpec value differs from the accepted regression case",
+                    )
+                )
+    deduplicated: list[ReviewFinding] = []
+    finding_keys: set[tuple[str, str]] = set()
+    for finding in findings:
+        key = (finding.code, finding.field)
+        if key not in finding_keys:
+            deduplicated.append(finding)
+            finding_keys.add(key)
+    return deduplicated
 
 
 def _safe_field(value: str) -> str:
@@ -2725,6 +3375,7 @@ def _overlay_svg(
     output_path: Path,
     *,
     geometry: _OverlayGeometry,
+    include_background: bool = True,
 ) -> None:
     with Image.open(crop_image_path) as image:
         image_width, image_height = image.size
@@ -2733,12 +3384,13 @@ def _overlay_svg(
         (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{image_width}px" '
             f'height="{image_height}px" viewBox="0 0 {image_width} {image_height}">'
-        ),
-        (
+        )
+    ]
+    if include_background:
+        parts.append(
             f'<image href="{esc(crop_image_href)}" x="0" y="0" width="{image_width}" '
             f'height="{image_height}" preserveAspectRatio="none"/>'
-        ),
-    ]
+        )
     if geometry.scale_known:
         anchor_x, anchor_y = geometry.anchor_footprint_mm or (0.0, 0.0)
         crop_anchor_x, crop_anchor_y = geometry.anchor_crop_px or (0.0, 0.0)
@@ -2774,6 +3426,25 @@ def _overlay_svg(
         parts.append("</g>")
     parts.append("</svg>")
     output_path.write_text("\n".join(parts) + "\n", encoding="utf-8")
+
+
+def _blink_html(source_href: str, cad_href: str) -> str:
+    source = html.escape(source_href, quote=True)
+    cad = html.escape(cad_href, quote=True)
+    return (
+        '<!doctype html><html><head><meta charset="utf-8"><style>'
+        "body{margin:0;background:#222;color:#fff;font:14px sans-serif}"
+        ".frame{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}"
+        ".cad{animation:blink-cad 2s steps(1,end) infinite}"
+        "@keyframes blink-cad{0%,49.99%{opacity:0}50%,100%{opacity:1}}"
+        ".caption{position:fixed;left:0;right:0;bottom:0;padding:8px;"
+        "background:#000b;text-align:center;z-index:2}"
+        "</style></head><body>"
+        f'<img class="frame source" src="{source}" alt="Datasheet evidence crop">'
+        f'<img class="frame cad" src="{cad}" alt="CAD geometry at matched scale and registration">'
+        '<div class="caption">Alternating datasheet crop and registered CAD geometry</div>'
+        "</body></html>\n"
+    )
 
 
 def _relative_path(base: Path, path: Path) -> str:
@@ -2865,6 +3536,8 @@ def _blind_html(
             else ""
         )
         + f"<h1>Blind review</h1><p>Packet {html.escape(packet_id)}</p>"
+        + "<p>To flag a specific item, add "
+        "<code>finding: &lt;question_id&gt; | &lt;reason&gt;</code> to the decision message.</p>"
         + "".join(sections)
         + "</body></html>\n"
     )
@@ -3281,6 +3954,14 @@ def _review_html(review: dict[str, Any]) -> str:
         )
     else:
         overlay_html = "<p>Land-pattern overlay or cited page crop is unavailable.</p>"
+    blink_value = review.get("overlay_blink")
+    blink = cast(dict[str, object], blink_value) if isinstance(blink_value, dict) else None
+    blink_path = blink.get("path") if blink is not None else None
+    blink_html = (
+        f'<p><a href="{escape(blink_path)}">Open matched-scale blink comparison</a></p>'
+        if isinstance(blink_path, str)
+        else "<p>Matched-scale blink comparison is unavailable.</p>"
+    )
     vision_review_images_html = (
         "".join(
             f'<figure><a href="{escape(item.get("display_path", item["path"]))}">'
@@ -3468,6 +4149,8 @@ def _review_html(review: dict[str, Any]) -> str:
         + render_items
         + "<h2>Placement overlay</h2>"
         + overlay_html
+        + "<h2>Matched-scale blink view</h2>"
+        + blink_html
         + "<h2>Footprint tuning</h2>"
         + tuning_html
         + "<h2>Rule chain</h2><table><thead><tr><th>Profile</th><th>Layer</th>"
@@ -4032,6 +4715,7 @@ def build_review_packet(
     ):
         unknowns.append("footprint_render_missing")
     overlay_record: dict[str, Any] | None = None
+    overlay_blink_record: dict[str, Any] | None = None
     land_crop_field = "land_pattern.drawing_view" if "land_pattern.drawing_view" in crops else None
     land_pattern_crop = crops.get(land_crop_field) if land_crop_field is not None else None
     if reference is not None and footprint_def is not None and land_pattern_crop is not None:
@@ -4083,6 +4767,31 @@ def build_review_packet(
                     "footprint_mm": geometry.anchor_footprint_mm,
                 },
             }
+            if geometry.scale_known:
+                cad_path = packet_dir / "overlay-cad.svg"
+                _overlay_svg(
+                    spec,
+                    footprint_def,
+                    crop_image_path,
+                    _relative_path(packet_dir, crop_image_path),
+                    cad_path,
+                    geometry=geometry,
+                    include_background=False,
+                )
+                blink_path = packet_dir / "overlay-blink.html"
+                _atomic_write(
+                    blink_path,
+                    _blink_html(
+                        _relative_path(packet_dir, crop_image_path),
+                        _relative_path(packet_dir, cad_path),
+                    ),
+                )
+                overlay_blink_record = {
+                    "path": _relative_path(packet_dir, blink_path),
+                    "sha256": _sha256(blink_path),
+                    "cad_path": _relative_path(packet_dir, cad_path),
+                    "cad_sha256": _sha256(cad_path),
+                }
         except (OSError, ValueError) as exc:
             findings.append(
                 ReviewFinding(
@@ -4104,6 +4813,25 @@ def build_review_packet(
         comparison_evidence,
     )
     dimensions = _dimension_records(spec, crops, vision_by_field)
+    trial_state, trial_state_error = _review_trial_for_packet(
+        spec,
+        current_id,
+        dimensions,
+        crops,
+        library_dir,
+        packet_dir / "review.json",
+    )
+    if trial_state_error is not None:
+        findings.append(
+            ReviewFinding(
+                code=trial_state_error,
+                severity="error",
+                field="review_trial",
+                message="stored review trial state is invalid or does not match this packet",
+            )
+        )
+    if trial_state is not None:
+        questions.extend(trial_state.questions)
     extracted_pages: list[dict[str, Any]] = (
         [
             {
@@ -4136,6 +4864,9 @@ def build_review_packet(
     artifact_hashes.update({f"render:{item['kind']}": item["sha256"] for item in renders})
     if overlay_record is not None:
         artifact_hashes["overlay"] = str(overlay_record["sha256"])
+    if overlay_blink_record is not None:
+        artifact_hashes["overlay_blink"] = str(overlay_blink_record["sha256"])
+        artifact_hashes["overlay_cad"] = str(overlay_blink_record["cad_sha256"])
     vision_review_images: list[dict[str, str]] = []
     if overlay_record is not None:
         overlay_image = _vision_review_image(
@@ -4311,6 +5042,11 @@ def build_review_packet(
             }
             for item in questions
         ],
+        "review_trial_state_sha256": (
+            _sha256(_review_trial_path(library_dir, current_id))
+            if trial_state is not None
+            else None
+        ),
         "vision_review_images": vision_review_images,
         "pin_comparisons": pin_rows,
         "pin_sources": pin_source_document,
@@ -4333,6 +5069,7 @@ def build_review_packet(
             "profiles": [item.model_dump(mode="json") for item in rules.profile_chain],
         },
         "overlay": overlay_record,
+        "overlay_blink": overlay_blink_record,
         "land_pattern_crop": (
             {
                 "path": land_pattern_crop.path,

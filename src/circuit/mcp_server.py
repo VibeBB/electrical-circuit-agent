@@ -20,7 +20,7 @@ from mcp.types import (
     ToolAnnotations,
     ToolsCapability,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from . import (
     __version__,
@@ -30,6 +30,7 @@ from . import (
     brief,
     confidential,
     connectivity,
+    connplace,
     corpus,
     datasheet,
     doctor,
@@ -53,6 +54,7 @@ from . import (
     partspec,
     raster,
     report,
+    revwatch,
     ruleprofile,
     sch_lint,
     stackup,
@@ -499,15 +501,58 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_datasheet_revision_check",
+        "Compare a PartSpec datasheet binding with the current manufacturer source",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["part_spec_path"],
+        },
+    ),
+    (
         "circuit_vision_read",
         "Create datasheet image crops for visual reading; every image must receive an answer "
         "and a multi-sentence impression describing appearance, legibility, ambiguity, and "
-        "anything surprising.",
+        "anything surprising. Use som_tokens to reference numbered mechanical word tokens.",
         {
             "type": "object",
             "properties": {
                 "extraction_path": {"type": "string"},
-                "requests": {"type": "array", "items": {"type": "object"}},
+                "requests": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "field": {"type": "string"},
+                            "page": {"type": "integer", "minimum": 1},
+                            "bbox": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 4,
+                                "maxItems": 4,
+                            },
+                            "kind": {
+                                "type": "string",
+                                "enum": [
+                                    "transcribe",
+                                    "view",
+                                    "pin1_corner",
+                                    "pin_labels",
+                                    "table",
+                                    "som_tokens",
+                                    "compare_footprint",
+                                    "compare_symbol",
+                                    "compare_model",
+                                ],
+                            },
+                        },
+                        "required": ["field", "page", "bbox", "kind"],
+                        "additionalProperties": False,
+                    },
+                },
                 "out_dir": {"type": "string"},
             },
             "required": ["extraction_path", "requests"],
@@ -668,6 +713,22 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "output_path": {"type": "string"},
             },
             "required": ["part_spec_path"],
+        },
+    ),
+    (
+        "circuit_connector_placement_check",
+        "Check connector board-edge alignment and mating clearance on a PCB",
+        {
+            "type": "object",
+            "properties": {
+                "pcb_path": {"type": "string"},
+                "part_specs": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+                "output_path": {"type": "string"},
+            },
+            "required": ["pcb_path", "part_specs"],
         },
     ),
     (
@@ -1104,6 +1165,7 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_rasterize": _anno("Rasterize", write=True),
     "circuit_datasheet_extract": _anno("Datasheet extraction", write=True),
     "circuit_datasheet_check_received": _anno("Check received datasheet", write=True),
+    "circuit_datasheet_revision_check": _anno("Datasheet revision check", write=True),
     "circuit_vision_read": _anno("Create datasheet vision reads", write=True),
     "circuit_vision_compare": _anno("Compare library art with datasheet", write=True),
     "circuit_model_generate": _anno("Generate deterministic STEP model", write=True),
@@ -1114,6 +1176,7 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_part_author_compare": _anno("Compare sealed authoring lanes", write=True),
     "circuit_part_spec_check": _anno("PartSpec check", write=True),
     "circuit_land_pattern": _anno("Land pattern", write=True),
+    "circuit_connector_placement_check": _anno("Connector placement check", write=True),
     "circuit_footprint_write": _anno("Write deterministic footprint", write=True),
     "circuit_symbol_write": _anno("Write deterministic symbol", write=True),
     "circuit_library_candidates": _anno("Library candidates", write=True),
@@ -1339,8 +1402,10 @@ def _authoring_tool(name: str, args: dict[str, Any]) -> tuple[Any, list[Path]] |
 _PART_BUILD_TOOL_NAMES = {
     "circuit_datasheet_check_received",
     "circuit_datasheet_extract",
+    "circuit_datasheet_revision_check",
     "circuit_part_spec_check",
     "circuit_land_pattern",
+    "circuit_connector_placement_check",
     "circuit_footprint_write",
     "circuit_symbol_write",
     "circuit_library_candidates",
@@ -1439,6 +1504,21 @@ def _record_writer_output(
 
 
 def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
+    if name == "circuit_datasheet_revision_check":
+        spec_path = Path(str(args["part_spec_path"]))
+        spec = partspec.load_part_spec(spec_path)
+        result = revwatch.check_revision(
+            spec,
+            revwatch.fetch_current_revision,
+            spec_path=spec_path,
+        )
+        output = _output_path(
+            spec_path,
+            _optional_string(args.get("output_path")),
+            "datasheet-revision-check",
+        )
+        output.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        return result
     if name == "circuit_datasheet_check_received":
         pdf_path = Path(str(args["pdf_path"]))
         request = humanrequest.load_request(Path(str(args["request_path"])))
@@ -1595,6 +1675,23 @@ def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
             "land-pattern",
         )
         output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        return result
+    if name == "circuit_connector_placement_check":
+        pcb_path = Path(str(args["pcb_path"]))
+        try:
+            part_specs_value = TypeAdapter(dict[str, str]).validate_python(
+                args.get("part_specs"),
+                strict=True,
+            )
+        except ValidationError as exc:
+            raise ValueError("part_specs must map footprint references to spec paths") from exc
+        part_specs = {ref: Path(path) for ref, path in part_specs_value.items()}
+        result = connplace.check_connector_placement(pcb_path, part_specs)
+        output_value = _optional_string(args.get("output_path"))
+        if output_value is not None:
+            output_path = Path(output_value)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         return result
     if name == "circuit_library_candidates":
         spec_path = Path(str(args["part_spec_path"]))

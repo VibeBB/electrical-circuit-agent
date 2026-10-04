@@ -413,6 +413,7 @@ def _footprint_text(
     silk_at: tuple[float, float] | None = None,
     model: str | None = "${TEST_3DMODEL_DIR}/fixture.step",
     pad_type_number: str | None = None,
+    pad_layers: list[str] | None = None,
 ) -> str:
     lines = [f'(footprint "{name}" (layer "F.Cu")']
     if attribute:
@@ -455,6 +456,8 @@ def _footprint_text(
             else (pad.number, pad.x, pad.y, pad.width, pad.height, 0.0)
         )
         layers = '"F.Cu" "F.Mask" "F.Paste"'
+        if pad_layers is not None:
+            layers = " ".join(f'"{layer}"' for layer in pad_layers)
         drill = ""
         pad_type = "thru_hole" if number == pad_type_number else "smd"
         if pad_type == "thru_hole":
@@ -2244,6 +2247,19 @@ def test_correct_vqfn_fixture_and_regression_mutations(
 
     pitch, _ = _vqfn_case(tmp_path / "pitch", monkeypatch, mutation="pitch_065")
     assert "pad_geometry" in _codes(pitch)
+
+
+def test_smd_pad_on_wrong_copper_layer_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report, _ = _verify(
+        tmp_path,
+        monkeypatch,
+        footprint_kwargs={"pad_layers": ["B.Cu", "F.Mask", "F.Paste"]},
+    )
+
+    assert "footprint_pad_layer_mismatch" in _codes(report)
 
 
 def test_model_geometry_rejects_mirrored_and_rotated_models(

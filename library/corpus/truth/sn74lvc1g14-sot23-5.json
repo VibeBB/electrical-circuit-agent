@@ -1,0 +1,113 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "sn74lvc1g14-sot23-5",
+  "package_family": "gullwing_dual",
+  "pins": {
+    "1": "N.C.",
+    "2": "A",
+    "3": "GND",
+    "4": "Y",
+    "5": "VCC"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 2.75,
+      "nom": null,
+      "max": 3.05
+    },
+    "body_width": {
+      "min": 1.45,
+      "nom": null,
+      "max": 1.75
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 1.45
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.95,
+      "max": null
+    },
+    "lead_span": {
+      "min": 2.6,
+      "nom": null,
+      "max": 3.0
+    },
+    "lead_length": {
+      "min": 0.3,
+      "nom": null,
+      "max": 0.6
+    },
+    "lead_width": {
+      "min": 0.3,
+      "nom": null,
+      "max": 0.5
+    },
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -1.3,
+        -0.95
+      ],
+      "size": [
+        1.1,
+        0.6
+      ]
+    },
+    {
+      "number": "2",
+      "center": [
+        -1.3,
+        0.0
+      ],
+      "size": [
+        1.1,
+        0.6
+      ]
+    },
+    {
+      "number": "3",
+      "center": [
+        -1.3,
+        0.95
+      ],
+      "size": [
+        1.1,
+        0.6
+      ]
+    },
+    {
+      "number": "4",
+      "center": [
+        1.3,
+        0.95
+      ],
+      "size": [
+        1.1,
+        0.6
+      ]
+    },
+    {
+      "number": "5",
+      "center": [
+        1.3,
+        -0.95
+      ],
+      "size": [
+        1.1,
+        0.6
+      ]
+    }
+  ],
+  "canary": "CIRCUIT-CORPUS-CANARY-234c5ab5-23d4-4b42-9814-efa9511b49e8",
+  "notes": "DBV0005A package outline (page 39) and example board layout (page 40). Frame: KiCad top view, pin 1 top-left."
+}

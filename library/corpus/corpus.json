@@ -49,6 +49,598 @@
       "confirmed_by": null,
       "confirmed_at": null,
       "notes": "SOIC D0008A package outline and example board layout on datasheet pages 54-55."
+    },
+    {
+      "id": "lmv321-sot23-5",
+      "manufacturer": "Texas Instruments",
+      "mpn": "LMV321IDBVR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/lmv321.pdf",
+        "sha256": "cd2ed363277f4006a58f83569986fd9157b7f993b813c506422336d6636b4ed3",
+        "revision": "Y (SLOS263Y)"
+      },
+      "truth_path": "truth/lmv321-sot23-5.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DBV0005A, pages 31-32. Not human-confirmed."
+    },
+    {
+      "id": "lmv321-sc70-5",
+      "manufacturer": "Texas Instruments",
+      "mpn": "LMV321IDCKR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/lmv321.pdf",
+        "sha256": "cd2ed363277f4006a58f83569986fd9157b7f993b813c506422336d6636b4ed3",
+        "revision": "Y (SLOS263Y)"
+      },
+      "truth_path": "truth/lmv321-sc70-5.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DCK0005A, pages 34-35. Not human-confirmed."
+    },
+    {
+      "id": "tlv9062-vssop8",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TLV9062IDGKR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tlv9062.pdf",
+        "sha256": "8b707789a11c350e9809ed787292705093172be3bfebc4b09466cfaa28f01312",
+        "revision": "N (SBOS839N)"
+      },
+      "truth_path": "truth/tlv9062-vssop8.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DGK0008A, pages 46-47. Not human-confirmed."
+    },
+    {
+      "id": "tlv9061-sot23-5",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TLV9061IDBVR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tlv9061.pdf",
+        "sha256": "8b707789a11c350e9809ed787292705093172be3bfebc4b09466cfaa28f01312",
+        "revision": "N (SBOS839N)"
+      },
+      "truth_path": "truth/tlv9061-sot23-5.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DBV0005A, pages 43-44. Not human-confirmed."
+    },
+    {
+      "id": "lm2903-tssop8",
+      "manufacturer": "Texas Instruments",
+      "mpn": "LM2903PWR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/lm2903.pdf",
+        "sha256": "f28830c2f4cbd9ef6a1cd6788a840fa2b92caafee366d53385f88d1cf24e9456",
+        "revision": "AH (SLCS005AH)"
+      },
+      "truth_path": "truth/lm2903-tssop8.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing PW0008A, pages 53-54. Not human-confirmed."
+    },
+    {
+      "id": "tps7a02-sot23-5",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TPS7A0233PDBVR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tps7a02.pdf",
+        "sha256": "ed213c153f1db84762558fcac2ff9752e322151a1d44672cf554988b860cebc8",
+        "revision": "C (SBVS277C)"
+      },
+      "truth_path": "truth/tps7a02-sot23-5.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DBV0005A, pages 45-46. Not human-confirmed."
+    },
+    {
+      "id": "sn74lvc1g14-sc70-5",
+      "manufacturer": "Texas Instruments",
+      "mpn": "SN74LVC1G14DCKR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/sn74lvc1g14.pdf",
+        "sha256": "d64e41f0a267e8c5f73873058561642c57e093a2b7ecb4715d7ab62f0ef31a4f",
+        "revision": "AA (SCES218AA)"
+      },
+      "truth_path": "truth/sn74lvc1g14-sc70-5.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DCK0005A, pages 36-37. Not human-confirmed."
+    },
+    {
+      "id": "sn74lvc1g14-sot23-5",
+      "manufacturer": "Texas Instruments",
+      "mpn": "SN74LVC1G14DBVR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/sn74lvc1g14.pdf",
+        "sha256": "d64e41f0a267e8c5f73873058561642c57e093a2b7ecb4715d7ab62f0ef31a4f",
+        "revision": "AA (SCES218AA)"
+      },
+      "truth_path": "truth/sn74lvc1g14-sot23-5.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DBV0005A, pages 39-40. Not human-confirmed."
+    },
+    {
+      "id": "sn74lvc1g14-sot553",
+      "manufacturer": "Texas Instruments",
+      "mpn": "SN74LVC1G14DRLR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/sn74lvc1g14.pdf",
+        "sha256": "d64e41f0a267e8c5f73873058561642c57e093a2b7ecb4715d7ab62f0ef31a4f",
+        "revision": "AA (SCES218AA)"
+      },
+      "truth_path": "truth/sn74lvc1g14-sot553.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DRL0005A, pages 25-26. Not human-confirmed."
+    },
+    {
+      "id": "sn74lvc1g14-dsbga5",
+      "manufacturer": "Texas Instruments",
+      "mpn": "SN74LVC1G14YZPR",
+      "package_family": "bga",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/sn74lvc1g14.pdf",
+        "sha256": "d64e41f0a267e8c5f73873058561642c57e093a2b7ecb4715d7ab62f0ef31a4f",
+        "revision": "AA (SCES218AA)"
+      },
+      "truth_path": "truth/sn74lvc1g14-dsbga5.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing YZP0005, pages 32-33. Not human-confirmed."
+    },
+    {
+      "id": "lm317-sot223",
+      "manufacturer": "Texas Instruments",
+      "mpn": "LM317DCYR",
+      "package_family": "gullwing_tab",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/lm317.pdf",
+        "sha256": "1646fb2e4f8cf8c2cbd93aaf22edad368571619ad062476deca8ee29f95c65d3",
+        "revision": "Z (SLVS044Z)"
+      },
+      "truth_path": "truth/lm317-sot223.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DCY0004A, pages 35-36. Not human-confirmed."
+    },
+    {
+      "id": "lm317-to220",
+      "manufacturer": "Texas Instruments",
+      "mpn": "LM317KCSE3",
+      "package_family": "through_hole_inline",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/lm317.pdf",
+        "sha256": "1646fb2e4f8cf8c2cbd93aaf22edad368571619ad062476deca8ee29f95c65d3",
+        "revision": "Z (SLVS044Z)"
+      },
+      "truth_path": "truth/lm317-to220.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing KCS0003B, pages 38-39. Not human-confirmed."
+    },
+    {
+      "id": "tl431-sot23-3",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TL431AIDBZR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tl431.pdf",
+        "sha256": "ed2e90697de4e2c553195514adf1ee59cda42863716b6ef702b8304a5b921d22",
+        "revision": "S (SLVS543S)"
+      },
+      "truth_path": "truth/tl431-sot23-3.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DBZ0003A, pages 62-63. Not human-confirmed."
+    },
+    {
+      "id": "opa2333-son8",
+      "manufacturer": "Texas Instruments",
+      "mpn": "OPA2333AIDRBR",
+      "package_family": "no_lead_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/opa2333.pdf",
+        "sha256": "df60da7154848c5706e2c7743b5d532fb9b4db97b74b88d0b62b657f73c1f1b7",
+        "revision": "E (SBOS351E)"
+      },
+      "truth_path": "truth/opa2333-son8.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DRB0008B, pages 40-41. Not human-confirmed."
+    },
+    {
+      "id": "ina219-soic8",
+      "manufacturer": "Texas Instruments",
+      "mpn": "INA219AIDR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/ina219.pdf",
+        "sha256": "58004eda854d07478e6fc6f4398c114f60a3bcf18d4877471c7c1a306d1fa1cb",
+        "revision": "G (SBOS448G)"
+      },
+      "truth_path": "truth/ina219-soic8.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing D0008A, pages 33-34. Not human-confirmed."
+    },
+    {
+      "id": "tps54302-sot23-6",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TPS54302DDCR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tps54302.pdf",
+        "sha256": "1632b388d1ba3a46c8e8f090ddfec2114c0f538cfb8364ddcda583fee3fdbdc5",
+        "revision": "C (SLVSDG6C)"
+      },
+      "truth_path": "truth/tps54302-sot23-6.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DDC0006A, pages 29-30. Not human-confirmed."
+    },
+    {
+      "id": "tps62160-wson8",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TPS62160DSGR",
+      "package_family": "no_lead_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tps62160.pdf",
+        "sha256": "abc824ca04ee985ede3a513172ccdd2a42c8e1fdcfc3af5acdbe2c1af31aaa72",
+        "revision": "E (SLVSAM2E)"
+      },
+      "truth_path": "truth/tps62160-wson8.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DSG0008A, pages 39-40. Not human-confirmed."
+    },
+    {
+      "id": "sn74hc595-tssop16",
+      "manufacturer": "Texas Instruments",
+      "mpn": "SN74HC595PWR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/sn74hc595.pdf",
+        "sha256": "f71523bbfe5c94333749001796e5406583115413bf5043663960445e45482eb6",
+        "revision": "J (SCLS041J)"
+      },
+      "truth_path": "truth/sn74hc595-tssop16.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing PW0016A, pages 37-38. Not human-confirmed."
+    },
+    {
+      "id": "sn74hc00-soic14",
+      "manufacturer": "Texas Instruments",
+      "mpn": "SN74HC00DR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/sn74hc00.pdf",
+        "sha256": "aacc4e5e60c10be7412b635c327d42413c4f68a58bf381467fec1e54bff24af0",
+        "revision": "H (SCLS181H)"
+      },
+      "truth_path": "truth/sn74hc00-soic14.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing D0014A, pages 23-24. Not human-confirmed."
+    },
+    {
+      "id": "sn74lvc245a-tssop20",
+      "manufacturer": "Texas Instruments",
+      "mpn": "SN74LVC245APWR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/sn74lvc245a.pdf",
+        "sha256": "ad3e705aef834214404d6e1e38cb00f95fdb6f0d9807a784a6f58c4d060f13a3",
+        "revision": "X (SCAS218X)"
+      },
+      "truth_path": "truth/sn74lvc245a-tssop20.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing PW0020A, pages 29-30. Not human-confirmed."
+    },
+    {
+      "id": "tca9548a-vqfn24",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TCA9548ARGER",
+      "package_family": "no_lead_quad",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tca9548a.pdf",
+        "sha256": "2137822fd7128945ea44e83f4e100a932b30964d763715eeffe217ee6080a2dc",
+        "revision": "H (SCPS207H)"
+      },
+      "truth_path": "truth/tca9548a-vqfn24.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing RGE0024C, pages 33-34. Not human-confirmed."
+    },
+    {
+      "id": "tps2113a-tssop8",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TPS2113APWR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tps2113a.pdf",
+        "sha256": "a29cac2ebea4a1042942d89b6c2735f950cbe9372c4253a76154caecc469f7b2",
+        "revision": "C (SBVS045C)"
+      },
+      "truth_path": "truth/tps2113a-tssop8.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing PW0008A, pages 24-25. Not human-confirmed."
+    },
+    {
+      "id": "lm5017-so8-powerpad",
+      "manufacturer": "Texas Instruments",
+      "mpn": "LM5017MRE/NOPB",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/lm5017.pdf",
+        "sha256": "80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1",
+        "revision": "K (SNVS783K)"
+      },
+      "truth_path": "truth/lm5017-so8-powerpad.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DDA0008B, pages 35-36. Not human-confirmed."
+    },
+    {
+      "id": "tps7a47-vqfn20",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TPS7A4700RGWR",
+      "package_family": "no_lead_quad",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tps7a47.pdf",
+        "sha256": "8ca46a9968923d2ec9a4deedacfe37220ee5159f4570009cb7c3163661c5dfe0",
+        "revision": "G (SBVS204G)"
+      },
+      "truth_path": "truth/tps7a47-vqfn20.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing RGW0020A, pages 29-30. Not human-confirmed."
+    },
+    {
+      "id": "drv8833-htssop16",
+      "manufacturer": "Texas Instruments",
+      "mpn": "DRV8833PWPR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/drv8833.pdf",
+        "sha256": "3e400e333f08f1b93ec99a2d52a6af2a864e88462cc892282208548d9e9f0de4",
+        "revision": "E (SLVSAR1E)"
+      },
+      "truth_path": "truth/drv8833-htssop16.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing PWP0016C, pages 26-27. Not human-confirmed."
+    },
+    {
+      "id": "tmp117-wson6",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TMP117AIDRVR",
+      "package_family": "no_lead_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tmp117.pdf",
+        "sha256": "afe974873c80a7a4e1d342e9044e71c6f905caf4f04c1f0ea0df5c6ba35f980e",
+        "revision": "D (SNOSD82D)"
+      },
+      "truth_path": "truth/tmp117-wson6.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DRV0006B, pages 40-41. Not human-confirmed."
+    },
+    {
+      "id": "ads1115-vssop10",
+      "manufacturer": "Texas Instruments",
+      "mpn": "ADS1115IDGSR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/ads1115.pdf",
+        "sha256": "eefff4d412ce2dcd7e659f47238edc9b2fa02e5971f2625af730502033701834",
+        "revision": "E (SBAS444E)"
+      },
+      "truth_path": "truth/ads1115-vssop10.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DGS0010A, pages 51-52. Not human-confirmed."
+    },
+    {
+      "id": "tlv1117lv-sot223",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TLV1117LV33DCYR",
+      "package_family": "gullwing_tab",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tlv1117lv.pdf",
+        "sha256": "84091b2a9521014cf80b72dca4cf6edf4dba2773d4aaec0d5716dbd1ff412bb8",
+        "revision": "C (SBVS160C)"
+      },
+      "truth_path": "truth/tlv1117lv-sot223.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DCY0004A, pages 22-23. Not human-confirmed."
+    },
+    {
+      "id": "lm1117-dpak",
+      "manufacturer": "Texas Instruments",
+      "mpn": "LM1117DT-3.3/NOPB",
+      "package_family": "gullwing_tab",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/lm1117.pdf",
+        "sha256": "c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa",
+        "revision": "Q (SNOS412Q)"
+      },
+      "truth_path": "truth/lm1117-dpak.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing NDP0003B, pages 41-42. Not human-confirmed."
+    },
+    {
+      "id": "sn65hvd230-soic8",
+      "manufacturer": "Texas Instruments",
+      "mpn": "SN65HVD230DR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/sn65hvd230.pdf",
+        "sha256": "e98fc0c59168c035d7958111924dae7e21e46ab45bdfd6400aef048299d6d716",
+        "revision": "O (SLOS346O)"
+      },
+      "truth_path": "truth/sn65hvd230-soic8.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing D0008A, pages 40-41. Not human-confirmed."
+    },
+    {
+      "id": "tps22918-sot23-6",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TPS22918DBVR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tps22918.pdf",
+        "sha256": "1b28eb58003d28b18bf919a15734056f296a499bebee2bd493a1e4358c4dfb1c",
+        "revision": "C (SLVSD76C)"
+      },
+      "truth_path": "truth/tps22918-sot23-6.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DBV0006A, pages 27-28. Not human-confirmed."
+    },
+    {
+      "id": "lp5907-sot23-5",
+      "manufacturer": "Texas Instruments",
+      "mpn": "LP5907MFX-3.3/NOPB",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/lp5907.pdf",
+        "sha256": "f5deda2f0cd6f251622fa0fbb57fd0ddff831b797f96b9a0a53ed35059e1c4ba",
+        "revision": "Q (SNVS798Q)"
+      },
+      "truth_path": "truth/lp5907-sot23-5.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DBV0005A, pages 37-38. Not human-confirmed."
+    },
+    {
+      "id": "tps560430-sot23-6",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TPS560430XDBVR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tps560430.pdf",
+        "sha256": "3c5e30aa5ce3422f804d4415232b5840db3f0f2cb527b9b7b847973e4fb1986b",
+        "revision": "B (SLVSE22B)"
+      },
+      "truth_path": "truth/tps560430-sot23-6.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DBV0006A, pages 31-32. Not human-confirmed."
+    },
+    {
+      "id": "txs0108e-tssop20",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TXS0108EPWR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/txs0108e.pdf",
+        "sha256": "a6ddbe03088d291d1a1f8012189086b4b9962d1c878a462a8393c59fe225c883",
+        "revision": "L (SCES642L)"
+      },
+      "truth_path": "truth/txs0108e-tssop20.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing PW0020A, pages 28-29. Not human-confirmed."
+    },
+    {
+      "id": "ts5a3157-sc70-6",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TS5A3157DCKR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/ts5a3157.pdf",
+        "sha256": "29d243a798f52820fce6c11e42bcc07aebf939ff8a75aaf6be523af714b512a0",
+        "revision": "D (SCDS219D)"
+      },
+      "truth_path": "truth/ts5a3157-sc70-6.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DCK0006A, pages 31-32. Not human-confirmed."
+    },
+    {
+      "id": "opa376-sc70-5",
+      "manufacturer": "Texas Instruments",
+      "mpn": "OPA376AIDCKR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/opa376.pdf",
+        "sha256": "b6680ab9e59a53ed0b8b504e5b2d87b374552e1b77cbcde4f2c3145f2bcdcabf",
+        "revision": "G (SBOS406G)"
+      },
+      "truth_path": "truth/opa376-sc70-5.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DCK0005A, pages 43-44. Not human-confirmed."
+    },
+    {
+      "id": "sn74hc14-tssop14",
+      "manufacturer": "Texas Instruments",
+      "mpn": "SN74HC14PWR",
+      "package_family": "gullwing_dual",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/sn74hc14.pdf",
+        "sha256": "0eaa0a53e41053aec950a8be0b3989dfa608583928e46544b7922e233aa4362d",
+        "revision": "L (SCLS085L)"
+      },
+      "truth_path": "truth/sn74hc14-tssop14.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing PW0014A, pages 35-36. Not human-confirmed."
     }
   ]
 }

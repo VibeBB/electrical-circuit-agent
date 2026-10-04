@@ -48,6 +48,8 @@ provide both an answer and a mandatory impression for every read, including
 the control image. Describe what the image looked like, its legibility,
 ambiguity, and anything surprising. Your overall datasheet impression must
 also state what was clear, what was ambiguous, and what you distrust.
+For `som_tokens` reads, reference the numbered token IDs in your answer and
+do not substitute guessed text for a token.
 
 Write your PartSpec only in the supplied lane-B directory, with every cited
 reading bound to its tool-managed vision read. Use pdfium-backed lane-B
