@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from . import authoring, kicad_cli, visionread
+from . import authoring, kicad_cli, occt, visionread
 from . import pinout as pinout_oracle
 from .datasheet import load_extraction
 from .klc import KlcReport, run_klc
@@ -53,6 +53,7 @@ from .lineage import (
 )
 from .model3d import GENERATOR_VERSION, GeneratedModel
 from .modeloracle import ModelExportReport, verify_model_export
+from .packageid import check_package_identity
 from .partspec import (
     Dimension,
     LandPad,
@@ -3109,6 +3110,50 @@ def verify_library_part(
         tolerance_mm,
         findings,
     )
+    if footprint is not None:
+        datasheet_path = Path(spec.datasheet.path)
+        if not datasheet_path.is_absolute():
+            datasheet_path = spec_path.resolve().parent / datasheet_path
+        try:
+            resolved_datasheet = datasheet_path.resolve(strict=True)
+        except OSError:
+            resolved_datasheet = None
+        if resolved_datasheet is not None and resolved_datasheet.is_file():
+            identity_model: occt.Shape | None = None
+            for model_ref in footprint.models:
+                model_value = model_ref.path
+                expansion_root = library_dir.parent if library_dir is not None else None
+                model_value = model_value.replace("${KIPRJMOD}", str(expansion_root or ""))
+                model_value = model_value.replace("$KIPRJMOD", str(expansion_root or ""))
+                expanded_model = os.path.expandvars(model_value)
+                if "$" in expanded_model or "${" in expanded_model:
+                    continue
+                model_candidate = Path(expanded_model)
+                if not model_candidate.is_absolute():
+                    model_candidate = footprint_path.parent / model_candidate
+                try:
+                    resolved_model = model_candidate.resolve(strict=True)
+                    identity_model = occt.read_step(resolved_model)
+                    break
+                except Exception:
+                    continue
+            try:
+                findings.extend(
+                    check_package_identity(
+                        spec,
+                        footprint,
+                        identity_model,
+                        pdf_path=resolved_datasheet,
+                    )
+                )
+            except Exception as exc:
+                _finding(
+                    findings,
+                    "package_identity_verification_unavailable",
+                    "error",
+                    "datasheet",
+                    f"package identity verification failed closed: {exc}",
+                )
 
     if library_dir is not None:
         _check_provenance_item(

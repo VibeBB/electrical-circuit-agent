@@ -316,8 +316,8 @@ def test_real_mutation_matrix_passes_in_tools_image(
     }
     assert result.returncode == (0 if report["passed"] else 1), result.stderr + result.stdout
     assert report["baseline_findings"].count("pin_source_single") == 1
-    assert report["passed"] is False
-    assert report["single_oracle"] == ["partspec_sibling_package_mpn"]
+    assert report["passed"] is True
+    assert report["single_oracle"] == []
     assert report["undetected"] == []
     assert report["excluded_vision_findings"] > 0
     assert report["export_oracle_run"] is True
@@ -338,5 +338,11 @@ def test_real_mutation_matrix_passes_in_tools_image(
         for outcome in report["outcomes"]
         if outcome["mutation"]["operator"] == "partspec_sibling_package_mpn"
     )
-    assert sibling["counting_family_count"] == 1
+    assert sibling["counting_family_count"] >= 2
     assert set(sibling["families"]).intersection({"vision", "integrity"}) == {"integrity"}
+    sibling_variant = next(
+        outcome
+        for outcome in report["outcomes"]
+        if outcome["mutation"]["operator"] == "partspec_sibling_package_variant"
+    )
+    assert sibling_variant["counting_family_count"] >= 2

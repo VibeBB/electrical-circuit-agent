@@ -6,11 +6,12 @@ import re
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 
-from circuit import datasheet, kicad_cli, libverify, occt
+from circuit import datasheet, kicad_cli, libverify, occt, packageid
 from circuit.advisory import build_review_record
 from circuit.datasheet import load_extraction
 from circuit.libitems import FootprintDef, PadDef, SymbolDef, SymPin, parse_symbol
@@ -54,6 +55,7 @@ FINDING_MODULES = (
     "model3d",
     "ruleprofile",
     "libtestboard",
+    "packageid",
 )
 EXPECTED_OPERATORS = {
     "symbol_adjacent_pin_swap",
@@ -77,6 +79,7 @@ EXPECTED_OPERATORS = {
     "partspec_drawing_view_flip",
     "partspec_pin1_corner_rotation",
     "partspec_sibling_package_mpn",
+    "partspec_sibling_package_variant",
     "model_mirror_x",
     "model_rotate_90",
     "model_rotate_180",
@@ -103,6 +106,7 @@ EXPECTED_INTEGRITY_CODES = {
     "corpus_truth_unconfirmed",
     "datasheet_hash_mismatch",
     "datasheet_sha_mismatch",
+    "package_identity_pdf_hash_mismatch",
     "evidence_sha_mismatch",
     "extraction_stale",
     "lineage_base",
@@ -374,7 +378,8 @@ def _synthetic_datasheet_pdf(
     ]
     orderable_rows = [
         ["MPN", "Package", "Pins"],
-        [spec.mpn, spec.package.drawing_id, str(spec.package.pin_count)],
+        [spec.mpn, "RGT", str(spec.package.pin_count)],
+        ["TESTSOIC8", "SOIC", "8"],
     ]
     commands = [
         *_table_commands(pin_rows, (20, 65, 150), 760, 15),
@@ -423,9 +428,13 @@ def _synthetic_datasheet_pdf(
             )
     pdf_path = _pdf(
         tmp_path / "synthetic-datasheet.pdf",
-        [([], 0)],
+        [
+            ([], 0),
+            (["PACKAGE OUTLINE", "RGT0016C", "2.9 3.1 mm [0.114 0.122]"], 0),
+            (["PACKAGE DIMENSIONS", "SOIC8", "5.0 5.2 mm"], 0),
+        ],
         page_size=(1500, 1300),
-        extra_commands=[commands],
+        extra_commands=[commands, [], []],
     )
     extraction_dir = tmp_path / "datasheet-extraction"
     extraction = datasheet.extract_datasheet(pdf_path, extraction_dir, dpi=72)
@@ -568,12 +577,12 @@ def _synthetic_datasheet_pdf(
     orderable = spec.orderable[0].model_copy(
         update={
             "mpn": spec.mpn,
-            "package_designator": spec.package.drawing_id,
+            "package_designator": "RGT",
             "row": CellRef(table=orderable_table_index, row=1, col=0),
             "reading": spec.orderable[0].reading.model_copy(
                 update={
                     "bbox": (265.0, 540.0, 395.0, 580.0),
-                    "vision": (f"{spec.mpn} {spec.package.drawing_id} {spec.package.pin_count}"),
+                    "vision": f"{spec.mpn} RGT {spec.package.pin_count}",
                     "vision_record": "datasheet-review.advisory.json",
                 }
             ),
@@ -620,6 +629,116 @@ def _synthetic_datasheet_pdf(
     return spec, extraction_path
 
 
+def test_package_identity_resolves_orderable_row_and_sibling_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, _ = _synthetic_datasheet_pdf(tmp_path, monkeypatch)
+    pdf_path = Path(spec.datasheet.path)
+
+    identity, findings = packageid.resolve_package_identity(pdf_path, spec.mpn)
+
+    assert findings == []
+    assert identity is not None
+    assert identity.row_pages == [1]
+    assert identity.designator == "RGT"
+    assert identity.pin_count_candidates == [16]
+    assert identity.drawing_page == 2
+    assert identity.drawing_id == "RGT0016C"
+    assert (2.9, 3.1) in identity.body_ranges_mm
+    assert (0.114, 0.122) not in identity.body_ranges_mm
+    assert packageid.sibling_package_mpn(pdf_path, spec.mpn) == "TESTSOIC8"
+
+
+def test_package_identity_schema_rejects_extra_fields() -> None:
+    with pytest.raises(ValidationError):
+        packageid.PackageIdentity.model_validate(
+            {
+                "mpn": "ABC123",
+                "row_pages": [1],
+                "designator": "RGT",
+                "pin_count_candidates": [16],
+                "drawing_page": 2,
+                "drawing_id": "RGT0016C",
+                "body_ranges_mm": [(2.9, 3.1)],
+                "unexpected": True,
+            }
+        )
+
+
+def test_package_identity_accepts_both_thermal_pad_count_conventions() -> None:
+    private_api: Any = packageid
+
+    assert private_api._pin_count_matches(17, [16], thermal_pad=True)
+    assert private_api._pin_count_matches(16, [17], thermal_pad=True)
+    assert not private_api._pin_count_matches(16, [17], thermal_pad=False)
+
+
+def test_package_identity_fails_closed_without_outline_or_on_lane_disagreement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    no_outline = _pdf(tmp_path / "no-outline.pdf", [(["ABC123", "RGT", "16"], 0)])
+    _, findings = packageid.resolve_package_identity(no_outline, "ABC123")
+    assert [item.code for item in findings] == ["package_identity_drawing_unresolved"]
+    _, findings = packageid.resolve_package_identity(no_outline, "MISSING")
+    assert [item.code for item in findings] == ["package_identity_mpn_unresolved"]
+
+    spec, _ = _synthetic_datasheet_pdf(tmp_path, monkeypatch)
+
+    def empty_lane(_page: object) -> list[datasheet.PdfWord]:
+        return []
+
+    private_datasheet: Any = datasheet
+    monkeypatch.setattr(private_datasheet, "_pdfplumber_words", empty_lane)
+    _, findings = packageid.resolve_package_identity(Path(spec.datasheet.path), spec.mpn)
+    assert [item.code for item in findings] == ["package_identity_lane_mismatch"]
+
+
+def test_package_identity_reverifies_pdf_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, _ = _synthetic_datasheet_pdf(tmp_path, monkeypatch)
+    mismatched = spec.model_copy(
+        update={"datasheet": spec.datasheet.model_copy(update={"sha256": "0" * 64})}
+    )
+    footprint = FootprintDef(
+        name="fixture",
+        attributes=[],
+        pads=[],
+        graphics=[],
+        models=[],
+        properties={},
+    )
+
+    findings = packageid.check_package_identity(
+        mismatched,
+        footprint,
+        None,
+        pdf_path=Path(spec.datasheet.path),
+    )
+
+    assert [item.code for item in findings] == ["package_identity_pdf_hash_mismatch"]
+
+
+def test_package_identity_accepts_the_verified_fixture_geometry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _known_good_library_fixture(tmp_path, monkeypatch)
+    pdf_path = Path(fixture.artifacts.spec.datasheet.path)
+
+    findings = packageid.check_package_identity(
+        fixture.artifacts.spec,
+        fixture.artifacts.footprint,
+        fixture.artifacts.model,
+        pdf_path=pdf_path,
+    )
+
+    assert findings == []
+
+
 def _known_good_library_fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -661,10 +780,20 @@ def _known_good_library_fixture(
     )
 
 
+def _string_constant(node: ast.AST) -> str | None:
+    if not isinstance(node, ast.Constant):
+        return None
+    value: object = node.value
+    return value if isinstance(value, str) else None
+
+
 def _finding_codes(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     codes: set[str] = set()
     for node in ast.walk(tree):
+        constant = _string_constant(node)
+        if constant is not None and re.fullmatch(r"package_identity_[a-z0-9_]+", constant):
+            codes.add(constant)
         if not isinstance(node, ast.Call):
             continue
         function_name = (
@@ -675,19 +804,17 @@ def _finding_codes(path: Path) -> set[str]:
             else ""
         )
         for keyword in node.keywords:
-            if (
-                keyword.arg == "code"
-                and isinstance(keyword.value, ast.Constant)
-                and isinstance(keyword.value.value, str)
-            ):
-                codes.add(keyword.value.value)
-        if (
-            function_name == "_finding"
-            and len(node.args) > 1
-            and isinstance(node.args[1], ast.Constant)
-            and isinstance(node.args[1].value, str)
-        ):
-            codes.add(node.args[1].value)
+            constant = _string_constant(keyword.value)
+            if keyword.arg == "code" and constant is not None:
+                codes.add(constant)
+        code_index = 0 if path.stem == "packageid" else 1
+        constant = (
+            _string_constant(node.args[code_index])
+            if function_name == "_finding" and len(node.args) > code_index
+            else None
+        )
+        if constant is not None:
+            codes.add(constant)
     return codes
 
 
@@ -777,8 +904,8 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
         "footprint_pad_shift_0_1mm": ("land_geometry", "model_geometry"),
         "footprint_pitch_scale_1_02": ("land_geometry", "model_geometry"),
         "footprint_ep_size_delta_20_percent": ("land_geometry",),
-        "footprint_mm_to_inch": ("land_geometry", "model_geometry"),
-        "footprint_inch_to_mm": ("land_geometry", "model_geometry"),
+        "footprint_mm_to_inch": ("land_geometry", "model_geometry", "package_identity"),
+        "footprint_inch_to_mm": ("land_geometry", "model_geometry", "package_identity"),
         "footprint_removed_pad": (
             "land_geometry",
             "model_geometry",
@@ -799,12 +926,13 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
         ),
         "partspec_drawing_view_flip": ("evidence", "orientation"),
         "partspec_pin1_corner_rotation": ("evidence", "model_geometry", "orientation"),
-        "partspec_sibling_package_mpn": ("evidence",),
+        "partspec_sibling_package_mpn": ("evidence", "package_identity"),
+        "partspec_sibling_package_variant": ("evidence", "package_identity"),
         "model_mirror_x": ("model_geometry",),
         "model_rotate_90": ("model_geometry",),
         "model_rotate_180": ("model_geometry",),
         "model_offset_0_1mm": ("model_geometry",),
-        "model_scale_25_4": ("model_geometry",),
+        "model_scale_25_4": ("model_geometry", "package_identity"),
         "model_removed_pin1_marker": ("model_geometry",),
     }
     actual_counting_families = {
@@ -827,6 +955,7 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
         "partspec_drawing_view_flip",
         "partspec_pin1_corner_rotation",
         "partspec_sibling_package_mpn",
+        "partspec_sibling_package_variant",
     } <= {
         outcome.mutation.operator for outcome in first.outcomes if "integrity" in outcome.families
     }
@@ -854,18 +983,22 @@ def test_partspec_mutations_rederive_pdf_evidence_against_unchanged_artifacts(
         "partspec_drawing_view_flip",
         "partspec_pin1_corner_rotation",
         "partspec_sibling_package_mpn",
+        "partspec_sibling_package_variant",
     ):
         mutated, _ = operators[name].apply(fixture.artifacts, fixture.seed)
         assert mutated.footprint == fixture.artifacts.footprint
         assert mutated.model_path == fixture.artifacts.model_path
+        if name == "partspec_sibling_package_variant":
+            assert mutated.spec.mpn == "TESTSOIC8"
+            assert mutated.spec.orderable[0].mpn == "TESTSOIC8"
         findings = list(fixture.verify(mutated))
         assert any(
             finding.severity == "error" and family_for_code(finding.code) == "evidence"
             for finding in findings
         )
 
-    assert len(staged_specs) == 4
-    assert len({path.parent for path in staged_specs}) == 4
+    assert len(staged_specs) == 5
+    assert len({path.parent for path in staged_specs}) == 5
 
 
 def test_symbol_mutations_are_serialized_and_reach_real_verifier(

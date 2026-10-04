@@ -37,8 +37,8 @@ metamorphic relation without inventing unsupported state.
   stack.
 - A critical mutation must be detected by at least two independent counting
   oracle families: evidence, pin bijection, orientation, land geometry, export,
-  model geometry, or rule profile.
-- The report's `counting_family_count` includes only those seven families.
+  model geometry, rule profile, or package identity.
+- The report's `counting_family_count` includes only those eight families.
 - Report vision and integrity findings separately, but never count either
   family toward the two-family minimum. Integrity findings identify changed or
   missing hashes, seals, manifests, approvals, lineage, or stale records; they
@@ -50,6 +50,17 @@ metamorphic relation without inventing unsupported state.
   footprint changes, verify against a model generated from the correct
   PartSpec. Model geometry and KiCad STEP export are independent families
   wherever each applies.
+
+### Independent package identity
+
+The `package_identity` family freshly extracts the current datasheet PDF
+through Poppler and pdfplumber, resolves the exact orderable MPN row and
+package drawing identifier, then checks the library footprint and model
+directly against that drawing's pin-count and body-size evidence. It does not
+use PartSpec cell bindings, dimensions, or pin lists. Its source and comparison
+path are therefore independent of the PartSpec evidence family; seals and
+hashes only establish input integrity and never count as package-identity
+evidence.
 
 ### Metamorphic relations
 
