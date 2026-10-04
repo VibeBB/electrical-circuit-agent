@@ -613,6 +613,7 @@ def parse_gerber(path: Path) -> GerberFile:
 
 def _excellon_number(
     value: str,
+    integer_digits: int,
     decimal_digits: int,
     scale: float,
     zero_suppression: str,
@@ -622,8 +623,8 @@ def _excellon_number(
     else:
         sign = -1 if value.startswith("-") else 1
         digits = value.lstrip("+-")
-        if zero_suppression == "T":
-            digits = digits.ljust(2 + decimal_digits, "0")
+        if zero_suppression == "TZ":
+            digits = digits.ljust(integer_digits + decimal_digits, "0")
         result = sign * int(digits or "0") / 10**decimal_digits
     result *= scale
     if not math.isfinite(result):
@@ -635,6 +636,7 @@ def parse_excellon(path: Path) -> ExcellonFile:
     text = path.read_text(encoding="ascii")
     unit = ""
     unit_scale = 1.0
+    integer_digits = 2
     decimal_digits = 4
     zero_suppression = "L"
     tools: dict[str, float] = {}
@@ -648,6 +650,7 @@ def parse_excellon(path: Path) -> ExcellonFile:
             match = re.fullmatch(r";FILE_FORMAT=(\d):(\d)", line)
             if match is None:
                 raise ExportParseError("unsupported Excellon file format")
+            integer_digits = int(match.group(1))
             decimal_digits = int(match.group(2))
             continue
         if line.startswith(";") or line in {
@@ -715,12 +718,14 @@ def parse_excellon(path: Path) -> ExcellonFile:
             DrillHit(
                 x=_excellon_number(
                     coordinates.group(1 + coordinate_offset),
+                    integer_digits,
                     decimal_digits,
                     unit_scale,
                     zero_suppression,
                 ),
                 y=_excellon_number(
                     coordinates.group(2 + coordinate_offset),
+                    integer_digits,
                     decimal_digits,
                     unit_scale,
                     zero_suppression,

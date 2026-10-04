@@ -270,6 +270,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
     ),
     "vision": (
         "glyph_loss_ambiguous",
+        "glyph_template_unavailable",
         "pinout_vision_mismatch",
         "vision_compare_mismatch",
         "vision_control_failed",
@@ -579,25 +580,36 @@ def _copy_spec_evidence(spec: PartSpec, source_dir: Path, target_dir: Path) -> N
                 return
             if not isinstance(batch_payload, dict):
                 return
-            state_reference = cast(dict[str, object], batch_payload).get("control_state_path")
-            if not isinstance(state_reference, str):
-                return
-            state_path = Path(state_reference)
-            if state_path.is_absolute():
-                return
-            source_state = (source.parent / state_path).resolve()
-            if not source_state.is_relative_to(source_dir.resolve()) or not source_state.is_file():
-                return
-            relative_state = source_state.relative_to(source_dir.resolve())
-            target_state = target_dir / relative_state
-            target_state.parent.mkdir(parents=True, exist_ok=True)
-            if not target_state.exists():
-                shutil.copyfile(source_state, target_state)
+            for state_key in ("control_state_path", "private_state_path"):
+                state_reference = cast(dict[str, object], batch_payload).get(state_key)
+                if not isinstance(state_reference, str):
+                    continue
+                state_path = Path(state_reference)
+                if state_path.is_absolute():
+                    continue
+                source_state = (source.parent / state_path).resolve()
+                if (
+                    not source_state.is_relative_to(source_dir.resolve())
+                    or not source_state.is_file()
+                ):
+                    continue
+                relative_state = source_state.relative_to(source_dir.resolve())
+                target_state = target_dir / relative_state
+                target_state.parent.mkdir(parents=True, exist_ok=True)
+                if not target_state.exists():
+                    shutil.copyfile(source_state, target_state)
             return
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
 
     visit(spec.model_dump(mode="python"))
+    for directory in (source_dir, *source_dir.parents):
+        observation_log = directory / "observations" / "circuit" / "image-observations.jsonl"
+        if observation_log.is_file():
+            target_log = target_dir / "observations" / "circuit" / "image-observations.jsonl"
+            target_log.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(observation_log, target_log)
+            break
 
 
 class _LibraryVerifier:

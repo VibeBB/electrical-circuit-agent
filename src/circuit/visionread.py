@@ -433,7 +433,9 @@ def _tokens_in_bbox(
             cast(BBox, item["bbox"])[1],
             cast(BBox, item["bbox"])[0],
             str(item["text"]),
-            ",".join(sorted(cast(set[str], item["lanes"]))),
+            ",".join(
+                lane for lane in ("poppler", "pdfplumber") if lane in cast(set[str], item["lanes"])
+            ),
         )
     )
     tokens: list[VisionToken] = []
@@ -447,7 +449,11 @@ def _tokens_in_bbox(
                 bbox=cast(BBox, item["bbox"]),
                 lanes=cast(
                     list[Literal["poppler", "pdfplumber"]],
-                    sorted(cast(set[str], item["lanes"])),
+                    [
+                        lane
+                        for lane in ("poppler", "pdfplumber")
+                        if lane in cast(set[str], item["lanes"])
+                    ],
                 ),
             )
         )

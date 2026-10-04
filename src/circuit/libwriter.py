@@ -136,7 +136,7 @@ def _pad_number_key(number: str) -> tuple[object, ...]:
         if not item:
             continue
         parts.append((0, int(item)) if item.isdigit() else (1, item))
-    return (1, *parts, number)
+    return (1, tuple(parts), number)
 
 
 def _outward(value: float, *, lower: bool) -> float:

@@ -505,6 +505,7 @@ def test_datasheet_revision_check_mcp_tool_uses_injected_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
     spec = _vqfn_spec()
     source_url = "https://manufacturer.example/current.pdf"
     spec = spec.model_copy(

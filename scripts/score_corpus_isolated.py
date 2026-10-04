@@ -160,7 +160,7 @@ def build_docker_argv(
         "--workdir",
         "/tmp",
         image,
-        "python",
+        "python3",
         "-c",
         _CONTAINER_SCORE,
         entry_id,

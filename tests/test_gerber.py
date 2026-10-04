@@ -70,8 +70,23 @@ def test_parse_gerber_polygon_aperture_keeps_vertex_count_and_rotation(
     feature = parse_gerber(source).features[0]
 
     assert feature.shape == "P"
-    assert feature.width == pytest.approx(1.0)
-    assert feature.height == pytest.approx(0.9510565)
+    expected_points = [
+        (
+            math.cos(math.radians(30 + 72 * index)) * 0.5,
+            math.sin(math.radians(30 + 72 * index)) * 0.5,
+        )
+        for index in range(5)
+    ]
+    assert feature.polygon is not None
+    assert len(feature.polygon) == 5
+    for actual, expected in zip(feature.polygon, expected_points, strict=True):
+        assert actual == pytest.approx(expected)
+    assert feature.width == pytest.approx(
+        max(point[0] for point in expected_points) - min(point[0] for point in expected_points)
+    )
+    assert feature.height == pytest.approx(
+        max(point[1] for point in expected_points) - min(point[1] for point in expected_points)
+    )
     assert feature.area == pytest.approx(0.5944103)
 
 

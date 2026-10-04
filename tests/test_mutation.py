@@ -1010,6 +1010,7 @@ def _known_good_library_fixture(
         spec=spec,
         stub_cli=not run_export_oracle,
         record_authoring=True,
+        record_comparisons=False,
     )
     spec, _, spec_path, _, symbol_path, footprint_path = case
     exposed_pad = spec.package.exposed_pad

@@ -147,6 +147,9 @@ def _write_render_stub(
 ) -> None:
     from circuit import visionread
 
+    def no_glyph_findings(*_args: object) -> list[visionread.VisionGlyphFinding]:
+        return []
+
     def render_pdfium(
         _pdf_path: Path,
         output: Path,
@@ -187,6 +190,7 @@ def _write_render_stub(
 
         monkeypatch.setattr(visionread, "_render_pdftoppm", render_pdftoppm)
     monkeypatch.setattr(visionread, "_control_image", control_image)
+    monkeypatch.setattr(visionread, "_glyph_findings_for_region", no_glyph_findings)
 
 
 def _pin_table_answer(

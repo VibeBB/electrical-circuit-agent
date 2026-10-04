@@ -94,6 +94,7 @@ def test_isolated_score_uses_read_only_truth_and_network_free_container(
     assert docker_argv[docker_argv.index("--network") + 1] == "none"
     assert "--read-only" in docker_argv
     assert docker_argv[docker_argv.index("--tmpfs") + 1] == "/tmp"
+    assert docker_argv[docker_argv.index("circuit-tools:ci") + 1] == "python3"
     mounts = [
         docker_argv[index + 1]
         for index, argument in enumerate(docker_argv[:-1])

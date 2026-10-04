@@ -119,7 +119,7 @@ def test_rasterize_fails_closed_on_bad_inputs(
 
 def test_glyph_signature_binarizes_crops_and_resamples_to_fixed_grid() -> None:
     image = Image.new("L", (48, 64), 255)
-    ImageDraw.Draw(image).rectangle((14, 12, 30, 52), fill=0)
+    ImageDraw.Draw(image).rectangle((14, 12, 30, 52), outline=0, width=3)
 
     signature = glyph_signature(image)
 

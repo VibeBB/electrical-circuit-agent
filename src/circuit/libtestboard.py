@@ -1066,7 +1066,7 @@ def _drill_expected(
             (pad.x, pad.y * (-1.0 if side == "B.Cu" else 1.0)),
             rotation_deg,
         )
-        values.append((center[0], center[1], pad.drill, pad.number))
+        values.append((round(center[0], 12), round(center[1], 12), pad.drill, pad.number))
     return values
 
 
