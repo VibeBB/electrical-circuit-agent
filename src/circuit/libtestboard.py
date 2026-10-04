@@ -11,12 +11,15 @@ import shutil
 import tempfile
 import uuid
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import kicad_cli, sexpr
+from .gerber import ExportParseError, GerberFeature, parse_excellon, parse_gerber
+from .landpattern import compute_land_pattern
 from .libitems import (
     FootprintDef,
     GraphicDef,
@@ -28,7 +31,7 @@ from .libitems import (
 )
 from .model3d import Model3dError, expected_terminals
 from .netlist import parse_netlist
-from .partspec import PartSpec
+from .partspec import LandPad, PartSpec
 from .ruleprofile import EffectiveRules
 
 _BOARD_REFERENCE = "U1"
@@ -73,6 +76,7 @@ class TestBoard(BaseModel):
     position_path: Path | None = None
     drc_report_path: Path | None = None
     erc_report_path: Path | None = None
+    manufacturing_export_paths: list[Path] = Field(default_factory=lambda: list[Path]())
 
 
 def _uuid(value: str) -> str:
@@ -293,6 +297,47 @@ def _set_net(node: list[sexpr.SExpr], number: int, name: str) -> None:
         net[:] = value
 
 
+def _opposite_layer(layer: str) -> str:
+    if layer.startswith("F."):
+        return f"B.{layer[2:]}"
+    if layer.startswith("B."):
+        return f"F.{layer[2:]}"
+    return layer
+
+
+def _flip_footprint_children(root: list[sexpr.SExpr]) -> None:
+    board_at = _first(root, "at")
+
+    def mirror(node: sexpr.SExpr) -> None:
+        if not isinstance(node, list) or not node:
+            return
+        kind = node[0]
+        if kind == "at" and len(node) >= 3 and isinstance(node[2], str):
+            node[2] = _format_number(-float(node[2]))
+            if len(node) >= 4 and isinstance(node[3], str):
+                node[3] = _format_number(-float(node[3]))
+        elif kind in {"xy", "start", "end", "center", "mid", "control"} and len(node) >= 3:
+            if isinstance(node[2], str):
+                node[2] = _format_number(-float(node[2]))
+        elif kind == "layer" and len(node) >= 2 and isinstance(node[1], str):
+            node[1] = sexpr.quoted(_opposite_layer(node[1].strip('"')))
+        elif kind == "layers":
+            for index in range(1, len(node)):
+                if isinstance(node[index], str):
+                    layer = cast(str, node[index]).strip('"')
+                    node[index] = sexpr.quoted(_opposite_layer(layer))
+        for child in node[1:]:
+            mirror(child)
+
+    for child in root[1:]:
+        if child is board_at:
+            continue
+        mirror(child)
+    layer = _first(root, "layer")
+    if layer is not None and len(layer) >= 2:
+        layer[1] = sexpr.quoted("B.Cu")
+
+
 def _board_footprint(
     footprint_path: Path,
     *,
@@ -302,6 +347,7 @@ def _board_footprint(
     rotation_deg: float = 0.0,
     placement_xy_mm: tuple[float, float] = (0.0, 0.0),
     model_reference_override: str | None = None,
+    side: Literal["F.Cu", "B.Cu"] = "F.Cu",
 ) -> list[sexpr.SExpr]:
     root = sexpr.parse_text(footprint_path.read_text(encoding="utf-8"))
     if not root or root[0] not in {"footprint", "module"}:
@@ -356,6 +402,8 @@ def _board_footprint(
         root.append(["uuid", sexpr.quoted(_uuid(f"{footprint_name}:board-footprint"))])
     if _first(root, "path") is None:
         root.append(["path", sexpr.quoted(f"/{_uuid(f'{footprint_name}:board-path')}")])
+    if side == "B.Cu":
+        _flip_footprint_children(root)
     return root
 
 
@@ -382,6 +430,7 @@ def _write_board(
     placement_xy_mm: tuple[float, float] = (0.0, 0.0),
     board_thickness_mm: float = 1.6,
     model_reference_override: str | None = None,
+    side: Literal["F.Cu", "B.Cu"] = "F.Cu",
 ) -> tuple[Path, dict[str, str]]:
     copper_pads = [
         pad for pad in footprint.pads if any(layer.endswith(".Cu") for layer in pad.layers)
@@ -401,6 +450,7 @@ def _write_board(
         rotation_deg=rotation_deg,
         placement_xy_mm=placement_xy_mm,
         model_reference_override=model_reference_override,
+        side=side,
     )
     courtyard = [
         graphic for graphic in footprint.graphics if graphic.layer in {"F.CrtYd", "B.CrtYd"}
@@ -507,6 +557,7 @@ def write_model_export_board(
     placement_xy_mm: tuple[float, float] = (0.0, 0.0),
     model_reference_override: str,
     board_thickness_mm: float = 1.6,
+    side: Literal["F.Cu", "B.Cu"] = "F.Cu",
 ) -> Path:
     project_dir.mkdir(parents=True, exist_ok=True)
     footprint = parse_footprint(footprint_path)
@@ -520,6 +571,7 @@ def write_model_export_board(
         placement_xy_mm=placement_xy_mm,
         board_thickness_mm=board_thickness_mm,
         model_reference_override=model_reference_override,
+        side=side,
     )
     return board_path
 
@@ -755,6 +807,295 @@ def _add_result(
         )
 
 
+@dataclass(frozen=True)
+class _ExpectedExportFeature:
+    x: float
+    y: float
+    width: float
+    height: float
+    area: float
+    pad: LandPad
+
+
+def _kicad_rotate(point: tuple[float, float], angle_deg: float) -> tuple[float, float]:
+    angle = math.radians(angle_deg)
+    return (
+        point[0] * math.cos(angle) + point[1] * math.sin(angle),
+        -point[0] * math.sin(angle) + point[1] * math.cos(angle),
+    )
+
+
+def _land_pad_area(pad: LandPad) -> float:
+    if pad.shape == "circle":
+        return math.pi * pad.width * pad.width / 4
+    if pad.shape == "oval":
+        short, long = min(pad.width, pad.height), max(pad.width, pad.height)
+        return short * (long - short) + math.pi * short * short / 4
+    if pad.shape == "roundrect":
+        radius = min(pad.width, pad.height) * 0.25
+        return pad.width * pad.height - (4 - math.pi) * radius * radius
+    if pad.shape == "polygon" and pad.polygon is not None:
+        return abs(
+            sum(
+                first[0] * second[1] - second[0] * first[1]
+                for first, second in zip(
+                    pad.polygon,
+                    (*pad.polygon[1:], pad.polygon[0]),
+                    strict=True,
+                )
+            )
+            / 2
+        )
+    return pad.width * pad.height
+
+
+def _expected_export_feature(
+    pad: LandPad,
+    *,
+    side: Literal["F.Cu", "B.Cu"],
+    rotation_deg: float,
+) -> _ExpectedExportFeature:
+    mirror_sign = -1.0 if side == "B.Cu" else 1.0
+    pad_angle = pad.rotation * mirror_sign
+    if pad.shape == "polygon" and pad.polygon is not None:
+        corners = list(pad.polygon)
+    else:
+        corners = [
+            (-pad.width / 2, -pad.height / 2),
+            (pad.width / 2, -pad.height / 2),
+            (pad.width / 2, pad.height / 2),
+            (-pad.width / 2, pad.height / 2),
+        ]
+    transformed: list[tuple[float, float]] = []
+    for x, y in corners:
+        local = _kicad_rotate((x, y * mirror_sign), pad_angle)
+        transformed.append(_kicad_rotate(local, rotation_deg))
+    min_x = min(point[0] for point in transformed)
+    min_y = min(point[1] for point in transformed)
+    max_x = max(point[0] for point in transformed)
+    max_y = max(point[1] for point in transformed)
+    center = _kicad_rotate((pad.x, pad.y * mirror_sign), rotation_deg)
+    if pad.shape == "polygon":
+        center = ((min_x + max_x) / 2, (min_y + max_y) / 2)
+        area = abs(
+            sum(
+                first[0] * second[1] - second[0] * first[1]
+                for first, second in zip(
+                    transformed,
+                    (*transformed[1:], transformed[0]),
+                    strict=True,
+                )
+            )
+            / 2
+        )
+    else:
+        area = _land_pad_area(pad)
+    if pad.pad_type == "thru_hole" and pad.drill is not None:
+        area -= math.pi * pad.drill**2 / 4
+    return _ExpectedExportFeature(
+        x=center[0],
+        y=center[1],
+        width=max_x - min_x,
+        height=max_y - min_y,
+        area=area,
+        pad=pad,
+    )
+
+
+def _compare_export_features(
+    expected: list[_ExpectedExportFeature],
+    actual: list[GerberFeature],
+    *,
+    label: str,
+) -> str | None:
+    unmatched = list(actual)
+    errors: list[str] = []
+    for wanted in expected:
+        if not unmatched:
+            errors.append(f"{label} is missing pad {wanted.pad.number}")
+            continue
+        nearest = min(
+            unmatched,
+            key=lambda item: math.hypot(item.x - wanted.x, item.y - wanted.y),
+        )
+        center_delta = math.hypot(nearest.x - wanted.x, nearest.y - wanted.y)
+        if center_delta > 0.01:
+            errors.append(f"{label} pad {wanted.pad.number} center delta {center_delta:.4f} mm")
+            continue
+        unmatched.remove(nearest)
+        width_delta = abs(nearest.width - wanted.width)
+        height_delta = abs(nearest.height - wanted.height)
+        area_delta = abs(nearest.area - wanted.area) / wanted.area if wanted.area > 0 else math.inf
+        if width_delta > 0.01 or height_delta > 0.01 or area_delta > 0.02:
+            errors.append(
+                f"{label} pad {wanted.pad.number} extents {nearest.width:.4f}x"
+                f"{nearest.height:.4f} mm, area delta {area_delta:.2%}"
+            )
+    if unmatched:
+        errors.append(f"{label} contains {len(unmatched)} unexpected feature(s)")
+    return "; ".join(errors) if errors else None
+
+
+def _gerber_layer(path: Path) -> str | None:
+    normalized = path.name.casefold().replace(".", "_").replace("-", "_")
+    for layer in ("F.Cu", "B.Cu", "F.Mask", "B.Mask", "F.Paste", "B.Paste"):
+        if layer.casefold().replace(".", "_") in normalized:
+            return layer
+    return None
+
+
+def _layer_pads(
+    pads: list[LandPad],
+    *,
+    component_side: Literal["F.Cu", "B.Cu"],
+    layer: str,
+) -> list[LandPad]:
+    if layer.endswith(".Cu"):
+        return [
+            pad
+            for pad in pads
+            if pad.pad_type == "thru_hole" or (pad.pad_type == "smd" and layer == component_side)
+        ]
+    if layer.endswith(".Mask"):
+        return [
+            pad
+            for pad in pads
+            if pad.pad_type in {"thru_hole", "np_thru_hole"}
+            or (pad.pad_type == "smd" and layer.removesuffix(".Mask") + ".Cu" == component_side)
+        ]
+    return [
+        pad
+        for pad in pads
+        if pad.pad_type == "smd" and layer.removesuffix(".Paste") + ".Cu" == component_side
+    ]
+
+
+def _layer_features(
+    pads: list[LandPad],
+    *,
+    component_side: Literal["F.Cu", "B.Cu"],
+    layer: str,
+    rotation_deg: float,
+) -> list[_ExpectedExportFeature]:
+    return [
+        _expected_export_feature(pad, side=component_side, rotation_deg=rotation_deg)
+        for pad in _layer_pads(pads, component_side=component_side, layer=layer)
+    ]
+
+
+def _paste_mismatch(
+    pads: list[LandPad],
+    actual: list[GerberFeature],
+    *,
+    component_side: Literal["F.Cu", "B.Cu"],
+    rotation_deg: float,
+    rules: EffectiveRules,
+    exposed_numbers: set[str],
+) -> str | None:
+    expected = _layer_features(
+        pads,
+        component_side=component_side,
+        layer=f"{component_side.removesuffix('.Cu')}.Paste",
+        rotation_deg=rotation_deg,
+    )
+    remaining = list(actual)
+    errors: list[str] = []
+    for item in expected:
+        if item.pad.number in exposed_numbers:
+            candidates = [
+                feature
+                for feature in remaining
+                if abs(feature.x - item.x) <= item.width / 2 + 0.01
+                and abs(feature.y - item.y) <= item.height / 2 + 0.01
+            ]
+            area = sum(feature.area for feature in candidates)
+            ratio = area / item.area if item.area > 0 else 0.0
+            if (
+                not candidates
+                or not rules.paste.ep_coverage_min <= ratio <= rules.paste.ep_coverage_max
+            ):
+                errors.append(
+                    f"EP paste coverage for pad {item.pad.number} is {ratio:.4f}, outside "
+                    f"{rules.paste.ep_coverage_min:.4f}..{rules.paste.ep_coverage_max:.4f}"
+                )
+            for candidate in candidates:
+                remaining.remove(candidate)
+            continue
+        if not remaining:
+            errors.append(f"paste opening is missing pad {item.pad.number}")
+            continue
+        feature = min(
+            remaining,
+            key=lambda item2: math.hypot(item2.x - item.x, item2.y - item.y),
+        )
+        delta = math.hypot(feature.x - item.x, feature.y - item.y)
+        ratio = feature.area / item.area if item.area > 0 else 0.0
+        if delta > 0.01 or not rules.paste.coverage_min <= ratio <= rules.paste.coverage_max:
+            errors.append(
+                f"paste opening for pad {item.pad.number} center delta {delta:.4f} mm, "
+                f"coverage {ratio:.4f}"
+            )
+        else:
+            remaining.remove(feature)
+    if remaining:
+        errors.append(f"paste layer contains {len(remaining)} unexpected opening(s)")
+    return "; ".join(errors) if errors else None
+
+
+def _drill_file(path: Path) -> Literal["PTH", "NPTH"] | None:
+    name = path.name.casefold()
+    if "npth" in name:
+        return "NPTH"
+    if "pth" in name:
+        return "PTH"
+    return None
+
+
+def _drill_expected(
+    pads: list[LandPad],
+    *,
+    side: Literal["F.Cu", "B.Cu"],
+    rotation_deg: float,
+    pad_type: Literal["thru_hole", "np_thru_hole"],
+) -> list[tuple[float, float, float, str]]:
+    values: list[tuple[float, float, float, str]] = []
+    for pad in pads:
+        if pad.pad_type != pad_type or pad.drill is None:
+            continue
+        center = _kicad_rotate(
+            (pad.x, pad.y * (-1.0 if side == "B.Cu" else 1.0)),
+            rotation_deg,
+        )
+        values.append((center[0], center[1], pad.drill, pad.number))
+    return values
+
+
+def _compare_drills(
+    expected: list[tuple[float, float, float, str]],
+    actual: list[tuple[float, float, float]],
+    *,
+    label: str,
+) -> str | None:
+    unmatched = list(actual)
+    errors: list[str] = []
+    for x, y, diameter, number in expected:
+        if not unmatched:
+            errors.append(f"{label} drill is missing pad {number}")
+            continue
+        nearest = min(unmatched, key=lambda hit: math.hypot(hit[0] - x, hit[1] - y))
+        distance = math.hypot(nearest[0] - x, nearest[1] - y)
+        if distance > 0.01 or abs(nearest[2] - diameter) > 0.01:
+            errors.append(
+                f"{label} drill pad {number} position delta {distance:.4f} mm, "
+                f"diameter {nearest[2]:.4f} mm expected {diameter:.4f} mm"
+            )
+        else:
+            unmatched.remove(nearest)
+    if unmatched:
+        errors.append(f"{label} contains {len(unmatched)} unexpected drill hit(s)")
+    return "; ".join(errors) if errors else None
+
+
 def _parse_ipcd356(path: Path) -> list[tuple[str, str, str, float, float]]:
     records: list[tuple[str, str, str, float, float]] = []
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -960,6 +1301,253 @@ def _unavailable_result(clearance: float, message: str) -> TestBoard:
     )
 
 
+def _manufacturing_export(
+    project_root: Path,
+    output_root: Path,
+    *,
+    spec: PartSpec,
+    footprint_path: Path,
+    footprint: FootprintDef,
+    rules: EffectiveRules,
+) -> tuple[list[TestBoardCheck], list[TestBoardFinding], list[Path]]:
+    checks: list[TestBoardCheck] = []
+    findings: list[TestBoardFinding] = []
+    artifacts: list[Path] = []
+    try:
+        reference = compute_land_pattern(spec, rules=rules)
+    except (ValueError, RuntimeError) as error:
+        _add_result(
+            checks,
+            findings,
+            name="manufacturing_export",
+            passed=False,
+            details=f"PartSpec land pattern cannot be derived: {error}",
+            code="export_oracle_unparsed",
+        )
+        return checks, findings, artifacts
+    if any(pad.pad_type == "unknown" for pad in reference.pads):
+        _add_result(
+            checks,
+            findings,
+            name="manufacturing_export",
+            passed=False,
+            details="PartSpec-derived manufacturing pad type is unknown",
+            code="export_oracle_unparsed",
+        )
+        return checks, findings, artifacts
+
+    setups: tuple[tuple[Literal["F.Cu", "B.Cu"], float], ...] = (
+        ("F.Cu", 0.0),
+        ("F.Cu", 90.0),
+        ("F.Cu", 180.0),
+        ("F.Cu", 270.0),
+        ("B.Cu", 0.0),
+        ("B.Cu", 90.0),
+    )
+    exposed_numbers = {pad.number for pad in spec.package.all_exposed_pads}
+    output_root.mkdir(parents=True, exist_ok=True)
+    for component_side, rotation_deg in setups:
+        tag = f"{component_side.replace('.', '-')}-{int(rotation_deg)}"
+        board_dir = project_root / f"manufacturing-{tag}"
+        board_dir.mkdir(parents=True, exist_ok=True)
+        board_path, _ = _write_board(
+            board_dir,
+            spec=spec,
+            footprint_path=footprint_path,
+            footprint=footprint,
+            rules=rules,
+            rotation_deg=rotation_deg,
+            side=component_side,
+        )
+        gerber_dir = output_root / tag / "gerbers"
+        drill_dir = output_root / tag / "drills"
+        gerber_dir.mkdir(parents=True, exist_ok=True)
+        drill_dir.mkdir(parents=True, exist_ok=True)
+        gerber_run = kicad_cli.run(
+            [
+                "pcb",
+                "export",
+                "gerbers",
+                "--layers",
+                "F.Cu,B.Cu,F.Mask,B.Mask,F.Paste,B.Paste",
+                "--output",
+                str(gerber_dir) + "/",
+                str(board_path),
+            ]
+        )
+        if gerber_run.returncode:
+            _add_result(
+                checks,
+                findings,
+                name=f"manufacturing_gerber_{tag}",
+                passed=False,
+                details=gerber_run.stderr.strip() or "KiCad Gerber export failed",
+                code="export_oracle_unparsed",
+            )
+            continue
+        drill_run = kicad_cli.run(
+            [
+                "pcb",
+                "export",
+                "drill",
+                "--excellon-units",
+                "mm",
+                "--drill-origin",
+                "absolute",
+                "--separate-th",
+                "--output",
+                str(drill_dir) + "/",
+                str(board_path),
+            ]
+        )
+        if drill_run.returncode:
+            _add_result(
+                checks,
+                findings,
+                name=f"manufacturing_drill_{tag}",
+                passed=False,
+                details=drill_run.stderr.strip() or "KiCad Excellon export failed",
+                code="export_oracle_unparsed",
+            )
+            continue
+
+        gerbers = {
+            layer: path
+            for path in gerber_dir.iterdir()
+            if path.is_file()
+            if (layer := _gerber_layer(path)) is not None
+        }
+        parsed: dict[str, list[GerberFeature]] = {
+            layer: [] for layer in ("F.Cu", "B.Cu", "F.Mask", "B.Mask", "F.Paste", "B.Paste")
+        }
+        try:
+            for layer, path in gerbers.items():
+                parsed[layer] = list(parse_gerber(path).features)
+                artifacts.append(path)
+        except (ExportParseError, OSError, ValueError) as error:
+            _add_result(
+                checks,
+                findings,
+                name=f"manufacturing_gerber_{tag}",
+                passed=False,
+                details=str(error),
+                code="export_oracle_unparsed",
+            )
+            continue
+
+        export_errors: list[tuple[str, str]] = []
+        for layer in ("F.Cu", "B.Cu"):
+            expected = _layer_features(
+                reference.pads,
+                component_side=component_side,
+                layer=layer,
+                rotation_deg=rotation_deg,
+            )
+            if expected and layer not in gerbers:
+                export_errors.append(
+                    ("export_gerber_layer_mismatch", f"{layer} Gerber is missing expected pads")
+                )
+            mismatch = _compare_export_features(expected, parsed[layer], label=f"{layer} copper")
+            if mismatch:
+                code = "export_gerber_pad_mismatch" if expected else "export_gerber_layer_mismatch"
+                export_errors.append((code, mismatch))
+
+        for layer in ("F.Mask", "B.Mask"):
+            expected = _layer_features(
+                reference.pads,
+                component_side=component_side,
+                layer=layer,
+                rotation_deg=rotation_deg,
+            )
+            if expected and layer not in gerbers:
+                export_errors.append(
+                    ("export_mask_mismatch", f"{layer} Gerber is missing expected openings")
+                )
+            mismatch = _compare_export_features(expected, parsed[layer], label=f"{layer} mask")
+            if mismatch:
+                export_errors.append(("export_mask_mismatch", mismatch))
+
+        for layer in ("F.Paste", "B.Paste"):
+            expected = _layer_features(
+                reference.pads,
+                component_side=component_side,
+                layer=layer,
+                rotation_deg=rotation_deg,
+            )
+            if expected and layer not in gerbers:
+                export_errors.append(
+                    ("export_paste_mismatch", f"{layer} Gerber is missing expected openings")
+                )
+            mismatch = _paste_mismatch(
+                reference.pads,
+                parsed[layer],
+                component_side=component_side,
+                rotation_deg=rotation_deg,
+                rules=rules,
+                exposed_numbers=exposed_numbers,
+            )
+            if mismatch:
+                export_errors.append(("export_paste_mismatch", mismatch))
+
+        drill_files = {
+            file_type: path
+            for path in drill_dir.iterdir()
+            if path.is_file()
+            if (file_type := _drill_file(path)) is not None
+        }
+        if any(
+            path.suffix.casefold() == ".drl" and _drill_file(path) is None
+            for path in drill_dir.iterdir()
+        ):
+            export_errors.append(("export_oracle_unparsed", "unrecognized Excellon file name"))
+        for file_type, pad_type in (("PTH", "thru_hole"), ("NPTH", "np_thru_hole")):
+            expected_drills = _drill_expected(
+                reference.pads,
+                side=component_side,
+                rotation_deg=rotation_deg,
+                pad_type=cast(Literal["thru_hole", "np_thru_hole"], pad_type),
+            )
+            drill_path = drill_files.get(file_type)
+            if drill_path is None:
+                if expected_drills:
+                    export_errors.append(
+                        ("export_drill_missing", f"{file_type} Excellon file is missing")
+                    )
+                continue
+            try:
+                parsed_drills = parse_excellon(drill_path)
+                artifacts.append(drill_path)
+            except (ExportParseError, OSError, ValueError) as error:
+                export_errors.append(("export_oracle_unparsed", str(error)))
+                continue
+            mismatch = _compare_drills(
+                expected_drills,
+                [(hit.x, hit.y, hit.diameter) for hit in parsed_drills.hits],
+                label=file_type,
+            )
+            if mismatch:
+                export_errors.append(("export_drill_mismatch", mismatch))
+
+        for code, message in export_errors:
+            _add_result(
+                checks,
+                findings,
+                name=f"manufacturing_{tag}_{code}",
+                passed=False,
+                details=message,
+                code=code,
+            )
+        if not export_errors:
+            checks.append(
+                TestBoardCheck(
+                    name=f"manufacturing_export_{tag}",
+                    passed=True,
+                    details="Gerber and Excellon geometry matches the PartSpec",
+                )
+            )
+    return checks, findings, artifacts
+
+
 def _error_code(error: Exception, fallback: str) -> str:
     message = str(error).casefold()
     if isinstance(error, kicad_cli.KicadCliError) and any(
@@ -1034,6 +1622,18 @@ def build_test_board(
                 footprint=footprint,
                 rules=rules,
             )
+            manufacturing_checks, manufacturing_findings, manufacturing_paths = (
+                _manufacturing_export(
+                    project_dir,
+                    out_dir / "manufacturing",
+                    spec=spec,
+                    footprint_path=footprint_path,
+                    footprint=footprint,
+                    rules=rules,
+                )
+            )
+            checks.extend(manufacturing_checks)
+            findings.extend(manufacturing_findings)
             project_sha256 = _project_digest(project_dir)
             testboard_files: dict[str, Path | None] = {
                 "netlist_path": None,
@@ -1250,6 +1850,7 @@ def build_test_board(
                 checks=checks,
                 findings=findings,
                 erc_findings=erc_findings,
+                manufacturing_export_paths=manufacturing_paths,
                 **testboard_files,
             )
     except (OSError, ValueError, sexpr.SExprError) as error:

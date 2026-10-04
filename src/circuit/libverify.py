@@ -9,7 +9,7 @@ import os
 import re
 import shutil
 import tempfile
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 from itertools import pairwise
 from pathlib import Path
@@ -1158,6 +1158,41 @@ def _check_pad_geometry(
 ) -> dict[str, tuple[float, float, float, float]]:
     expected_boxes = _reference_boxes(reference.pads)
     actual_boxes = _pad_boxes(footprint.pads)
+    actual_pads_by_number: dict[str, list[PadDef]] = defaultdict(list)
+    for pad in footprint.pads:
+        actual_pads_by_number[pad.number].append(pad)
+    wrong_layer_numbers: set[str] = set()
+    for expected in reference.pads:
+        candidates = actual_pads_by_number.get(expected.number, [])
+        if not candidates or expected.pad_type == "unknown":
+            continue
+        expected_box = expected_boxes[expected.number]
+        expected_x = (expected_box[0] + expected_box[2]) / 2
+        expected_y = (expected_box[1] + expected_box[3]) / 2
+        actual = min(
+            (math.hypot(pad.x - expected_x, pad.y - expected_y), pad) for pad in candidates
+        )[1]
+        copper_layers = {layer for layer in actual.layers if layer.endswith(".Cu")}
+        has_wildcard_copper = "*.Cu" in actual.layers
+        if expected.pad_type == "smd":
+            layer_match = (
+                "F.Cu" in copper_layers and "B.Cu" not in copper_layers and not has_wildcard_copper
+            )
+        elif expected.pad_type == "thru_hole":
+            layer_match = has_wildcard_copper or {"F.Cu", "B.Cu"} <= copper_layers
+        else:
+            layer_match = not copper_layers and not has_wildcard_copper
+        if not layer_match:
+            wrong_layer_numbers.add(expected.number)
+    if wrong_layer_numbers:
+        _finding(
+            findings,
+            "footprint_pad_layer_mismatch",
+            "error",
+            "footprint",
+            "PartSpec-derived pad copper layers differ from the footprint for pad(s) "
+            + ", ".join(sorted(wrong_layer_numbers)),
+        )
     center_delta = 0.0
     size_delta = 0.0
     for number in expected_boxes.keys() & actual_boxes.keys():

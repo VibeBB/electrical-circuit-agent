@@ -192,12 +192,20 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "connector_mechanical_mismatch",
         "tht_drill_mismatch",
         "tht_annular_ring",
+        "footprint_pad_layer_mismatch",
         "connector_board_edge_graphic_mismatch",
         "connector_mating_board_interference",
         "coax_keepout_missing",
     ),
     "export_oracle": (
         "assembly_attribute",
+        "export_gerber_pad_mismatch",
+        "export_gerber_layer_mismatch",
+        "export_mask_mismatch",
+        "export_paste_mismatch",
+        "export_drill_mismatch",
+        "export_drill_missing",
+        "export_oracle_unparsed",
         "model_export_mismatch",
         "model_export_missing",
         "model_export_unavailable",
@@ -1223,6 +1231,29 @@ def _footprint_pad_shift(
     }
 
 
+def _footprint_pad_wrong_copper_layer(
+    artifacts: MutationArtifacts,
+    rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    candidates = [
+        index
+        for index, pad in enumerate(artifacts.footprint.pads)
+        if pad.type == "smd" and "F.Cu" in pad.layers
+    ]
+    if not candidates:
+        raise MutationError("footprint has no front-side SMD pad")
+    index = rng.choice(candidates)
+    pads = list(artifacts.footprint.pads)
+    pad = pads[index]
+    layers = ["B.Cu" if layer == "F.Cu" else layer for layer in pad.layers]
+    pads[index] = pad.model_copy(update={"layers": layers})
+    return _transform_footprint(artifacts, pads), {
+        "pad": pad.number,
+        "from_layer": "F.Cu",
+        "to_layer": "B.Cu",
+    }
+
+
 def _footprint_pitch_scale(
     artifacts: MutationArtifacts,
     _rng: random.Random,
@@ -1977,6 +2008,10 @@ def _has_asymmetric_pad(artifacts: MutationArtifacts) -> bool:
     )
 
 
+def _has_front_smd_pad(artifacts: MutationArtifacts) -> bool:
+    return any(pad.type == "smd" and "F.Cu" in pad.layers for pad in artifacts.footprint.pads)
+
+
 def _has_custom_pad(artifacts: MutationArtifacts) -> bool:
     return any(
         pad.shape == "custom" and pad.polygon is not None for pad in artifacts.footprint.pads
@@ -2039,6 +2074,13 @@ MUTATION_OPERATORS: tuple[MutationOperator, ...] = (
     MutationOperator("footprint_rotate_180", "footprint", True, _footprint_rotation(180)),
     MutationOperator("footprint_rotate_270", "footprint", True, _footprint_rotation(270)),
     MutationOperator("footprint_pad_shift_0_1mm", "footprint", True, _footprint_pad_shift),
+    MutationOperator(
+        "footprint_pad_wrong_copper_layer",
+        "footprint",
+        True,
+        _footprint_pad_wrong_copper_layer,
+        _has_front_smd_pad,
+    ),
     MutationOperator("footprint_pitch_scale_1_02", "footprint", True, _footprint_pitch_scale),
     MutationOperator("footprint_ep_size_delta_20_percent", "footprint", True, _footprint_ep_size),
     MutationOperator("footprint_mm_to_inch", "footprint", True, _footprint_unit_scale(1 / 25.4)),

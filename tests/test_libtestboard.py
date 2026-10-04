@@ -4,10 +4,14 @@ from pathlib import Path
 import pytest
 
 from circuit import kicad_cli, libtestboard
+from circuit.gerber import GerberFeature
 from circuit.libitems import FootprintDef, GraphicDef, PadDef
 from circuit.libtestboard import (
     _check_pinmap,  # pyright: ignore[reportPrivateUsage]
     _check_position_file,  # pyright: ignore[reportPrivateUsage]
+    _compare_export_features,  # pyright: ignore[reportPrivateUsage]
+    _drill_expected,  # pyright: ignore[reportPrivateUsage]
+    _expected_export_feature,  # pyright: ignore[reportPrivateUsage]
     _parse_ipcd356,  # pyright: ignore[reportPrivateUsage]
     _paste_findings,  # pyright: ignore[reportPrivateUsage]
     build_test_board,
@@ -17,6 +21,7 @@ from circuit.partspec import (
     DatasheetRef,
     Dimension,
     ExposedPad,
+    LandPad,
     OrderableVariant,
     PackageSpec,
     PartSpec,
@@ -163,6 +168,72 @@ def test_ipcd356_parser_resolves_extended_net_names(tmp_path: Path) -> None:
     record = _parse_ipcd356(output)[0]
 
     assert record[:3] == ("Exposed?Thermal?Pad", "17", "U1")
+
+
+def test_manufacturing_oracle_uses_part_spec_geometry_and_kicad_bottom_flip() -> None:
+    smd = LandPad(
+        number="1",
+        x=1.0,
+        y=2.0,
+        width=2.0,
+        height=1.0,
+        shape="rect",
+    )
+    plated = LandPad(
+        number="2",
+        x=1.0,
+        y=2.0,
+        width=1.0,
+        height=1.0,
+        shape="circle",
+        pad_type="thru_hole",
+        drill=0.6,
+    )
+    front = _expected_export_feature(smd, side="F.Cu", rotation_deg=0)
+    bottom = _expected_export_feature(smd, side="B.Cu", rotation_deg=90)
+    plated_front = _expected_export_feature(plated, side="F.Cu", rotation_deg=0)
+
+    assert (front.x, front.y, front.width, front.height) == pytest.approx((1, 2, 2, 1))
+    assert (bottom.x, bottom.y, bottom.width, bottom.height) == pytest.approx((-2, -1, 1, 2))
+    assert plated_front.area == pytest.approx(math.pi * (1.0**2 - 0.6**2) / 4)
+    assert (
+        _compare_export_features(
+            [front],
+            [GerberFeature(x=1, y=2, width=2, height=1, area=2, shape="R")],
+            label="front copper",
+        )
+        is None
+    )
+    assert _drill_expected(
+        [plated],
+        side="B.Cu",
+        rotation_deg=90,
+        pad_type="thru_hole",
+    ) == [(-2.0, -1.0, 0.6, "2")]
+
+
+def test_manufacturing_oracle_fails_closed_for_unsupported_part_spec(
+    tmp_path: Path,
+) -> None:
+    checks, findings, artifacts = libtestboard._manufacturing_export(  # pyright: ignore[reportPrivateUsage]
+        tmp_path,
+        tmp_path / "exports",
+        spec=_spec(),
+        footprint_path=tmp_path / "footprint.kicad_mod",
+        footprint=FootprintDef(
+            name="FixtureFootprint",
+            attributes=[],
+            pads=[],
+            graphics=[],
+            models=[],
+            properties={},
+        ),
+        rules=load_rules("builtin:ipc7351b", tmp_path / "rules"),
+    )
+
+    assert checks and not checks[0].passed
+    assert findings[0].code == "export_oracle_unparsed"
+    assert artifacts == []
 
 
 def test_part_spec_terminals_must_fit_ipcd356_readback_pads(
@@ -421,6 +492,17 @@ def test_build_test_board_runs_pinmap_readback_assembly_drc_and_erc(
     observed: dict[str, str] = {}
 
     monkeypatch.setattr(kicad_cli, "version", lambda: "KiCad 11 fixture")
+
+    def no_manufacturing_export(
+        *_args: object, **_kwargs: object
+    ) -> tuple[list[libtestboard.TestBoardCheck], list[libtestboard.TestBoardFinding], list[Path]]:
+        return [], [], []
+
+    monkeypatch.setattr(
+        libtestboard,
+        "_manufacturing_export",
+        no_manufacturing_export,
+    )
 
     def export_netlist(source: Path, output: Path) -> Path:
         schematic = source.read_text(encoding="utf-8")
