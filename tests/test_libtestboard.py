@@ -194,13 +194,13 @@ def test_manufacturing_oracle_uses_part_spec_geometry_and_kicad_bottom_flip() ->
     bottom = _expected_export_feature(smd, side="B.Cu", rotation_deg=90)
     plated_front = _expected_export_feature(plated, side="F.Cu", rotation_deg=0)
 
-    assert (front.x, front.y, front.width, front.height) == pytest.approx((1, 2, 2, 1))
-    assert (bottom.x, bottom.y, bottom.width, bottom.height) == pytest.approx((-2, -1, 1, 2))
+    assert (front.x, front.y, front.width, front.height) == pytest.approx((1, -2, 2, 1))
+    assert (bottom.x, bottom.y, bottom.width, bottom.height) == pytest.approx((-2, 1, 1, 2))
     assert plated_front.area == pytest.approx(math.pi * (1.0**2 - 0.6**2) / 4)
     assert (
         _compare_export_features(
             [front],
-            [GerberFeature(x=1, y=2, width=2, height=1, area=2, shape="R")],
+            [GerberFeature(x=1, y=-2, width=2, height=1, area=2, shape="R")],
             label="front copper",
         )
         is None
@@ -211,6 +211,89 @@ def test_manufacturing_oracle_uses_part_spec_geometry_and_kicad_bottom_flip() ->
         rotation_deg=90,
         pad_type="thru_hole",
     ) == [(-2.0, -1.0, 0.6, "2")]
+
+
+def test_board_footprint_rotates_stored_pad_angles_after_flipping(tmp_path: Path) -> None:
+    footprint_path = tmp_path / "FixtureFootprint.kicad_mod"
+    footprint_path.write_text(_footprint(), encoding="utf-8")
+
+    for side in ("F.Cu", "B.Cu"):
+        board_footprint = libtestboard._board_footprint(  # pyright: ignore[reportPrivateUsage]
+            footprint_path,
+            footprint_name="FixtureFootprint",
+            net_ids={},
+            number_to_name={},
+            rotation_deg=90,
+            side=side,
+        )
+        pad_nodes = [
+            node
+            for node in board_footprint[1:]
+            if isinstance(node, list) and node and node[0] == "pad"
+        ]
+        assert len(pad_nodes) == 2
+        for pad_node in pad_nodes:
+            pad_at = next(
+                (
+                    child
+                    for child in pad_node[1:]
+                    if isinstance(child, list) and child and child[0] == "at"
+                ),
+                None,
+            )
+            assert pad_at is not None and len(pad_at) >= 4
+            assert isinstance(pad_at[3], str)
+            assert float(pad_at[3]) == pytest.approx(90)
+
+
+def test_paste_oracle_checks_only_active_layer_and_rejects_inactive_openings() -> None:
+    pad = LandPad(
+        number="1",
+        x=0.0,
+        y=0.0,
+        width=1.0,
+        height=1.0,
+        shape="rect",
+    )
+    opening = GerberFeature(x=0.0, y=0.0, width=1.0, height=1.0, area=1.0, shape="R")
+    rules = load_rules("builtin:ipc7351b", Path("tests/data/corpus_parts"))
+
+    assert (
+        libtestboard._paste_mismatch(  # pyright: ignore[reportPrivateUsage]
+            [pad],
+            [],
+            component_side="F.Cu",
+            layer="F.Paste",
+            rotation_deg=0,
+            rules=rules,
+            exposed_numbers=set(),
+        )
+        is not None
+    )
+    assert (
+        libtestboard._paste_mismatch(  # pyright: ignore[reportPrivateUsage]
+            [pad],
+            [],
+            component_side="F.Cu",
+            layer="B.Paste",
+            rotation_deg=0,
+            rules=rules,
+            exposed_numbers=set(),
+        )
+        is None
+    )
+    assert (
+        libtestboard._paste_mismatch(  # pyright: ignore[reportPrivateUsage]
+            [pad],
+            [opening],
+            component_side="F.Cu",
+            layer="B.Paste",
+            rotation_deg=0,
+            rules=rules,
+            exposed_numbers=set(),
+        )
+        is not None
+    )
 
 
 def test_manufacturing_drill_export_uses_kicad_separate_th_flag(

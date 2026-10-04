@@ -404,6 +404,18 @@ def _board_footprint(
         root.append(["path", sexpr.quoted(f"/{_uuid(f'{footprint_name}:board-path')}")])
     if side == "B.Cu":
         _flip_footprint_children(root)
+    for child in root[1:]:
+        if not isinstance(child, list) or not child or child[0] != "pad":
+            continue
+        pad_at = _first(child, "at")
+        if pad_at is None or len(pad_at) < 3:
+            continue
+        pad_rotation = float(pad_at[3]) if len(pad_at) >= 4 and isinstance(pad_at[3], str) else 0.0
+        placed_rotation = _format_number(pad_rotation + rotation_deg)
+        if len(pad_at) >= 4:
+            pad_at[3] = placed_rotation
+        else:
+            pad_at.append(placed_rotation)
     return root
 
 
@@ -869,12 +881,14 @@ def _expected_export_feature(
     transformed: list[tuple[float, float]] = []
     for x, y in corners:
         local = _kicad_rotate((x, y * mirror_sign), pad_angle)
-        transformed.append(_kicad_rotate(local, rotation_deg))
+        board_point = _kicad_rotate(local, rotation_deg)
+        transformed.append((board_point[0], -board_point[1]))
     min_x = min(point[0] for point in transformed)
     min_y = min(point[1] for point in transformed)
     max_x = max(point[0] for point in transformed)
     max_y = max(point[1] for point in transformed)
     center = _kicad_rotate((pad.x, pad.y * mirror_sign), rotation_deg)
+    center = (center[0], -center[1])
     if pad.shape == "polygon":
         center = ((min_x + max_x) / 2, (min_y + max_y) / 2)
         area = abs(
@@ -988,14 +1002,22 @@ def _paste_mismatch(
     actual: list[GerberFeature],
     *,
     component_side: Literal["F.Cu", "B.Cu"],
+    layer: Literal["F.Paste", "B.Paste"],
     rotation_deg: float,
     rules: EffectiveRules,
     exposed_numbers: set[str],
 ) -> str | None:
+    active_layer = f"{component_side.removesuffix('.Cu')}.Paste"
+    if layer != active_layer:
+        return (
+            f"{layer} contains {len(actual)} unexpected opening(s) for {component_side} placement"
+            if actual
+            else None
+        )
     expected = _layer_features(
         pads,
         component_side=component_side,
-        layer=f"{component_side.removesuffix('.Cu')}.Paste",
+        layer=layer,
         rotation_deg=rotation_deg,
     )
     remaining = list(actual)
@@ -1482,6 +1504,7 @@ def _manufacturing_export(
                 reference.pads,
                 parsed[layer],
                 component_side=component_side,
+                layer=layer,
                 rotation_deg=rotation_deg,
                 rules=rules,
                 exposed_numbers=exposed_numbers,
