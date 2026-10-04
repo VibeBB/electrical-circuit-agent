@@ -1,0 +1,1 @@
+Synthetic measurement record for replay-only TPS62130RGTR package dimensions and pin identity.
