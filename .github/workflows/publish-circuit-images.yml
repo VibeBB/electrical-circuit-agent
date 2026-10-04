@@ -141,7 +141,7 @@ jobs:
           # load the image into the local daemon for the scans instead of
           # pushing.
           push: ${{ inputs.dry_run != true }}
-          load: ${{ inputs.dry_run }}
+          load: ${{ inputs.dry_run == true }}
           tags: |
             ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
           cache-from: type=gha
