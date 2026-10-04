@@ -177,10 +177,19 @@ def _build_matrix(
         dir=out_path.parent,
     ) as temporary:
         work_dir = Path(temporary)
+        project_pdf_path = work_dir / "datasheets" / f"{entry.id}.pdf"
+        project_pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(pdf_path, project_pdf_path)
+        rules_dir = work_dir / "library" / "rules"
+        rules_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(
+            fixture_dir / "rules" / f"{entry.id}.json",
+            rules_dir / f"{entry.id}.json",
+        )
         spec, spec_path, spec_check_path, footprint_path, model_path, _part_spec_report = (
             _prepare_baseline(
                 entry,
-                pdf_path,
+                project_pdf_path,
                 work_dir,
                 fixture_dir,
             )
@@ -196,6 +205,9 @@ def _build_matrix(
             work_dir=work_dir / "mutation-work",
             run_export_oracle=export_oracle,
             seed=62130,
+            rules_profile=entry.id,
+            rules_dir=rules_dir,
+            unexercised_codes=frozenset({"authoring_missing", "vision_compare_missing"}),
         )
         matrix = run_mutations(fixture)
         out_path.write_text(
@@ -206,6 +218,7 @@ def _build_matrix(
                     "pdf_sha256": entry.datasheet.sha256,
                     "synthetic_evidence": ["vision_reads", "advisory_reviews"],
                     "synthetic_evidence_counted": False,
+                    "unexercised_evidence": ["blind_authoring", "vision_compare"],
                     "matrix": matrix.model_dump(mode="json"),
                 },
                 ensure_ascii=False,

@@ -30,6 +30,10 @@ Run the library gate before authoring. It parses the installed `.kicad_sym` and 
 files directly and must be `pass` for every symbol, footprint, and referenced pin. Both
 gates are fail-closed and must be recorded as JSON reports.
 
+When the library report fails with `authoring_requests`, do not substitute a similar
+library item. Return each request in the intake as a `Q*` open question, retaining its
+references, requested identifiers, and reason.
+
 ## Wire harness contract fields
 
 Parts with `connector: true` become harness connectors for wire-agent. They can

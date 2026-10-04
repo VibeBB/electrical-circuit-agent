@@ -16,7 +16,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import kicad_cli, occt, sexpr
 from .landpattern import Density, compute_land_pattern
@@ -33,7 +33,7 @@ from .libitems import (
 from .libverify import VerifyFinding
 from .modeloracle import verify_model_export
 from .packageid import sibling_package_mpn
-from .partspec import Dimension, PartSpec, PartSpecReport, load_part_spec
+from .partspec import PartSpec, PartSpecReport, load_part_spec
 from .ruleprofile import load_rules
 
 CheckFamily = Literal[
@@ -452,9 +452,9 @@ def _prepare_spec(
     spec: PartSpec,
     *,
     source_spec_path: Path | None,
-    spec_check_path: Path | None,
+    spec_unchanged: bool,
 ) -> PartSpec:
-    if source_spec_path is None or spec_check_path is not None:
+    if source_spec_path is None or spec_unchanged:
         return spec
     datasheet = spec.datasheet
     updates: dict[str, object] = {}
@@ -533,10 +533,14 @@ class _LibraryVerifier:
         work_dir: Path,
         run_export_oracle: bool,
         density: Density,
+        rules_profile: str,
+        rules_dir: Path | None,
     ) -> None:
         self.work_dir = work_dir.resolve()
         self.run_export_oracle = run_export_oracle
         self.density: Density = density
+        self.rules_profile = rules_profile
+        self.rules_dir = rules_dir.resolve() if rules_dir is not None else None
         self.excluded_vision_findings = 0
 
     def __call__(self, artifacts: MutationArtifacts) -> Sequence[MutationFinding]:
@@ -550,17 +554,18 @@ class _LibraryVerifier:
         try:
             self.work_dir.mkdir(parents=True, exist_ok=True)
             directory = Path(tempfile.mkdtemp(prefix="library-mutation-", dir=self.work_dir))
+            spec_unchanged = (
+                artifacts.source_spec_path is not None
+                and artifacts.spec_check_path is not None
+                and artifacts.spec == load_part_spec(artifacts.source_spec_path)
+            )
             spec = _prepare_spec(
                 artifacts.spec,
                 source_spec_path=artifacts.source_spec_path,
-                spec_check_path=artifacts.spec_check_path,
+                spec_unchanged=spec_unchanged,
             )
             spec_path = directory / "part.spec.json"
-            if (
-                artifacts.source_spec_path is not None
-                and artifacts.spec_check_path is not None
-                and spec == load_part_spec(artifacts.source_spec_path)
-            ):
+            if spec_unchanged and artifacts.source_spec_path is not None:
                 shutil.copyfile(artifacts.source_spec_path, spec_path)
             else:
                 spec_path.write_text(
@@ -593,7 +598,7 @@ class _LibraryVerifier:
             footprint = artifacts.footprint.model_copy(update={"models": [model_reference]})
             _write_footprint(footprint_path, footprint)
             check_path: Path | None = None
-            if artifacts.spec_check_path is not None:
+            if spec_unchanged and artifacts.spec_check_path is not None:
                 check_path = directory / "part.spec.check.json"
                 check = PartSpecReport.model_validate_json(
                     artifacts.spec_check_path.read_text(encoding="utf-8")
@@ -613,7 +618,7 @@ class _LibraryVerifier:
                 authoring_target = directory / authoring_run_path
                 authoring_target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(authoring_source, authoring_target)
-            rules = load_rules("builtin:ipc7351b", directory)
+            rules = load_rules(self.rules_profile, self.rules_dir or directory)
             reference = compute_land_pattern(spec, self.density, rules=rules)
             from . import libverify
 
@@ -669,6 +674,8 @@ def library_verifier(
     work_dir: Path,
     run_export_oracle: bool,
     density: Density = "nominal",
+    rules_profile: str = "builtin:ipc7351b",
+    rules_dir: Path | None = None,
 ) -> MutationVerifier:
     """Build a verifier backed by the production library and model oracles."""
 
@@ -676,6 +683,8 @@ def library_verifier(
         work_dir=work_dir,
         run_export_oracle=run_export_oracle,
         density=density,
+        rules_profile=rules_profile,
+        rules_dir=rules_dir,
     )
 
 
@@ -691,6 +700,9 @@ def library_mutation_fixture(
     run_export_oracle: bool,
     density: Density = "nominal",
     seed: int = 0,
+    rules_profile: str = "builtin:ipc7351b",
+    rules_dir: Path | None = None,
+    unexercised_codes: frozenset[str] = frozenset(),
 ) -> MutationFixture:
     """Load a library-part fixture and bind it to the real verification stack."""
 
@@ -705,6 +717,8 @@ def library_mutation_fixture(
         work_dir=work_dir,
         run_export_oracle=run_export_oracle,
         density=density,
+        rules_profile=rules_profile,
+        rules_dir=rules_dir,
     )
     return MutationFixture(
         artifacts=MutationArtifacts(
@@ -719,6 +733,9 @@ def library_mutation_fixture(
         verify=verifier,
         seed=seed,
         export_oracle_run=run_export_oracle,
+        rules_profile=rules_profile,
+        rules_dir=rules_dir,
+        unexercised_codes=unexercised_codes,
     )
 
 
@@ -781,6 +798,7 @@ class MutationReport(BaseModel):
     passed: bool
     excluded_vision_findings: int = 0
     export_oracle_run: bool = False
+    unexercised_codes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def enforce_report_gate(self) -> MutationReport:
@@ -820,6 +838,9 @@ class MutationFixture:
     verify: MutationVerifier
     seed: int = 0
     export_oracle_run: bool = False
+    rules_profile: str = "builtin:ipc7351b"
+    rules_dir: Path | None = None
+    unexercised_codes: frozenset[str] = frozenset()
 
 
 MutationTransform = Callable[
@@ -1268,39 +1289,34 @@ def _part_spec_column_shift(
     artifacts: MutationArtifacts,
     rng: random.Random,
 ) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
-    fields = (
-        "body_length",
-        "body_width",
-        "height",
-        "pitch",
-        "standoff",
-        "lead_span",
-        "lead_length",
-        "lead_width",
+    dimensions = (
+        ("body_length", artifacts.spec.package.body_length),
+        ("body_width", artifacts.spec.package.body_width),
+        ("height", artifacts.spec.package.height),
+        ("pitch", artifacts.spec.package.pitch),
+        ("standoff", artifacts.spec.package.standoff),
+        ("lead_span", artifacts.spec.package.lead_span),
+        ("lead_length", artifacts.spec.package.lead_length),
+        ("lead_width", artifacts.spec.package.lead_width),
     )
     available = [
-        field
-        for field in fields
-        if (dimension := getattr(artifacts.spec.package, field, None)) is not None
-        and dimension.nom is not None
-        and any(
-            value is not None and value != dimension.nom for value in (dimension.min, dimension.max)
+        (field, dimension)
+        for field, dimension in dimensions
+        if dimension is not None
+        and len(
+            {value for value in (dimension.min, dimension.nom, dimension.max) if value is not None}
         )
+        > 1
     ]
     if not available:
         raise MutationError("PartSpec has no populated mechanical dimension")
-    field = rng.choice(available)
-    dimension = getattr(artifacts.spec.package, field)
-    if not isinstance(dimension, Dimension):
-        raise MutationError(f"PartSpec dimension {field} is unavailable")
-    source_column = rng.choice(
-        [
-            column
-            for column in ("min", "max")
-            if (value := getattr(dimension, column)) is not None and value != dimension.nom
-        ]
-    )
-    shifted_value = getattr(dimension, source_column)
+    field, dimension = rng.choice(available)
+    source_columns: list[tuple[str, float]] = []
+    if dimension.min is not None and dimension.min != dimension.nom:
+        source_columns.append(("min", dimension.min))
+    if dimension.max is not None and dimension.max != dimension.nom:
+        source_columns.append(("max", dimension.max))
+    source_column, shifted_value = rng.choice(source_columns)
     shifted = dimension.model_copy(
         update={"min": shifted_value, "nom": shifted_value, "max": shifted_value}
     )
@@ -1538,12 +1554,18 @@ def run_mutations(fixture: MutationFixture) -> MutationReport:
     baseline_errors = [
         item.code
         for item in baseline
-        if item.severity == "error" and family_for_code(item.code) in _COUNTING_FAMILIES
+        if item.code not in fixture.unexercised_codes
+        and item.severity == "error"
+        and family_for_code(item.code) in _COUNTING_FAMILIES
     ]
     if baseline_errors:
         details = ", ".join(sorted(baseline_errors))
         raise MutationError(f"mutation fixture is not known-good; baseline errors: {details}")
-    baseline_counts = Counter((item.code, item.severity) for item in baseline)
+    baseline_counts = Counter(
+        (item.code, item.severity)
+        for item in baseline
+        if item.code not in fixture.unexercised_codes
+    )
     outcomes: list[MutationOutcome] = []
     family_hits: Counter[CheckFamily] = Counter()
     single_oracle: list[str] = []
@@ -1561,6 +1583,8 @@ def run_mutations(fixture: MutationFixture) -> MutationReport:
         remaining_baseline = dict(baseline_counts)
         new_codes: list[str] = []
         for finding in verified:
+            if finding.code in fixture.unexercised_codes:
+                continue
             key = (finding.code, finding.severity)
             remaining = remaining_baseline.get(key, 0)
             if remaining:
@@ -1602,6 +1626,7 @@ def run_mutations(fixture: MutationFixture) -> MutationReport:
         single_oracle=single_oracle,
         undetected=undetected,
         passed=not single_oracle and not undetected,
+        unexercised_codes=sorted(fixture.unexercised_codes),
         excluded_vision_findings=(
             fixture.verify.excluded_vision_findings
             if isinstance(fixture.verify, _LibraryVerifier)

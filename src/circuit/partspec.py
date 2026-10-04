@@ -18,7 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 from . import advisory, confidential, datasheet, humanrequest, visionread
 from . import pinout as pinout_oracle
@@ -267,6 +267,7 @@ class DatasheetRef(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     revision: str = Field(min_length=1)
     extraction_path: str
+    url: str | None = None
     confidential: bool = False
     origin: Literal["web", "user_provided"] = "web"
 
@@ -292,6 +293,13 @@ class SubstitutionRef(BaseModel):
 class PartSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    _source_file_path: Path | None = PrivateAttr(default=None)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PartSpec):
+            return NotImplemented
+        return self.model_dump(mode="python") == other.model_dump(mode="python")
+
     artifact_kind: Literal["circuit_part_spec"]
     mpn: str
     manufacturer: str
@@ -305,6 +313,13 @@ class PartSpec(BaseModel):
     orderable: list[OrderableVariant] = Field(min_length=1)
     authoring: str | None = None
     orderable_vision_read: str | None = None
+
+    @property
+    def source_file_path(self) -> Path | None:
+        return self._source_file_path
+
+    def bind_source_file(self, path: Path) -> None:
+        self._source_file_path = path.resolve()
 
 
 class ParsedDimension(BaseModel):
@@ -430,9 +445,11 @@ def parse_dimension_text(text: str) -> ParsedDimension:
 
 def load_part_spec(path: Path) -> PartSpec:
     try:
-        return PartSpec.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        spec = PartSpec.model_validate(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"could not load part spec {path}: {exc}") from exc
+    spec.bind_source_file(path)
+    return spec
 
 
 def part_spec_sha256(path: Path) -> str:

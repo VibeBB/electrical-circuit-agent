@@ -1151,7 +1151,7 @@ def _dimension_value(dimension: Dimension, *, upper: bool = False) -> float | No
     return float(fallback) if fallback is not None else None
 
 
-def _body_box(spec: PartSpec) -> tuple[float, float, float, float] | None:
+def nominal_body_box(spec: PartSpec) -> tuple[float, float, float, float] | None:
     body_width = _dimension_value(spec.package.body_width)
     body_length = _dimension_value(spec.package.body_length)
     if body_width is None or body_length is None:
@@ -1189,7 +1189,7 @@ def _check_courtyard_and_fab(
             "footprint has no F.CrtYd or B.CrtYd graphics",
         )
     courtyard_box = _graphic_box(courtyard_graphics)
-    body = _body_box(spec)
+    body = nominal_body_box(spec)
     pad_boxes = list(_pad_boxes(footprint.pads).values())
     if courtyard_box is not None:
         enclosed = all(_contains(courtyard_box, box, 1e-6) for box in pad_boxes)
@@ -1761,6 +1761,33 @@ def _model_pad_contains(
     )
 
 
+def _bound_model_terminal_fits_pad(
+    pad_bbox: tuple[float, float, float, float],
+    region_bbox: tuple[float, float, float, float],
+    center: tuple[float, float],
+    *,
+    exposed_pad: bool,
+    tolerance: float = 0.025,
+) -> bool:
+    if exposed_pad:
+        return _model_pad_contains(pad_bbox, region_bbox, tolerance)
+    lead_axis = 0 if abs(center[0]) >= abs(center[1]) else 1
+    transverse_axis = 1 - lead_axis
+    pad_min = pad_bbox[lead_axis]
+    pad_max = pad_bbox[lead_axis + 2]
+    region_min = region_bbox[lead_axis]
+    region_max = region_bbox[lead_axis + 2]
+    terminal_length = region_max - region_min
+    overlap = max(0.0, min(pad_max, region_max) - max(pad_min, region_min))
+    return (
+        pad_bbox[transverse_axis] <= region_bbox[transverse_axis] + tolerance
+        and pad_bbox[transverse_axis + 2] >= region_bbox[transverse_axis + 2] - tolerance
+        and pad_min <= center[lead_axis] <= pad_max
+        and terminal_length > 0
+        and overlap >= terminal_length * 0.5
+    )
+
+
 def _model_rectangles_overlap(
     left: tuple[float, float, float, float],
     right: tuple[float, float, float, float],
@@ -1865,6 +1892,9 @@ def _check_model_terminals(
         return
     largest_pad_area = max((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) for _, bbox in pads)
     assigned: dict[int, list[tuple[float, float]]] = {index: [] for index in range(len(pads))}
+    exposed_pad_number = (
+        spec.package.exposed_pad.number if spec.package.exposed_pad is not None else None
+    )
     for region in regions:
         region_bbox = region.bbox_xy
         center = (
@@ -1916,7 +1946,12 @@ def _check_model_terminals(
             pad_index = targets[0]
             assigned[pad_index].append(center)
             pad_bbox = pads[pad_index][1]
-            if not _model_pad_contains(pad_bbox, region_bbox, tolerance=0.025):
+            if not _bound_model_terminal_fits_pad(
+                pad_bbox,
+                region_bbox,
+                center,
+                exposed_pad=number == exposed_pad_number,
+            ):
                 _finding(
                     findings,
                     "model_terminal_outside_pad",

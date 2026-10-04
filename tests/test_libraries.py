@@ -248,6 +248,7 @@ def test_library_resolution_pass_and_extends(tmp_path: Path) -> None:
     brief_path.write_text("{}", encoding="utf-8")
     result = check_libraries(_brief(), brief_path=brief_path, roots=roots)
     assert result.verdict == "pass"
+    assert result.authoring_requests == []
     assert result.symbols["Device:LED"].pins == ["1", "2"]
     assert symbol_pins(roots.symbol_dirs[0] / "Device.kicad_sym", "LED_ALT") == ["1", "2"]
 
@@ -270,6 +271,12 @@ def test_missing_symbol_library_and_footprint(tmp_path: Path) -> None:
     assert result.verdict == "fail"
     assert result.missing_symbol_libraries == ["Missing"]
     assert result.missing_footprint_libraries == ["Missing"]
+    requests = {request.reason: request for request in result.authoring_requests}
+    assert requests["missing_symbol"].refs == ["R1"]
+    assert requests["missing_symbol"].lib_id == "Missing:R"
+    assert requests["missing_symbol"].mpn is None
+    assert requests["missing_symbol"].manufacturer is None
+    assert requests["missing_footprint"].refs == ["R1"]
 
 
 def test_missing_symbol_footprint_and_pin(tmp_path: Path) -> None:
@@ -291,6 +298,8 @@ def test_missing_symbol_footprint_and_pin(tmp_path: Path) -> None:
     assert result.verdict == "fail"
     assert result.missing_footprints == ["Device:Missing"]
     assert result.missing_pins == {"R1": ["3"]}
+    reasons = {request.reason for request in result.authoring_requests}
+    assert {"missing_footprint", "missing_pins"} <= reasons
 
 
 def test_malformed_symbol_fails_closed(tmp_path: Path) -> None:
@@ -417,6 +426,10 @@ def test_project_library_precedes_default_roots_and_requires_verification(
     assert unverified.verdict == "fail"
     assert "unverified project library part: Device:R" in unverified.reasons
     assert "unverified project library part: Device:LED" in unverified.reasons
+    assert (
+        "unverified_project_part",
+        "Device:R",
+    ) in {(request.reason, request.lib_id) for request in unverified.authoring_requests}
     assert unverified.symbol_dirs[0] == tmp_path / "library"
 
     _write_project_verification(
@@ -591,6 +604,10 @@ def test_project_library_gate_requires_approval_state(
 
     assert result.verdict == "fail"
     assert reason in result.reasons
+    assert any(
+        request.reason == "human_review_pending" and request.lib_id == "Device:R"
+        for request in result.authoring_requests
+    )
 
 
 def test_project_library_approval_does_not_override_fresh_verification_failure(

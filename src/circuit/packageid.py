@@ -21,8 +21,9 @@ if TYPE_CHECKING:
 _ROW_TOLERANCE_PT = 2.0
 _PIN_HEADER_TOLERANCE_PT = 3.0
 _PIN_COUNT_HEADER_GAP_PT = 8.0
-_DESIGNATOR = re.compile(r"^[A-Z0-9]{1,8}$")
-_DRAWING_TOKEN = re.compile(r"^[A-Z0-9]{1,16}$")
+_BODY_RANGE_AGREEMENT_TOLERANCE_MM = 0.005
+_DESIGNATOR = re.compile(r"^[A-Z][A-Z0-9]{0,7}$")
+_DRAWING_TOKEN = re.compile(r"^[A-Z][A-Z0-9]*\d[A-Z0-9]*$")
 _INTEGER = re.compile(r"^\d+$")
 _NUMBER = re.compile(r"^\d+(?:\.\d+)?$")
 _DRAWING_MARKERS = (
@@ -113,8 +114,16 @@ def _drawing_ids(words: list[PdfWord]) -> set[str]:
         token
         for word in words
         for token in re.findall(r"[A-Za-z0-9]+", word.text)
-        if _DRAWING_TOKEN.fullmatch(token.upper())
+        if len(token) >= 4 and _DRAWING_TOKEN.fullmatch(token)
     }
+
+
+def _designator_matches_drawing(designator: str, drawing_id: str) -> bool:
+    return drawing_id == designator or (
+        drawing_id.startswith(designator)
+        and len(drawing_id) > len(designator)
+        and drawing_id[len(designator)].isdigit()
+    )
 
 
 def _bracketed_numbers(rows: list[tuple[int, list[PdfWord]]]) -> set[int]:
@@ -235,10 +244,8 @@ def _resolve_lane(
                 token != mpn
                 and token not in pin_count_tokens
                 and _DESIGNATOR.fullmatch(token)
-                and (not token.isdigit() or len(token) >= 4)
-                and (token.isupper() or token.isdigit())
                 and any(
-                    drawing_id == token or drawing_id.startswith(token)
+                    _designator_matches_drawing(token, drawing_id)
                     for drawing_ids in all_drawing_ids.values()
                     for drawing_id in drawing_ids
                 )
@@ -262,7 +269,7 @@ def _resolve_lane(
         page: words
         for page, words in drawing_pages.items()
         if any(
-            drawing_id == designator or drawing_id.startswith(designator)
+            _designator_matches_drawing(designator, drawing_id)
             for drawing_id in all_drawing_ids[page]
         )
     }
@@ -279,7 +286,7 @@ def _resolve_lane(
         (
             item
             for item in all_drawing_ids[drawing_page]
-            if item == designator or item.startswith(designator)
+            if _designator_matches_drawing(designator, item)
         ),
         key=lambda item: (-len(item), item),
     )
@@ -299,6 +306,23 @@ def _resolve_lane(
             if pin_count_unresolved
             else ""
         ),
+    )
+
+
+def _body_range_intersection(
+    poppler_ranges: list[tuple[float, float]],
+    plumber_ranges: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    return sorted(
+        {
+            poppler_range
+            for poppler_range in poppler_ranges
+            if any(
+                abs(poppler_range[0] - plumber_range[0]) <= _BODY_RANGE_AGREEMENT_TOLERANCE_MM
+                and abs(poppler_range[1] - plumber_range[1]) <= _BODY_RANGE_AGREEMENT_TOLERANCE_MM
+                for plumber_range in plumber_ranges
+            )
+        }
     )
 
 
@@ -373,10 +397,21 @@ def resolve_package_identity(
     poppler_identity, poppler_code, poppler_message = _resolve_lane(poppler_pages, mpn)
     plumber_identity, plumber_code, plumber_message = _resolve_lane(plumber_pages, mpn)
     if poppler_identity is not None and plumber_identity is not None:
-        if poppler_identity == plumber_identity and poppler_code == plumber_code:
-            if poppler_code is not None:
-                return poppler_identity, [_finding(poppler_code, "datasheet", poppler_message)]
-            return poppler_identity, []
+        same_facts = poppler_identity.model_copy(update={"body_ranges_mm": []}) == (
+            plumber_identity.model_copy(update={"body_ranges_mm": []})
+        )
+        if same_facts and poppler_code == plumber_code:
+            body_ranges = _body_range_intersection(
+                poppler_identity.body_ranges_mm,
+                plumber_identity.body_ranges_mm,
+            )
+            if body_ranges:
+                agreed_identity = poppler_identity.model_copy(
+                    update={"body_ranges_mm": body_ranges}
+                )
+                if poppler_code is not None:
+                    return agreed_identity, [_finding(poppler_code, "datasheet", poppler_message)]
+                return agreed_identity, []
     elif poppler_code == plumber_code and poppler_code is not None:
         return None, [_finding(poppler_code, "datasheet", poppler_message)]
     return None, [
@@ -409,10 +444,8 @@ def sibling_package_mpn(pdf_path: Path, mpn: str) -> str | None:
                 for token in tokens
                 if token != mpn
                 and _DESIGNATOR.fullmatch(token)
-                and (not token.isdigit() or len(token) >= 4)
-                and (token.isupper() or token.isdigit())
                 and any(
-                    drawing_id == token or drawing_id.startswith(token)
+                    _designator_matches_drawing(token, drawing_id)
                     for drawing_ids in ids_by_page.values()
                     for drawing_id in drawing_ids
                 )

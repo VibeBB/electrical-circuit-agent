@@ -56,6 +56,10 @@ and `circuit_brief_intake_check`, fixing the inputs until the brief is valid and
 library report passes. Return the intake JSON verbatim, including open questions, so the
 orchestrator can resolve them with the user and invoke you again.
 
+If the library report fails with `authoring_requests`, never substitute a similar
+library item. Return every request as a `Q*` open question in the intake and preserve
+its requested identifiers and reason.
+
 You may call `search_templates` or `get_template` as advisory reference designs;
 record any adopted idea as an `A*` assumption, never as a requirement source.
 

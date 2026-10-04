@@ -32,11 +32,13 @@ from circuit.partspec import (
     PinTable,
     Reading,
     check_part_spec,
+    part_spec_sha256,
 )
 from circuit.pinsource import PinSourceInput
 from circuit.report import DesignReport
 from circuit.sch_lint import SchLintReport
 from pinout_fixtures import pinout_drawing
+from test_libverify import _vqfn_spec  # pyright: ignore[reportPrivateUsage]
 from test_mutation import _known_good_library_fixture  # pyright: ignore[reportPrivateUsage]
 
 
@@ -77,6 +79,8 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_part_author_compare",
         "circuit_part_spec_check",
         "circuit_land_pattern",
+        "circuit_footprint_write",
+        "circuit_symbol_write",
         "circuit_library_candidates",
         "circuit_library_import",
         "circuit_library_record",
@@ -104,6 +108,20 @@ def test_mcp_server_lists_expected_tools() -> None:
     assert verification_schema["properties"]["rule_profile"]["type"] == "string"
     assert verification_schema["properties"]["pin_source_path"]["type"] == "string"
     assert verification_schema["properties"]["pin_sources"]["type"] == "array"
+    footprint_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_footprint_write"
+    )
+    assert footprint_schema["required"] == ["part_spec_path", "output_path"]
+    assert "spec_check_path" in footprint_schema["properties"]
+    symbol_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_symbol_write"
+    )
+    assert symbol_schema["required"] == ["part_spec_path", "library_path", "footprint_id"]
+    assert "spec_check_path" in symbol_schema["properties"]
     for tool_name in ("circuit_library_review_packet", "circuit_library_review_status"):
         schema = next(
             schema
@@ -118,6 +136,7 @@ def test_mcp_server_lists_expected_tools() -> None:
         if name == "circuit_library_review_status"
     )
     assert status_schema["properties"]["review_scope"]["enum"] == ["full", "relaxed"]
+
     assert {
         name
         for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -132,6 +151,32 @@ def test_mcp_server_lists_expected_tools() -> None:
         for name, _, _ in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
         if name in {"circuit_library_metrics", "circuit_mutation_report"}
     } == {"circuit_library_metrics", "circuit_mutation_report"}
+    footprint_write_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_footprint_write"
+    )
+    assert set(footprint_write_schema["required"]) == {"part_spec_path", "output_path"}
+    assert {
+        "density",
+        "rules_path",
+        "model_path",
+        "ep_paste_margin_mm",
+        "name",
+        "spec_check_path",
+    } <= set(footprint_write_schema["properties"])
+    assert footprint_write_schema["properties"]["density"]["default"] == "nominal"
+    symbol_write_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_symbol_write"
+    )
+    assert set(symbol_write_schema["required"]) == {
+        "part_spec_path",
+        "library_path",
+        "footprint_id",
+    }
+    assert "spec_check_path" in symbol_write_schema["properties"]
     mutation_schema = next(
         schema
         for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -221,6 +266,140 @@ def test_mcp_server_lists_expected_tools() -> None:
     )
     assert set(received_schema["properties"]) == {"pdf_path", "request_path"}
     assert set(received_schema["required"]) == {"pdf_path", "request_path"}
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["circuit_footprint_write", "circuit_symbol_write"],
+)
+@pytest.mark.parametrize("check_state", ["missing", "stale", "invalid", "errors"])
+def test_writer_tools_require_a_current_error_free_spec_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tool_name: str,
+    check_state: str,
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    spec = _vqfn_spec()
+    spec_path = tmp_path / "part.spec.json"
+    spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    check_path = tmp_path / "part.spec.check.json"
+    if check_state == "invalid":
+        check_path.write_text("{", encoding="utf-8")
+    elif check_state != "missing":
+        report_sha = "0" * 64 if check_state == "stale" else part_spec_sha256(spec_path)
+        verdict = "fail" if check_state == "errors" else "pass"
+        findings = (
+            [{"code": "fixture_error", "severity": "error", "field": "pins", "message": "invalid"}]
+            if check_state == "errors"
+            else []
+        )
+        check_path.write_text(
+            json.dumps(
+                {
+                    "artifact_kind": "circuit_part_spec_check",
+                    "verdict": verdict,
+                    "part_spec_sha256": report_sha,
+                    "extraction_sha256": "1" * 64,
+                    "pdf_sha256": spec.datasheet.sha256,
+                    "checked_readings": 0,
+                    "findings": findings,
+                }
+            ),
+            encoding="utf-8",
+        )
+    arguments: dict[str, Any] = {"part_spec_path": str(spec_path)}
+    if tool_name == "circuit_footprint_write":
+        arguments["output_path"] = str(tmp_path / "library" / "Fixture.pretty" / "item.kicad_mod")
+    else:
+        arguments["library_path"] = str(tmp_path / "library" / "Fixture.kicad_sym")
+        arguments["footprint_id"] = "Fixture:VQFN"
+
+    result = asyncio.run(mcp_server.call_tool(tool_name, arguments))
+    assert result.isError is True
+    text = next(block.text for block in result.content if isinstance(block, TextContent))
+    error = json.loads(text)["error"]
+    expected = {
+        "missing": "part_spec_check_missing",
+        "stale": "part_spec_check_stale",
+        "invalid": "part_spec_check_invalid",
+        "errors": "part_spec_check_failed",
+    }[check_state]
+    assert expected in error
+
+
+def test_writer_tools_record_generated_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    spec = _vqfn_spec()
+    spec_path = tmp_path / "part.spec.json"
+    spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    check_path = tmp_path / "part.spec.check.json"
+    check_path.write_text(
+        json.dumps(
+            {
+                "artifact_kind": "circuit_part_spec_check",
+                "verdict": "pass",
+                "part_spec_sha256": part_spec_sha256(spec_path),
+                "extraction_sha256": "1" * 64,
+                "pdf_sha256": spec.datasheet.sha256,
+                "checked_readings": 0,
+                "findings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    library_dir = tmp_path / "library"
+    footprint_path = library_dir / "Fixture.pretty" / f"{spec.package.drawing_id}.kicad_mod"
+    footprint_result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_footprint_write",
+            {
+                "part_spec_path": str(spec_path),
+                "spec_check_path": str(check_path),
+                "output_path": str(footprint_path),
+            },
+        )
+    )
+    symbol_path = library_dir / "Fixture.kicad_sym"
+    symbol_result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_symbol_write",
+            {
+                "part_spec_path": str(spec_path),
+                "library_path": str(symbol_path),
+                "footprint_id": f"Fixture:{spec.package.drawing_id}",
+            },
+        )
+    )
+
+    assert footprint_result.isError is False
+    assert symbol_result.isError is False
+    footprint_payload = json.loads(
+        next(block.text for block in footprint_result.content if isinstance(block, TextContent))
+    )
+    symbol_payload = json.loads(
+        next(block.text for block in symbol_result.content if isinstance(block, TextContent))
+    )
+    for payload, tool_name in (
+        (footprint_payload, "circuit_footprint_write"),
+        (symbol_payload, "circuit_symbol_write"),
+    ):
+        entry = payload["provenance"]
+        assert entry["source"]["origin"] == "generated"
+        assert entry["part_spec_sha256"] == part_spec_sha256(spec_path)
+        assert entry["sha256"] == payload["write"]["sha256"]
+        assert tool_name in entry["transformations"][0]
+        assert "writer_version=1" in entry["transformations"][0]
+        assert f"input_part_spec_sha256={entry['part_spec_sha256']}" in entry["transformations"][0]
+        assert f"input_datasheet_sha256={spec.datasheet.sha256}" in entry["transformations"][0]
+        assert f"output_sha256={entry['sha256']}" in entry["transformations"][0]
+    assert (
+        f"input_land_pattern_sha256={footprint_payload['write']['land_pattern_sha256']}"
+        in footprint_payload["provenance"]["transformations"][0]
+    )
 
 
 def test_datasheet_check_received_mcp_tool_returns_findings_and_fails_closed(
@@ -1469,7 +1648,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 50
+            assert len(tools.tools) == 52
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

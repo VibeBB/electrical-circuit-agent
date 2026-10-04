@@ -70,6 +70,11 @@ def test_real_mutation_matrix_success_marks_synthetic_evidence(
     pdf_path.write_bytes(b"%PDF-fixture")
     fixture_root = tmp_path / "parts"
     (fixture_root / entry.id).mkdir(parents=True)
+    fixture_rules = fixture_root / entry.id / "rules"
+    fixture_rules.mkdir()
+    (fixture_rules / f"{entry.id}.json").write_bytes(
+        (_FIXTURE_DIR / "rules" / f"{entry.id}.json").read_bytes()
+    )
     spec = load_part_spec(_FIXTURE_DIR / "part.spec.json")
     report = MutationReport(
         seed=62130,
@@ -93,10 +98,13 @@ def test_real_mutation_matrix_success_marks_synthetic_evidence(
 
     def prepare_baseline(
         _entry: corpus.CorpusEntry,
-        _pdf_path: Path,
-        _work_dir: Path,
+        pdf_path: Path,
+        work_dir: Path,
         _fixture_dir: Path,
     ) -> tuple[PartSpec, Path, Path, Path, Path, PartSpecReport]:
+        assert pdf_path == work_dir / "datasheets" / f"{entry.id}.pdf"
+        assert pdf_path.read_bytes() == b"%PDF-fixture"
+        assert (work_dir / "library" / "rules" / f"{entry.id}.json").is_file()
         return (
             spec,
             tmp_path / "spec.json",
@@ -116,7 +124,14 @@ def test_real_mutation_matrix_success_marks_synthetic_evidence(
 
     monkeypatch.setattr(run_real_mutation_matrix, "_prepare_baseline", prepare_baseline)
 
-    def fake_fixture(**_kwargs: object) -> object:
+    def fake_fixture(**kwargs: object) -> object:
+        assert kwargs["rules_profile"] == entry.id
+        assert kwargs["unexercised_codes"] == frozenset(
+            {"authoring_missing", "vision_compare_missing"}
+        )
+        rules_dir = kwargs["rules_dir"]
+        assert isinstance(rules_dir, Path)
+        assert (rules_dir / f"{entry.id}.json").is_file()
         return object()
 
     def fake_run_mutations(_fixture: object) -> MutationReport:
@@ -156,6 +171,7 @@ def test_real_mutation_matrix_success_marks_synthetic_evidence(
         "pdf_sha256": entry.datasheet.sha256,
         "synthetic_evidence": ["vision_reads", "advisory_reviews"],
         "synthetic_evidence_counted": False,
+        "unexercised_evidence": ["blind_authoring", "vision_compare"],
         "matrix": report.model_dump(mode="json"),
     }
 
