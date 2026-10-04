@@ -17,10 +17,12 @@ jobs:
   analysis:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
+    # publish_results is verified server-side: the job running
+    # scorecard-action may only contain `uses:` steps, so all
+    # post-processing (SARIF normalization + upload) lives in `report`.
     permissions:
       contents: read # actions/checkout
       actions: read # reads workflow runs for the CI-tests check
-      security-events: write # uploads the SARIF report to code scanning
       id-token: write # publishes results to the OpenSSF API
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -35,6 +37,28 @@ jobs:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 7
+
+  report:
+    needs: analysis
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # actions/download-artifact workspace
+      actions: read # downloads the analysis artifact
+      security-events: write # uploads the SARIF report to code scanning
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: scorecard-sarif
       - name: Normalize scorecard SARIF locations
         # Alerts with no associated file carry the literal string
         # "no file associated with this alert" as their artifact URI, which
@@ -65,19 +89,12 @@ jobs:
                       # repo-level alerts keep none after filtering.
                       count += 1
               run["results"] = kept_results
-          # results.sarif is root-owned (scorecard-action runs in Docker);
-          # replace it via rename, which only needs a writable directory.
           tmp = "results.sarif.normalized"
           with open(tmp, "w", encoding="utf-8") as fh:
               json.dump(data, fh)
           os.replace(tmp, "results.sarif")
           print(f"dropped {count} location-less scorecard result(s)")
           PY
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: scorecard-sarif
-          path: results.sarif
-          retention-days: 7
       - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: results.sarif
