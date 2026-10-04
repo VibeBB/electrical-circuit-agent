@@ -825,6 +825,15 @@ def check_python_versions(
                 values.append((arg_value, name))
         for minor in re.findall(r"uv\s+python\s+install\s+(\d+\.\d+)", text):
             values.append((minor, name))
+        for minor in re.findall(r"uv\s+venv\s+--python\s+(\d+\.\d+)", text):
+            values.append((minor, name))
+        for minor in re.findall(r"python3\.(\d+)", text):
+            values.append((f"3.{minor}", name))
+    dotfile = repo_root / ".python-version"
+    if dotfile.is_file():
+        match = re.search(r"(\d+\.\d+)", dotfile.read_text(encoding="utf-8"))
+        if match is not None:
+            values.append((match.group(1), ".python-version"))
     for workflow in workflow_files(repo_root):
         for minor in re.findall(
             r'python-version:\s*"?(\d+\.\d+)"?',
