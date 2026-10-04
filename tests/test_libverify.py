@@ -2283,6 +2283,37 @@ def test_model_geometry_rejects_mirrored_and_rotated_models(
     assert "model_pin1_mismatch" in _codes(rotated_180)
 
 
+def test_bound_model_terminal_contains_lead_and_exposed_pad_geometry() -> None:
+    fits_pad = libverify_module._bound_model_terminal_fits_pad  # pyright: ignore[reportPrivateUsage]
+    pad_bbox = (1.1, -0.2, 1.7, 0.2)
+    terminal_bbox = (1.05, -0.15, 1.5, 0.15)
+
+    assert fits_pad(
+        pad_bbox,
+        terminal_bbox,
+        (1.275, 0.0),
+        exposed_pad=False,
+    )
+    assert not fits_pad(
+        pad_bbox,
+        terminal_bbox,
+        (1.275, 0.0),
+        exposed_pad=True,
+    )
+    assert not fits_pad(
+        pad_bbox,
+        (1.05, -0.15, 1.5, 0.25),
+        (1.275, 0.05),
+        exposed_pad=False,
+    )
+    assert not fits_pad(
+        (1.1, -0.2, 1.25, 0.2),
+        (1.0, -0.15, 1.4, 0.15),
+        (1.2, 0.0),
+        exposed_pad=False,
+    )
+
+
 def test_model_geometry_rejects_offset_pitch_and_unit_scale(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -478,6 +478,11 @@ class PartSpec(BaseModel):
 
     _source_file_path: Path | None = PrivateAttr(default=None)
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PartSpec):
+            return NotImplemented
+        return self.model_dump(mode="python") == other.model_dump(mode="python")
+
     artifact_kind: Literal["circuit_part_spec"]
     mpn: str
     manufacturer: str
@@ -506,7 +511,6 @@ class PartSpec(BaseModel):
 
     def bind_source_file(self, path: Path) -> None:
         self._source_file_path = path.resolve()
-
 
 class ParsedDimension(BaseModel):
     model_config = ConfigDict(extra="forbid")

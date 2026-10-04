@@ -385,6 +385,7 @@ def _synthetic_datasheet_pdf(
     monkeypatch: pytest.MonkeyPatch,
     *,
     include_pins_column: bool = True,
+    ambiguous_designator: bool = False,
 ) -> tuple[PartSpec, Path]:
     spec = _vqfn_spec().model_copy(update={"mpn": "TESTVQFN16"})
     pin_rows = [["Pin", "Function"], *[[number, name] for number, name in QUAD16_NAMES.items()]]
@@ -428,6 +429,11 @@ def _synthetic_datasheet_pdf(
             ["TESTSOIC8", "ACTIVE", "SOIC", "SOIC", "3000"],
         ]
     )
+    if include_pins_column and ambiguous_designator:
+        orderable_rows.insert(
+            2,
+            [spec.mpn, "ACTIVE", "SOIC", "SOIC", "8", "3000"],
+        )
     commands = [
         *_table_commands(pin_rows, (20, 65, 150), 760, 15),
         *_table_commands(
@@ -481,8 +487,17 @@ def _synthetic_datasheet_pdf(
         tmp_path / "synthetic-datasheet.pdf",
         [
             ([], 0),
-            (["PACKAGE OUTLINE", "RGT0016C", "2.9 3.1 mm [0.114 0.122]"], 0),
-            (["PACKAGE DIMENSIONS", "SOIC8", "5.0 5.2 mm"], 0),
+            (["PACKAGE OUTLINE", "VQFN", "RGT0016C", "2.9 3.1 mm [0.114 0.122]"], 0),
+            (
+                [
+                    "PACKAGE DIMENSIONS",
+                    "SOIC8",
+                    "[TESTVQFN16]",
+                    "[TESTSOIC8]",
+                    "5.0 5.2 mm",
+                ],
+                0,
+            ),
         ],
         page_size=(1500, 1300),
         extra_commands=[commands, [], []],
@@ -701,6 +716,36 @@ def test_package_identity_resolves_orderable_row_and_sibling_package(
     assert packageid.sibling_package_mpn(pdf_path, spec.mpn) == "TESTSOIC8"
 
 
+def test_package_identity_ignores_package_type_and_packaging_mpn_tokens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, _ = _synthetic_datasheet_pdf(tmp_path, monkeypatch)
+
+    identity, findings = packageid.resolve_package_identity(Path(spec.datasheet.path), spec.mpn)
+
+    assert findings == []
+    assert identity is not None
+    assert identity.designator == "RGT"
+    assert identity.drawing_id == "RGT0016C"
+
+
+def test_package_identity_rejects_two_real_designator_drawings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, _ = _synthetic_datasheet_pdf(
+        tmp_path,
+        monkeypatch,
+        ambiguous_designator=True,
+    )
+
+    identity, findings = packageid.resolve_package_identity(Path(spec.datasheet.path), spec.mpn)
+
+    assert identity is None
+    assert [item.code for item in findings] == ["package_identity_ambiguous"]
+
+
 def test_package_identity_schema_rejects_extra_fields() -> None:
     with pytest.raises(ValidationError):
         packageid.PackageIdentity.model_validate(
@@ -774,6 +819,130 @@ def test_package_identity_fails_closed_without_outline_or_on_lane_disagreement(
     monkeypatch.setattr(datasheet, "pdfplumber_words", empty_lane)
     _, findings = packageid.resolve_package_identity(Path(spec.datasheet.path), spec.mpn)
     assert [item.code for item in findings] == ["package_identity_lane_mismatch"]
+
+
+def _mock_package_identity_lanes(
+    monkeypatch: pytest.MonkeyPatch,
+    poppler_identity: packageid.PackageIdentity,
+    plumber_identity: packageid.PackageIdentity,
+) -> tuple[packageid.PackageIdentity | None, list[libverify.VerifyFinding]]:
+    lane_results = [
+        (poppler_identity, None, ""),
+        (plumber_identity, None, ""),
+    ]
+
+    def extract_lane(
+        _pdf_path: Path,
+        *,
+        poppler: bool,
+    ) -> tuple[dict[int, list[datasheet.PdfWord]], str | None]:
+        return {
+            1: [
+                datasheet.PdfWord(
+                    text="TESTVQFN16",
+                    x0=0.0,
+                    top=0.0,
+                    x1=10.0,
+                    bottom=1.0,
+                )
+            ]
+        }, None
+
+    def resolve_lane(
+        _pages: dict[int, list[datasheet.PdfWord]],
+        _mpn: str,
+    ) -> tuple[packageid.PackageIdentity | None, str | None, str]:
+        return lane_results.pop(0)
+
+    monkeypatch.setattr(packageid, "_extract_lane", extract_lane)
+    monkeypatch.setattr(packageid, "_resolve_lane", resolve_lane)
+    return packageid.resolve_package_identity(Path("unused.pdf"), "TESTVQFN16")
+
+
+def _package_identity_with_ranges(
+    body_ranges_mm: list[tuple[float, float]],
+) -> packageid.PackageIdentity:
+    return packageid.PackageIdentity(
+        mpn="TESTVQFN16",
+        row_pages=[32, 35, 37, 38],
+        designator="RGT",
+        pin_count_candidates=[16],
+        drawing_page=40,
+        drawing_id="RGT0016C",
+        body_ranges_mm=body_ranges_mm,
+    )
+
+
+def test_package_identity_agrees_on_intersecting_body_ranges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    poppler_identity = _package_identity_with_ranges([(1.1, 3.4), (1.2, 3.5)])
+    plumber_identity = poppler_identity.model_copy(
+        update={"body_ranges_mm": [(1.104, 3.398), (1.0, 3.6), (1.2, 3.5)]}
+    )
+
+    identity, findings = _mock_package_identity_lanes(
+        monkeypatch,
+        poppler_identity,
+        plumber_identity,
+    )
+
+    assert identity == poppler_identity
+    assert findings == []
+
+
+def test_package_identity_rejects_different_designator_between_lanes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    poppler_identity = _package_identity_with_ranges([(1.1, 3.4)])
+    plumber_identity = poppler_identity.model_copy(
+        update={"designator": "SOIC", "drawing_id": "SOIC8"}
+    )
+
+    identity, findings = _mock_package_identity_lanes(
+        monkeypatch,
+        poppler_identity,
+        plumber_identity,
+    )
+
+    assert identity is None
+    assert [item.code for item in findings] == ["package_identity_lane_mismatch"]
+
+
+def test_package_identity_rejects_disjoint_body_ranges_between_lanes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    poppler_identity = _package_identity_with_ranges([(1.1, 3.4)])
+    plumber_identity = poppler_identity.model_copy(update={"body_ranges_mm": [(2.0, 4.0)]})
+
+    identity, findings = _mock_package_identity_lanes(
+        monkeypatch,
+        poppler_identity,
+        plumber_identity,
+    )
+
+    assert identity is None
+    assert [item.code for item in findings] == ["package_identity_lane_mismatch"]
+
+
+def test_package_identity_drawing_ids_preserve_original_case_and_length(
+    tmp_path: Path,
+) -> None:
+    lowercase_drawing = _pdf(
+        tmp_path / "lowercase-drawing.pdf",
+        [(["ABC123", "RGT", "16"], 0), (["PACKAGE OUTLINE", "rgt0016c"], 0)],
+    )
+    identity, findings = packageid.resolve_package_identity(lowercase_drawing, "ABC123")
+    assert identity is None
+    assert [item.code for item in findings] == ["package_identity_drawing_unresolved"]
+
+    short_drawing = _pdf(
+        tmp_path / "short-drawing.pdf",
+        [(["ABC123", "RG", "16"], 0), (["PACKAGE OUTLINE", "RG1"], 0)],
+    )
+    identity, findings = packageid.resolve_package_identity(short_drawing, "ABC123")
+    assert identity is None
+    assert [item.code for item in findings] == ["package_identity_drawing_unresolved"]
 
 
 def test_package_identity_reverifies_pdf_hash(
@@ -1094,6 +1263,92 @@ def test_partspec_mutations_rederive_pdf_evidence_against_unchanged_artifacts(
     assert len({path.parent for path in staged_specs}) == 5
 
 
+def test_partspec_mutation_rechecks_evidence_instead_of_using_stale_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _known_good_library_fixture(tmp_path, monkeypatch, seed=32032)
+    source_spec_path = fixture.artifacts.source_spec_path
+    assert source_spec_path is not None
+    datasheet_ref = fixture.artifacts.spec.datasheet
+    assert datasheet_ref is not None
+    extraction_path = Path(datasheet_ref.extraction_path)
+    check = check_part_spec(
+        fixture.artifacts.spec,
+        load_extraction(extraction_path),
+        spec_path=source_spec_path,
+        extraction_path=extraction_path,
+    )
+    source_check_path = source_spec_path.parent / "part.spec.check.json"
+    source_check_path.write_text(check.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    artifacts = replace(fixture.artifacts, spec_check_path=source_check_path)
+    fixture = replace(fixture, artifacts=artifacts)
+
+    original_verify = libverify.verify_library_part
+    passed_check_paths: list[Path | None] = []
+
+    def capture_verify(*args: object, **kwargs: object) -> libverify.LibraryVerification:
+        check_path = kwargs.get("spec_check_path")
+        assert check_path is None or isinstance(check_path, Path)
+        passed_check_paths.append(check_path)
+        return original_verify(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(libverify, "verify_library_part", capture_verify)
+    baseline_findings = list(fixture.verify(artifacts))
+    operator = next(
+        item for item in MUTATION_OPERATORS if item.name == "partspec_drawing_view_flip"
+    )
+    mutated, _details = operator.apply(artifacts, fixture.seed)
+
+    mutated_findings = list(fixture.verify(mutated))
+
+    assert passed_check_paths[0] is not None
+    assert not any(
+        finding.severity == "error" and family_for_code(finding.code) == "evidence"
+        for finding in baseline_findings
+    )
+    assert passed_check_paths[1] is None
+    assert any(
+        finding.severity == "error" and family_for_code(finding.code) == "evidence"
+        for finding in mutated_findings
+    )
+
+
+def test_partspec_column_shift_supports_dimensions_without_nominal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _known_good_library_fixture(tmp_path, monkeypatch, seed=613)
+    package = fixture.artifacts.spec.package
+    lead_width = package.lead_width
+    assert lead_width is not None
+    package_without_nominals = package.model_copy(
+        update={
+            "body_length": package.body_length.model_copy(update={"nom": None}),
+            "body_width": package.body_width.model_copy(update={"nom": None}),
+            "lead_width": lead_width.model_copy(update={"nom": None}),
+        }
+    )
+    spec = fixture.artifacts.spec.model_copy(update={"package": package_without_nominals})
+    artifacts = replace(fixture.artifacts, spec=spec)
+    operator = next(
+        item for item in MUTATION_OPERATORS if item.name == "partspec_min_nom_max_column_shift"
+    )
+
+    mutated, details = operator.apply(artifacts, fixture.seed)
+
+    field = details.params["field"]
+    assert isinstance(field, str)
+    selected_dimension = {
+        "body_length": mutated.spec.package.body_length,
+        "body_width": mutated.spec.package.body_width,
+        "lead_width": mutated.spec.package.lead_width,
+    }[field]
+    assert mutated.spec != artifacts.spec
+    assert selected_dimension is not None
+    assert selected_dimension.min == selected_dimension.nom == selected_dimension.max
+
+
 def test_sibling_package_variant_marks_synthetic_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1111,6 +1366,36 @@ def test_sibling_package_variant_marks_synthetic_fallback(
     _, details = operator.apply(fixture.artifacts, fixture.seed)
 
     assert details.params["sibling_source"] == "synthetic"
+
+
+def test_unexercised_codes_do_not_gate_baseline_or_earn_family_credit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = _known_good_library_fixture(tmp_path, monkeypatch, seed=40404)
+    unexercised_codes = frozenset({"authoring_missing", "vision_compare_missing"})
+
+    def verify(_artifacts: MutationArtifacts) -> list[MutationFinding]:
+        return [
+            MutationFinding(code="authoring_missing", severity="error"),
+            MutationFinding(code="vision_compare_missing", severity="error"),
+        ]
+
+    fixture = MutationFixture(
+        artifacts=baseline.artifacts,
+        verify=verify,
+        seed=baseline.seed,
+        unexercised_codes=unexercised_codes,
+    )
+    monkeypatch.setattr(mutation_module, "MUTATION_OPERATORS", (MUTATION_OPERATORS[0],))
+
+    report = run_mutations(fixture)
+
+    assert report.baseline_findings == ["authoring_missing", "vision_compare_missing"]
+    assert report.unexercised_codes == ["authoring_missing", "vision_compare_missing"]
+    assert report.outcomes[0].finding_codes == []
+    assert report.outcomes[0].families == []
+    assert report.outcomes[0].status == "undetected"
 
 
 def test_symbol_mutations_are_serialized_and_reach_real_verifier(
