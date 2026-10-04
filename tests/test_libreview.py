@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal, cast
 from xml.etree import ElementTree as ET
@@ -43,6 +44,7 @@ from circuit.partspec import (
     PinTable,
     Reading,
 )
+from circuit.pinsource import PinSourceInput
 from pinout_fixtures import geometry_for_names, pinout_drawing
 
 
@@ -1521,11 +1523,25 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     spec_path.write_text(spec.model_dump_json(), encoding="utf-8")
     pin_source_path = tmp_path / "part.ibs"
     pin_source_path.write_text(
-        "[Pin]\n"
+        f"[Component]\n{spec.mpn}\n[Pin]\n"
         + "\n".join(f"{pin.number} {''.join(pin.name.split())} MODEL" for pin in spec.pins)
         + "\n",
         encoding="utf-8",
     )
+    derived_pin_source_path = tmp_path / "derived.ibs"
+    derived_pin_source_path.write_text(
+        f"[Component]\n{spec.mpn}\n[Pin]\n"
+        + "\n".join(f"{pin.number} {''.join(pin.name.split())} MODEL" for pin in spec.pins)
+        + "\n",
+        encoding="utf-8",
+    )
+    additional_pin_sources = [
+        PinSourceInput(
+            path=derived_pin_source_path,
+            kind="ibis",
+            derived_from=["ibis"],
+        )
+    ]
     library_dir = tmp_path / "library"
     library_dir.mkdir()
     footprint_path = library_dir / "Modern.kicad_mod"
@@ -1641,6 +1657,7 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
         model_required: bool,
         rules: Any,
         pin_source_path: Path | None,
+        pin_sources: Sequence[PinSourceInput] | None,
         output_path: Path,
     ) -> LibraryVerification:
         assert json.loads(spec_check_path.read_text(encoding="utf-8"))["verdict"] == fresh_verdict
@@ -1660,6 +1677,8 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
                 density="nominal",
                 tolerance_mm=tolerance_mm,
                 model_required=True,
+                pin_source_path=pin_source_path,
+                pin_sources=list(pin_sources or []),
             ),
             symbol=VerifiedSymbol(
                 lib_path=symbol_lib,
@@ -1710,7 +1729,11 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     ) -> libreview.authoring.AuthoringComparison:
         return comparison
 
+    def compare_runs(_run_dir: Path) -> libreview.authoring.AuthoringComparison:
+        return comparison
+
     monkeypatch.setattr(libreview, "_fresh_authoring_comparison", fresh_comparison)
+    monkeypatch.setattr(libreview.authoring, "compare_runs", compare_runs)
 
     def regressions(_library_dir: Path, _spec: PartSpec) -> list[libreview.ReviewFinding]:
         return (
@@ -1735,6 +1758,7 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
         library_dir=library_dir,
         density="nominal",
         pin_source_path=pin_source_path,
+        pin_sources=additional_pin_sources,
         out_dir=library_dir / "reviews",
     )
 
@@ -1777,6 +1801,8 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert review["pin_sources"]["single_source"] is False
     assert review["pin_sources"]["class_a"]["sha256"] == review["inputs"]["part_spec_sha256"]
     assert review["pin_sources"]["class_b"]["sha256"] == review["inputs"]["pin_source_sha256"]
+    assert len(review["pin_sources"]["sources"]) == 2
+    assert review["pin_sources"]["comparison"]["independent_lineages"] == ["part_spec", "ibis"]
     assert review["artifact_hashes"]["pin_source_sha256"] == review["inputs"]["pin_source_sha256"]
     assert review["artifact_hashes"]["authoring:a"] == comparison.sealed["a"]
     if regressed:
@@ -1825,7 +1851,21 @@ def test_build_packet_binds_fresh_checks_crops_hashes_and_blind_artifacts(
     assert "&lt;script&gt;reviewed&lt;/script&gt;" in review_html
     assert "Intentional deviations from standard" in review_html
     assert "Class A:" in review_html
-    assert "Class B:" in review_html
+    assert "Source 1:" in review_html
+    assert "Source 2:" in review_html
+    current_id = libreview.current_packet_id(
+        spec_path,
+        symbol_lib=symbol_lib,
+        symbol_name="Derived",
+        footprint_path=footprint_path,
+        library_dir=library_dir,
+        density="nominal",
+        tolerance_mm=0.02,
+        model_required=True,
+        pin_source_path=pin_source_path,
+        pin_sources=additional_pin_sources,
+    )
+    assert current_id == packet.packet_id
     single_source_review = dict(review)
     single_source_review["pin_sources"] = {
         **review["pin_sources"],

@@ -48,6 +48,7 @@ from circuit.partspec import (
     SpecFinding,
     part_spec_sha256,
 )
+from circuit.pinsource import PinSourceInput
 from circuit.ruleprofile import EffectiveRules, EvidenceRef, load_rules
 from circuit.visionread import VisionBatch, VisionReadItem
 from pinout_fixtures import QUAD16_NAMES, geometry_for_names, pinout_drawing
@@ -1585,7 +1586,10 @@ def test_independent_pin_source_comparison_and_single_source_warning(
 
     pin_source_path = tmp_path / "part.ibs"
     good_rows = [f"{pin.number} {pin.name} MODEL" for pin in spec.pins]
-    pin_source_path.write_text("[Pin]\n" + "\n".join(good_rows) + "\n", encoding="utf-8")
+    pin_source_path.write_text(
+        f"[Component]\n{spec.mpn}\n[Pin]\n" + "\n".join(good_rows) + "\n",
+        encoding="utf-8",
+    )
     matched = verify_library_part(
         spec,
         spec_path=spec_path,
@@ -1609,8 +1613,47 @@ def test_independent_pin_source_comparison_and_single_source_warning(
         matched.inputs.pin_source_sha256 == hashlib.sha256(pin_source_path.read_bytes()).hexdigest()
     )
 
+    derived = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        pin_source_path=pin_source_path,
+        pin_sources=[
+            PinSourceInput(path=pin_source_path, derived_from=["part_spec"]),
+        ],
+    )
+    assert derived.pin_source_comparison is not None
+    assert derived.pin_source_comparison.independent_lineages == ["part_spec"]
+    assert "pin_source_single" in _codes(derived)
+    assert len(derived.inputs.pin_sources) == 1
+    assert derived.inputs.pin_sources[0].derived_from == ["part_spec"]
+
+    pin_source_path.write_text(
+        "[Component]\nOTHER-PART\n[Pin]\n" + "\n".join(good_rows) + "\n",
+        encoding="utf-8",
+    )
+    identity_mismatch = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+        pin_source_path=pin_source_path,
+    )
+    assert "pin_source_identity_mismatch" in _codes(identity_mismatch)
+    assert identity_mismatch.verdict == "fail"
+
     bad_rows = [f"{spec.pins[0].number} WRONG MODEL"]
-    pin_source_path.write_text("[Pin]\n" + "\n".join(bad_rows) + "\n", encoding="utf-8")
+    pin_source_path.write_text(
+        f"[Component]\n{spec.mpn}\n[Pin]\n" + "\n".join(bad_rows) + "\n",
+        encoding="utf-8",
+    )
     mismatched = verify_library_part(
         spec,
         spec_path=spec_path,

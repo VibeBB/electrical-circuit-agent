@@ -21,7 +21,9 @@ libraries, or the CERN library tree. Never read `library/corpus` or
 authoring evidence.
 
 1. **Search manufacturer sources and reusable library items.** Search the
-   manufacturer's official CAD/library source and run
+   manufacturer's official pin database first—such as ST STM32 Open Pin Data,
+   AMD/Xilinx package pinouts, or Microchip ATDF—then official IBIS/BSDL and
+   CAD/library sources. Run
    `circuit_library_candidates` for installed and project candidates. Prefer a
    valid, matching product-tuned candidate when its lineage and evidence pass.
    For external CAD, verify the source URL, retrieval date, license,
@@ -94,11 +96,17 @@ authoring evidence.
 
 8. **Run deterministic library checks and export oracle.** Call
    `circuit_library_verify` with the PartSpec, symbol library/name,
-   footprint, model required, and the project library directory. Keep the
-   test-board and export checks enabled. **Stop** on every error, missing
-   oracle, or unresolved deterministic contradiction; a HumanRequest,
-   substitute permit, vision impression, author agreement, or review
-   approval cannot waive it.
+   footprint, model required, and the project library directory. Pass
+   manufacturer pin databases through `pin_sources`, selecting the exact ATDF
+   pinout by name. Match device/package identities after punctuation
+   normalization; exact matches or prefix/base-name matches with a shorter
+   identity of at least six alphanumeric characters are accepted. Mark derived
+   sources with their upstream lineage; do not count derivatives as
+   independent.
+   Keep the test-board and export checks enabled. **Stop** on every error,
+   missing oracle, or unresolved deterministic contradiction; a HumanRequest,
+   substitute permit, vision impression, author agreement, or review approval
+   cannot waive it.
 
 9. **Compare library artwork with datasheet images.** Run
    `circuit_vision_compare` separately for the footprint and symbol, and

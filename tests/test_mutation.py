@@ -51,6 +51,7 @@ FINDING_MODULES = (
     "authoring",
     "corpus",
     "libverify",
+    "pinsource",
     "partspec",
     "model3d",
     "ruleprofile",
@@ -832,6 +833,7 @@ def test_every_static_verification_code_has_a_family() -> None:
     assert family_for_code("footprint_rotation_mismatch") == "orientation"
     assert family_for_code("pin1_mismatch") == "evidence"
     assert family_for_code("view_label_mismatch") == "evidence"
+    assert family_for_code("pin_source_identity_mismatch") == "package_identity"
     assert family_for_code("F6.3") == "land_geometry"
     assert {
         code for code, family in CHECK_FAMILY.items() if family == "integrity"

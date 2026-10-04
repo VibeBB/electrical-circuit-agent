@@ -33,6 +33,7 @@ from circuit.partspec import (
     Reading,
     check_part_spec,
 )
+from circuit.pinsource import PinSourceInput
 from circuit.report import DesignReport
 from circuit.sch_lint import SchLintReport
 from pinout_fixtures import pinout_drawing
@@ -102,6 +103,7 @@ def test_mcp_server_lists_expected_tools() -> None:
     assert verification_schema["properties"]["test_board"]["default"] is True
     assert verification_schema["properties"]["rule_profile"]["type"] == "string"
     assert verification_schema["properties"]["pin_source_path"]["type"] == "string"
+    assert verification_schema["properties"]["pin_sources"]["type"] == "array"
     for tool_name in ("circuit_library_review_packet", "circuit_library_review_status"):
         schema = next(
             schema
@@ -109,6 +111,7 @@ def test_mcp_server_lists_expected_tools() -> None:
             if name == tool_name
         )
         assert schema["properties"]["pin_source_path"]["type"] == "string"
+        assert schema["properties"]["pin_sources"]["type"] == "array"
     status_schema = next(
         schema
         for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -986,12 +989,30 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
     footprint_path.write_text("{}", encoding="utf-8")
     pin_source_path = tmp_path / "part.ibs"
     pin_source_path.write_text("[Pin]\n1 PIN1 MODEL\n2 PIN2 MODEL\n", encoding="utf-8")
+    derived_pin_source_path = tmp_path / "derived.ibs"
+    pin_source_inputs = [
+        PinSourceInput(
+            path=derived_pin_source_path,
+            kind="ibis",
+            derived_from=["stm32_open_pin_data"],
+        )
+    ]
+    pin_source_arguments = [
+        {
+            "path": str(derived_pin_source_path),
+            "kind": "ibis",
+            "derived_from": ["stm32_open_pin_data"],
+        }
+    ]
     captured_sources: list[SourceInfoInput] = []
     verification_options: list[bool] = []
     verification_pin_sources: list[Path | None] = []
+    verification_pin_source_lists: list[list[PinSourceInput] | None] = []
     verification_rule_chains: list[list[str] | None] = []
     review_pin_sources: list[Path | None] = []
+    review_pin_source_lists: list[list[PinSourceInput] | None] = []
     status_pin_sources: list[Path | None] = []
+    status_pin_source_lists: list[list[PinSourceInput] | None] = []
     candidate_products: list[str | None] = []
 
     def fake_import(
@@ -1028,6 +1049,9 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
     def fake_verify(_spec: PartSpec, **kwargs: Any) -> LibraryVerification:
         verification_options.append(cast(bool, kwargs["test_board"]))
         verification_pin_sources.append(cast(Path | None, kwargs.get("pin_source_path")))
+        verification_pin_source_lists.append(
+            cast(list[PinSourceInput] | None, kwargs.get("pin_sources"))
+        )
         rules = kwargs["rules"]
         verification_rule_chains.append(
             rules.chain if isinstance(rules, mcp_server.ruleprofile.EffectiveRules) else None
@@ -1075,6 +1099,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     "library_dir": str(library_dir),
                     "rule_profile": "builtin:kicad-generator",
                     "pin_source_path": str(pin_source_path),
+                    "pin_sources": pin_source_arguments,
                 },
             ),
         )
@@ -1158,6 +1183,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     "library_dir": str(library_dir),
                     "rule_profile": "builtin:kicad-generator",
                     "pin_source_path": str(pin_source_path),
+                    "pin_sources": pin_source_arguments,
                 },
             ),
         )
@@ -1165,6 +1191,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
         assert (tmp_path / "circuit-reports" / "part.library-verification.json").is_file()
         assert verification_options == [True]
         assert verification_pin_sources == [pin_source_path]
+        assert verification_pin_source_lists == [pin_source_inputs]
         assert verification_rule_chains == [["builtin:kicad-generator"]]
 
         def build_packet(
@@ -1178,11 +1205,13 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
             tolerance_mm: float = 0.02,
             model_required: bool = True,
             pin_source_path: Path | None = None,
+            pin_sources: list[PinSourceInput] | None = None,
             out_dir: Path,
         ) -> mcp_server.libreview.ReviewPacket:
             del symbol_lib, symbol_name, footprint_path, density, tolerance_mm
             del model_required, out_dir
             review_pin_sources.append(pin_source_path)
+            review_pin_source_lists.append(pin_sources)
             return mcp_server.libreview.ReviewPacket(
                 artifact_kind="circuit_library_review_packet",
                 packet_id="a" * 16,
@@ -1238,8 +1267,10 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
             tolerance_mm: float,
             model_required: bool,
             pin_source_path: Path | None = None,
+            pin_sources: list[PinSourceInput] | None = None,
         ) -> str:
             status_pin_sources.append(pin_source_path)
+            status_pin_source_lists.append(pin_sources)
             del (
                 symbol_lib,
                 symbol_name,
@@ -1289,6 +1320,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     "footprint_path": str(footprint_path),
                     "library_dir": str(library_dir),
                     "pin_source_path": str(pin_source_path),
+                    "pin_sources": pin_source_arguments,
                 },
             ),
         )
@@ -1306,13 +1338,16 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     "footprint_path": str(footprint_path),
                     "library_dir": str(library_dir),
                     "pin_source_path": str(pin_source_path),
+                    "pin_sources": pin_source_arguments,
                 },
             ),
         )
         assert status.isError is False
         assert (tmp_path / "circuit-reports" / "part.library-review-status.json").is_file()
         assert review_pin_sources == [pin_source_path]
+        assert review_pin_source_lists == [pin_source_inputs]
         assert status_pin_sources == [pin_source_path]
+        assert status_pin_source_lists == [pin_source_inputs]
 
         applied = cast(
             Any,

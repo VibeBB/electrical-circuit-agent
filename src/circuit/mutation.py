@@ -296,6 +296,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "package_identity_mpn_unresolved",
         "package_identity_pin_count_mismatch",
         "package_identity_verification_unavailable",
+        "pin_source_identity_mismatch",
     ),
 }
 

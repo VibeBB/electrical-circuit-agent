@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import corpus, libreview, mutation
 from .partspec import PartSpec, load_part_spec
+from .pinsource import PinSourceInput
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _DEFAULT_CORPUS = Path(__file__).resolve().parents[2] / "library" / "corpus" / "corpus.json"
@@ -196,6 +197,16 @@ def _current_review_status(
             if isinstance(pin_source_value, str) and pin_source_value
             else None
         )
+        pin_sources_value = inputs.get("pin_sources")
+        pin_sources = (
+            [
+                PinSourceInput.model_validate(cast(dict[str, object], value))
+                for value in cast(list[object], pin_sources_value)
+                if isinstance(value, dict)
+            ]
+            if isinstance(pin_sources_value, list)
+            else None
+        )
         current_id = libreview.current_packet_id(
             spec_path,
             symbol_lib=symbol_lib,
@@ -206,6 +217,7 @@ def _current_review_status(
             tolerance_mm=float(inputs.get("tolerance_mm", 0.02)),
             model_required=bool(inputs.get("model_required", True)),
             pin_source_path=pin_source_path,
+            pin_sources=pin_sources,
         )
         if current_id != packet_id:
             return None

@@ -84,8 +84,33 @@ from .mcp_collect import (
     _reports_dirs,
 )
 from .mcp_konnect import _konnect_call, _rewrite_base64_images
+from .pinsource import PinSourceInput
 
 server = Server("circuit", version=__version__)
+
+_PIN_SOURCE_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "kind": {
+                "type": "string",
+                "enum": [
+                    "ibis",
+                    "bsdl",
+                    "stm32_open_pin_data",
+                    "amd_package_file",
+                    "microchip_atdf",
+                ],
+            },
+            "pinout_name": {"type": "string"},
+            "derived_from": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    },
+}
 
 _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
     (
@@ -777,6 +802,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "model_required": {"type": "boolean", "default": True},
                 "test_board": {"type": "boolean", "default": True},
                 "pin_source_path": {"type": "string"},
+                "pin_sources": _PIN_SOURCE_SCHEMA,
                 "rule_profile": {"type": "string"},
                 "output_path": {"type": "string"},
             },
@@ -856,6 +882,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "tolerance_mm": {"type": "number", "default": 0.02},
                 "model_required": {"type": "boolean", "default": True},
                 "pin_source_path": {"type": "string"},
+                "pin_sources": _PIN_SOURCE_SCHEMA,
                 "out_dir": {"type": "string"},
                 "output_path": {"type": "string"},
             },
@@ -887,6 +914,7 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "tolerance_mm": {"type": "number", "default": 0.02},
                 "model_required": {"type": "boolean", "default": True},
                 "pin_source_path": {"type": "string"},
+                "pin_sources": _PIN_SOURCE_SCHEMA,
                 "review_scope": {"type": "string", "enum": ["full", "relaxed"], "default": "full"},
                 "output_path": {"type": "string"},
             },
@@ -1533,6 +1561,18 @@ async def list_tools() -> list[Tool]:
     return tool_specs()
 
 
+def _pin_source_inputs(args: dict[str, Any]) -> list[PinSourceInput] | None:
+    value = args.get("pin_sources")
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError("pin_sources must be an array")
+    source_values = cast(list[object], value)
+    if any(not isinstance(item, dict) for item in source_values):
+        raise ValueError("each pin source must be an object")
+    return [PinSourceInput.model_validate(cast(dict[str, object], item)) for item in source_values]
+
+
 async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResult:
     image_paths: list[Path] = []
     result: Any = None
@@ -1925,6 +1965,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                     if isinstance(args.get("pin_source_path"), str)
                     else None
                 ),
+                pin_sources=_pin_source_inputs(args),
                 output_path=output,
             )
         elif name == "circuit_corpus_score":
@@ -2005,6 +2046,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                     if isinstance(args.get("pin_source_path"), str)
                     else None
                 ),
+                pin_sources=_pin_source_inputs(args),
                 out_dir=output_dir,
             )
             output = _output_path(
@@ -2045,6 +2087,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                     if isinstance(args.get("pin_source_path"), str)
                     else None
                 ),
+                pin_sources=_pin_source_inputs(args),
             )
             result = libreview.review_status(
                 library_dir,
