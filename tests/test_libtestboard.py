@@ -5,7 +5,7 @@ import pytest
 
 from circuit import kicad_cli, libtestboard
 from circuit.gerber import GerberFeature
-from circuit.libitems import FootprintDef, GraphicDef, PadDef
+from circuit.libitems import FootprintDef, GraphicDef, PadDef, parse_footprint
 from circuit.libtestboard import (
     _check_pinmap,  # pyright: ignore[reportPrivateUsage]
     _check_position_file,  # pyright: ignore[reportPrivateUsage]
@@ -22,6 +22,7 @@ from circuit.partspec import (
     Dimension,
     ExposedPad,
     LandPad,
+    LandPattern,
     OrderableVariant,
     PackageSpec,
     PartSpec,
@@ -210,6 +211,55 @@ def test_manufacturing_oracle_uses_part_spec_geometry_and_kicad_bottom_flip() ->
         rotation_deg=90,
         pad_type="thru_hole",
     ) == [(-2.0, -1.0, 0.6, "2")]
+
+
+def test_manufacturing_drill_export_uses_kicad_separate_th_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    package = spec.package.model_copy(update={"family": "chip", "lead_length": _dimension(0.1)})
+    spec = spec.model_copy(
+        update={
+            "package": package,
+            "land_pattern": LandPattern(
+                source="datasheet",
+                dimensions={"pad_pitch": _dimension(1.0)},
+                pads=[
+                    LandPad(
+                        number="1",
+                        x=-0.5,
+                        y=0.0,
+                        width=0.8,
+                        height=1.0,
+                        shape="rect",
+                    )
+                ],
+            ),
+        }
+    )
+    footprint_path = tmp_path / "FixtureFootprint.kicad_mod"
+    footprint_path.write_text(_footprint(), encoding="utf-8")
+    footprint = parse_footprint(footprint_path)
+    calls: list[list[str]] = []
+
+    def run(args: list[str]) -> kicad_cli.CompletedRun:
+        calls.append(args)
+        return kicad_cli.CompletedRun(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(kicad_cli, "run", run)
+    libtestboard._manufacturing_export(  # pyright: ignore[reportPrivateUsage]
+        tmp_path,
+        tmp_path / "exports",
+        spec=spec,
+        footprint_path=footprint_path,
+        footprint=footprint,
+        rules=load_rules("builtin:ipc7351b", tmp_path / "rules"),
+    )
+
+    drill_commands = [args for args in calls if args[:3] == ["pcb", "export", "drill"]]
+    assert len(drill_commands) == 6
+    assert all("--excellon-separate-th" in args for args in drill_commands)
 
 
 def test_manufacturing_oracle_fails_closed_for_unsupported_part_spec(

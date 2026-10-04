@@ -1394,7 +1394,7 @@ def _manufacturing_export(
                 "mm",
                 "--drill-origin",
                 "absolute",
-                "--separate-th",
+                "--excellon-separate-th",
                 "--output",
                 str(drill_dir) + "/",
                 str(board_path),
