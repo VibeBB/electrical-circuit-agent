@@ -25,6 +25,7 @@ from .landpattern import (
     Density,
     LandPatternResult,
     Rect,
+    bga_pin_positions,
     compute_land_pattern,
     lead_rects,
     standard_pin_placements,
@@ -61,6 +62,7 @@ from .partspec import (
     PartSpec,
     PartSpecReport,
     check_part_spec,
+    expected_signal_pin_numbers,
     part_spec_sha256,
 )
 from .pinout import PinoutGeometry
@@ -542,15 +544,47 @@ def _check_symbol(
         return
     expected_numbers, expected_names, expected_types = _spec_pin_groups(spec)
     actual_numbers, actual_names, actual_types = _symbol_pin_groups(symbol)
-    if expected_numbers != actual_numbers:
+    actual_pin_numbers: set[str] = set(actual_numbers)
+    duplicate_numbers: list[str] = []
+    for number, count in actual_numbers.items():
+        if count <= 1:
+            continue
+        pins = [pin for pin in symbol.pins if pin.number == number]
+        same_unit = len({pin.unit for pin in pins}) == 1
+        power_pins = all(
+            _SYMBOL_TYPE_ALIASES.get(pin.electrical_type.casefold(), pin.electrical_type.casefold())
+            in {"power_in", "power_out"}
+            for pin in pins
+        )
+        if not same_unit or not power_pins:
+            duplicate_numbers.append(number)
+    if set(expected_numbers) != actual_pin_numbers or duplicate_numbers:
         _finding(
             findings,
             "symbol_pin_set",
             "error",
             "symbol",
             f"symbol pin numbers {sorted(actual_numbers.elements())} do not match "
-            f"PartSpec {sorted(expected_numbers.elements())}",
+            f"PartSpec {sorted(expected_numbers.elements())}; duplicate non-stacked pins "
+            f"{sorted(duplicate_numbers)}",
         )
+    if any(pin.bank is not None for pin in spec.pins):
+        expected_banks: dict[str, set[str]] = {}
+        for pin in spec.pins:
+            expected_banks.setdefault(pin.bank or "COMMON", set()).add(pin.number)
+        actual_banks: dict[int, set[str]] = {}
+        for pin in symbol.pins:
+            actual_banks.setdefault(pin.unit, set()).add(pin.number)
+        expected_pin_sets = sorted(tuple(sorted(numbers)) for numbers in expected_banks.values())
+        actual_pin_sets = sorted(tuple(sorted(numbers)) for numbers in actual_banks.values())
+        if expected_pin_sets != actual_pin_sets:
+            _finding(
+                findings,
+                "symbol_bank_pin_set",
+                "error",
+                "symbol",
+                "symbol unit pin sets do not match the PartSpec pin banks",
+            )
     name_mismatches = [
         number
         for number in expected_names.keys() | actual_names.keys()
@@ -609,6 +643,41 @@ def _check_symbol(
                 "warning",
                 "symbol.Footprint",
                 f"Footprint property should be {expected_footprint}",
+            )
+
+
+def _check_depopulated_pins(
+    spec: PartSpec,
+    symbol: SymbolDef | None,
+    footprint: FootprintDef | None,
+    findings: list[VerifyFinding],
+) -> None:
+    missing = set(spec.package.missing_pins)
+    if not missing:
+        return
+    spec_pins = sorted(pin.number for pin in spec.pins if pin.number in missing)
+    footprint_pads = (
+        sorted(pad.number for pad in footprint.pads if pad.number in missing)
+        if footprint is not None
+        else []
+    )
+    symbol_pins = (
+        sorted(pin.number for pin in symbol.pins if pin.number in missing)
+        if symbol is not None
+        else []
+    )
+    for subject, numbers in (
+        ("PartSpec", spec_pins),
+        ("footprint", footprint_pads),
+        ("symbol", symbol_pins),
+    ):
+        if numbers:
+            _finding(
+                findings,
+                "depopulated_pin_present",
+                "error",
+                subject,
+                f"depopulated package pins appear in {subject}: {sorted(set(numbers))}",
             )
 
 
@@ -711,13 +780,34 @@ def _pad_polygon(pad: PadDef) -> list[tuple[float, float]]:
     angle = math.radians(pad.rotation)
     cosine = math.cos(angle)
     sine = math.sin(angle)
-    corners = [
-        (-pad.width / 2, -pad.height / 2),
-        (pad.width / 2, -pad.height / 2),
-        (pad.width / 2, pad.height / 2),
-        (-pad.width / 2, pad.height / 2),
-    ]
-    return [(pad.x + x * cosine - y * sine, pad.y + x * sine + y * cosine) for x, y in corners]
+    local_points = (
+        pad.polygon
+        if pad.shape == "custom" and pad.polygon is not None
+        else [
+            (-pad.width / 2, -pad.height / 2),
+            (pad.width / 2, -pad.height / 2),
+            (pad.width / 2, pad.height / 2),
+            (-pad.width / 2, pad.height / 2),
+        ]
+    )
+    return [(pad.x + x * cosine - y * sine, pad.y + x * sine + y * cosine) for x, y in local_points]
+
+
+def _land_pad_polygon(pad: LandPad) -> list[tuple[float, float]]:
+    angle = math.radians(pad.rotation)
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    local_points = (
+        pad.polygon
+        if pad.shape == "polygon" and pad.polygon is not None
+        else [
+            (-pad.width / 2, -pad.height / 2),
+            (pad.width / 2, -pad.height / 2),
+            (pad.width / 2, pad.height / 2),
+            (-pad.width / 2, pad.height / 2),
+        ]
+    )
+    return [(pad.x + x * cosine - y * sine, pad.y + x * sine + y * cosine) for x, y in local_points]
 
 
 def _polygon_box(points: list[tuple[float, float]]) -> tuple[float, float, float, float]:
@@ -963,14 +1053,7 @@ def _reference_boxes(
 ) -> dict[str, tuple[float, float, float, float]]:
     groups: dict[str, list[tuple[float, float, float, float]]] = {}
     for pad in pads:
-        groups.setdefault(pad.number, []).append(
-            (
-                pad.x - pad.width / 2,
-                pad.y - pad.height / 2,
-                pad.x + pad.width / 2,
-                pad.y + pad.height / 2,
-            )
-        )
+        groups.setdefault(pad.number, []).append(_polygon_box(_land_pad_polygon(pad)))
     return {
         number: (
             min(box[0] for box in boxes),
@@ -980,6 +1063,79 @@ def _reference_boxes(
         )
         for number, boxes in groups.items()
     }
+
+
+def _land_pad_matches(pad: LandPad, actual: PadDef) -> bool:
+    expected_shape = "custom" if pad.shape == "polygon" else pad.shape
+    rotation_delta = abs((actual.rotation - pad.rotation + 180.0) % 360.0 - 180.0)
+    expected_points = _land_pad_polygon(pad)
+    actual_points = _pad_polygon(actual)
+    return (
+        actual.shape == expected_shape
+        and rotation_delta <= 0.02
+        and len(expected_points) == len(actual_points)
+        and all(
+            math.dist(expected, observed) <= 0.02
+            for expected, observed in zip(expected_points, actual_points, strict=True)
+        )
+    )
+
+
+def _check_land_pad_shapes(
+    footprint: FootprintDef,
+    reference: LandPatternResult,
+    findings: list[VerifyFinding],
+) -> None:
+    actual_by_number: dict[str, list[PadDef]] = {}
+    for pad in footprint.pads:
+        if (
+            pad.number
+            and pad.type != "np_thru_hole"
+            and any(layer.endswith(".Cu") for layer in pad.layers)
+        ):
+            actual_by_number.setdefault(pad.number, []).append(pad)
+    used: set[int] = set()
+    for expected in reference.pads:
+        candidates = actual_by_number.get(expected.number, [])
+        match = next(
+            (
+                candidate
+                for candidate in candidates
+                if id(candidate) not in used and _land_pad_matches(expected, candidate)
+            ),
+            None,
+        )
+        subject = f"pad.{expected.number}"
+        if expected.kind in {"exposed", "tab"}:
+            subject = f"{expected.kind}_pad.{expected.number}"
+        if match is not None:
+            used.add(id(match))
+            continue
+        if expected.kind in {"exposed", "tab"} and not candidates:
+            _finding(
+                findings,
+                "exposed_pad_missing",
+                "error",
+                subject,
+                "PartSpec exposed pad or tab is missing from the footprint",
+            )
+            continue
+        if expected.kind in {"exposed", "tab"}:
+            _finding(
+                findings,
+                "exposed_pad_mismatch",
+                "error",
+                subject,
+                "footprint exposed pad or tab geometry differs from PartSpec",
+            )
+        _finding(
+            findings,
+            "land_pad_shape_mismatch",
+            "error",
+            subject,
+            "footprint pad shape, vertices, or rotation differs from the PartSpec-derived "
+            "land pattern",
+        )
 
 
 def _check_pad_geometry(
@@ -1101,6 +1257,10 @@ def _check_pad_types(
         "gullwing_dual",
         "gullwing_quad",
         "chip",
+        "sot223",
+        "tabbed_dpak",
+        "sod",
+        "bga",
     ):
         bad = [pad.number for pad in footprint.pads if pad.number and pad.type != "smd"]
         if bad:
@@ -1405,13 +1565,13 @@ def _check_pad_clearance(
     findings: list[VerifyFinding],
 ) -> None:
     pads = [pad for pad in footprint.pads if pad.number and _is_copper(pad)]
-    exposed_number = spec.package.exposed_pad.number if spec.package.exposed_pad else None
+    exposed_numbers = spec.package.auxiliary_pad_numbers
     for index, first in enumerate(pads):
         for second in pads[index + 1 :]:
             if first.number == second.number:
                 continue
             distance = _polygon_distance(_pad_polygon(first), _pad_polygon(second))
-            is_ep_clearance = first.number == exposed_number or second.number == exposed_number
+            is_ep_clearance = first.number in exposed_numbers or second.number in exposed_numbers
             minimum = (
                 rules.min_ep_to_pad_clearance_mm if is_ep_clearance else rules.min_pad_clearance_mm
             )
@@ -1543,43 +1703,43 @@ def _check_exposed_pad_size(
     footprint: FootprintDef,
     findings: list[VerifyFinding],
 ) -> None:
-    exposed = spec.package.exposed_pad
-    if exposed is None:
-        return
-    boxes = _pad_boxes([pad for pad in footprint.pads if pad.number == exposed.number])
-    box = boxes.get(exposed.number)
-    if box is None:
-        return
-    actual_width, actual_height = box[2] - box[0], box[3] - box[1]
-    nominal_width = _dimension_value(exposed.width)
-    nominal_height = _dimension_value(exposed.length)
-    max_width = _dimension_value(exposed.width, upper=True)
-    max_height = _dimension_value(exposed.length, upper=True)
-    if None in (nominal_width, nominal_height, max_width, max_height):
-        return
-    assert nominal_width is not None and nominal_height is not None
-    assert max_width is not None and max_height is not None
-    direct_ok = (
-        actual_width >= nominal_width * 0.5
-        and actual_height >= nominal_height * 0.5
-        and actual_width <= max_width + 0.3
-        and actual_height <= max_height + 0.3
-    )
-    swapped_ok = (
-        actual_width >= nominal_height * 0.5
-        and actual_height >= nominal_width * 0.5
-        and actual_width <= max_height + 0.3
-        and actual_height <= max_width + 0.3
-    )
-    if not direct_ok and not swapped_ok:
-        _finding(
-            findings,
-            "exposed_pad_size",
-            "warning",
-            f"pad.{exposed.number}",
-            "exposed copper pad is below half the package EP nominal or exceeds "
-            "its maximum by more than 0.3 mm",
+    for exposed in spec.package.all_exposed_pads:
+        if exposed.polygon is not None:
+            continue
+        boxes = _pad_boxes([pad for pad in footprint.pads if pad.number == exposed.number])
+        box = boxes.get(exposed.number)
+        if box is None:
+            continue
+        actual_width, actual_height = box[2] - box[0], box[3] - box[1]
+        nominal_width = _dimension_value(exposed.width)
+        nominal_height = _dimension_value(exposed.length)
+        max_width = _dimension_value(exposed.width, upper=True)
+        max_height = _dimension_value(exposed.length, upper=True)
+        if None in (nominal_width, nominal_height, max_width, max_height):
+            continue
+        assert nominal_width is not None and nominal_height is not None
+        assert max_width is not None and max_height is not None
+        direct_ok = (
+            actual_width >= nominal_width * 0.5
+            and actual_height >= nominal_height * 0.5
+            and actual_width <= max_width + 0.3
+            and actual_height <= max_height + 0.3
         )
+        swapped_ok = (
+            actual_width >= nominal_height * 0.5
+            and actual_height >= nominal_width * 0.5
+            and actual_width <= max_height + 0.3
+            and actual_height <= max_width + 0.3
+        )
+        if not direct_ok and not swapped_ok:
+            _finding(
+                findings,
+                "exposed_pad_size",
+                "warning",
+                f"pad.{exposed.number}",
+                "exposed copper pad is below half the package EP nominal or exceeds "
+                "its maximum by more than 0.3 mm",
+            )
 
 
 def _check_pin1_location(
@@ -1633,6 +1793,10 @@ def functional_findings(
         "gullwing_quad",
         "gullwing_dual",
         "chip",
+        "sot223",
+        "tabbed_dpak",
+        "sod",
+        "bga",
     ):
         _check_pad_clearance(spec, footprint, rules, findings)
         return findings
@@ -1649,8 +1813,31 @@ def functional_findings(
             f"reference {sorted(expected_numbers.elements())}",
         )
 
+    if spec.package.family == "bga":
+        expected_positions = {number: (x, y) for number, x, y in bga_pin_positions(spec)}
+        actual_positions: dict[str, tuple[float, float]] = {}
+        for pad in footprint.pads:
+            if (
+                pad.number in expected_positions
+                and pad.type != "np_thru_hole"
+                and any(layer.endswith(".Cu") for layer in pad.layers)
+            ):
+                actual_positions[pad.number] = (pad.x, pad.y)
+        for number, expected in expected_positions.items():
+            actual = actual_positions.get(number)
+            if actual is None or math.dist(actual, expected) > 0.02:
+                _finding(
+                    findings,
+                    "bga_grid_mismatch",
+                    "error",
+                    f"footprint.pad.{number}",
+                    "BGA ball position or pin-1-corner orientation differs from its grid",
+                )
+        _check_pad_clearance(spec, footprint, rules, findings)
+        return findings
+
     _check_pin1_location(spec, footprint, findings)
-    pin_numbers = {str(number) for number in range(1, spec.package.pin_count + 1)}
+    pin_numbers = expected_signal_pin_numbers(spec.package)
     expected_positions: dict[str, tuple[float, float]] = {}
     expected_groups: dict[str, list[tuple[float, float]]] = {}
     for pad in reference.pads:
@@ -1701,6 +1888,9 @@ def _check_klc(
 
 
 def _model_pad_bbox(pad: PadDef) -> tuple[float, float, float, float]:
+    if pad.shape == "custom" and pad.polygon is not None:
+        points = _pad_polygon(pad)
+        return _polygon_box(points)
     angle = math.radians(pad.rotation)
     width = abs(pad.width * math.cos(angle)) + abs(pad.height * math.sin(angle))
     height = abs(pad.width * math.sin(angle)) + abs(pad.height * math.cos(angle))
@@ -1771,6 +1961,13 @@ def _model_rectangles_overlap(
     )
 
 
+def _pin_slot_gap(left: str, right: str) -> int:
+    try:
+        return max(1, abs(int(right) - int(left)))
+    except ValueError:
+        return 1
+
+
 def _generated_terminal_bindings(
     spec: PartSpec,
     model_path: Path,
@@ -1832,7 +2029,7 @@ def _generated_terminal_bindings(
             ):
                 raise ValueError("terminal_map contains an invalid or duplicate terminal")
             bindings[number] = (float(center_x), float(center_y))
-        if len(bindings) != spec.package.pin_count + int(spec.package.exposed_pad is not None):
+        if len(bindings) != spec.package.pin_count + len(spec.package.auxiliary_pad_numbers):
             raise ValueError("terminal_map does not cover the PartSpec terminal set")
         return bindings
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -1876,7 +2073,9 @@ def _check_model_terminals(
             for index, (_, pad_bbox) in enumerate(pads)
             if _model_rectangles_overlap(region_bbox, pad_bbox)
         ]
-        if len(overlaps) > 1 or region.area > largest_pad_area * 1.1:
+        if len(overlaps) > 1 or (
+            spec.package.family != "bga" and region.area > largest_pad_area * 1.1
+        ):
             _finding(
                 findings,
                 "model_terminals_unseparable",
@@ -1915,8 +2114,22 @@ def _check_model_terminals(
                 continue
             pad_index = targets[0]
             assigned[pad_index].append(center)
-            pad_bbox = pads[pad_index][1]
-            if not _model_pad_contains(pad_bbox, region_bbox, tolerance=0.025):
+            pad = pads[pad_index][0]
+            if spec.package.family == "bga":
+                if math.dist(center, (pad.x, pad.y)) > 0.025:
+                    _finding(
+                        findings,
+                        "model_terminal_mismatch",
+                        "error",
+                        f"model.pad.{number}",
+                        "BGA ball center does not match its numbered pad center",
+                        model_sha256=model_sha256,
+                    )
+            elif not _model_pad_contains(
+                pads[pad_index][1],
+                region_bbox,
+                tolerance=0.025,
+            ):
                 _finding(
                     findings,
                     "model_terminal_outside_pad",
@@ -2002,8 +2215,10 @@ def _check_model_terminals(
     if pitch is None or pitch <= 0:
         return
     if terminal_bindings is not None:
-        footprint_rows: dict[tuple[str, float], set[float]] = {}
+        footprint_rows: dict[tuple[str, float], list[tuple[str, float]]] = {}
         for number in terminal_bindings:
+            if number in spec.package.auxiliary_pad_numbers:
+                continue
             numbered_pads = [pad for pad, _ in pads if pad.number == number]
             if len(numbered_pads) != 1:
                 continue
@@ -2013,11 +2228,19 @@ def _check_model_terminals(
             side, row_position, position = (
                 ("y", pad.y, pad.x) if y_distance >= x_distance else ("x", pad.x, pad.y)
             )
-            footprint_rows.setdefault((side, round(row_position, 4)), set()).add(round(position, 4))
+            footprint_rows.setdefault((side, round(row_position, 4)), []).append(
+                (number, round(position, 4))
+            )
         if any(
-            abs((right - left) - pitch) > 0.005
-            for positions in footprint_rows.values()
-            for left, right in pairwise(sorted(positions))
+            abs(
+                (right_position - left_position)
+                - pitch * _pin_slot_gap(left_number, right_number)
+            )
+            > 0.005
+            for row in footprint_rows.values()
+            for (left_number, left_position), (right_number, right_position) in pairwise(
+                sorted(row, key=lambda item: item[1])
+            )
         ):
             _finding(
                 findings,
@@ -2027,19 +2250,29 @@ def _check_model_terminals(
                 f"numbered footprint terminal spacing does not match nominal pitch {pitch} mm",
                 model_sha256=model_sha256,
             )
-    rows: dict[tuple[str, float], set[float]] = {}
+    rows: dict[tuple[str, float], list[tuple[str, float]]] = {}
     for index in range(len(pads)):
         if len(assigned[index]) != 1:
+            continue
+        pad = pads[index][0]
+        if pad.number in spec.package.auxiliary_pad_numbers:
             continue
         x, y = assigned[index][0]
         x_distance = abs(x) - body_width / 2
         y_distance = abs(y) - body_length / 2
         side = "y" if y_distance >= x_distance else "x"
         key, position = ((side, round(y, 4)), x) if side == "y" else ((side, round(x, 4)), y)
-        rows.setdefault(key, set()).add(round(position, 4))
-    for positions in rows.values():
-        ordered = sorted(positions)
-        if any(abs((right - left) - pitch) > 0.01 for left, right in pairwise(ordered)):
+        rows.setdefault(key, []).append((pad.number, round(position, 4)))
+    for row in rows.values():
+        ordered = sorted(row, key=lambda item: item[1])
+        if any(
+            abs(
+                (right_position - left_position)
+                - pitch * _pin_slot_gap(left_number, right_number)
+            )
+            > 0.01
+            for (left_number, left_position), (right_number, right_position) in pairwise(ordered)
+        ):
             _finding(
                 findings,
                 "model_pitch",
@@ -3056,6 +3289,7 @@ def verify_library_part(
     target = output_path or report_base / "verification" / f"{footprint_name}.verification.json"
     test_board_report: TestBoard | None = None
     _check_symbol(spec, symbol, symbol_lib, footprint_name, library_dir, findings)
+    _check_depopulated_pins(spec, symbol, footprint, findings)
     _check_vision_comparisons(
         spec,
         spec_path=spec_path,
@@ -3112,6 +3346,7 @@ def verify_library_part(
             lineage_valid,
             findings,
         )
+        _check_land_pad_shapes(footprint, reference, findings)
         if lineage_valid and lineage is not None and lineage_base is not None:
             _replace_with_intentional_tuning(
                 reference,
@@ -3133,6 +3368,10 @@ def verify_library_part(
                 "gullwing_dual",
                 "gullwing_quad",
                 "chip",
+                "sot223",
+                "tabbed_dpak",
+                "sod",
+                "bga",
             )
             and "smd" not in footprint.attributes
         ):

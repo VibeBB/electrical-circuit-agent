@@ -427,6 +427,22 @@ def box(
     return Shape(BRepPrimAPI_MakeBox(gp_Pnt(x, y, z), length, width, height).Shape())
 
 
+def cylinder(x: float, y: float, z: float, radius: float, height: float) -> Shape:
+    if (
+        not all(math.isfinite(value) for value in (x, y, z, radius, height))
+        or radius <= 0
+        or height <= 0
+    ):
+        raise OcctError("cylinder dimensions must be finite and positive")
+    return Shape(
+        BRepPrimAPI_MakeCylinder(
+            gp_Ax2(gp_Pnt(x, y, z), gp_Dir(0.0, 0.0, 1.0)),
+            radius,
+            height,
+        ).Shape()
+    )
+
+
 def cylinder_cut(
     shape: Shape,
     *,

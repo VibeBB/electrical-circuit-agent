@@ -36,6 +36,7 @@ class PadDef(BaseModel):
     roundrect_ratio: float | None = None
     paste_margin: float | None = None
     mask_margin: float | None = None
+    polygon: list[Point] | None = None
 
 
 class GraphicDef(BaseModel):
@@ -182,6 +183,18 @@ def _parse_pad(node: list[sexpr.SExpr]) -> PadDef:
     roundrect_ratio_node = _first(node, "roundrect_rratio")
     paste_margin_node = _first(node, "solder_paste_margin")
     mask_margin_node = _first(node, "solder_mask_margin")
+    polygon: list[Point] | None = None
+    if shape == "custom":
+        primitives = _first(node, "primitives")
+        polygon_nodes = _lists(primitives or [], "gr_poly")
+        if len(polygon_nodes) != 1:
+            raise LibItemError(f"custom pad {number} must contain one polygon primitive")
+        points_node = _first(polygon_nodes[0], "pts")
+        if points_node is None:
+            raise LibItemError(f"custom pad {number} polygon is missing points")
+        polygon = [
+            _point(child, label=f"pad {number} polygon") for child in _lists(points_node, "xy")
+        ]
 
     def optional_number(
         value: list[sexpr.SExpr] | None,
@@ -208,6 +221,7 @@ def _parse_pad(node: list[sexpr.SExpr]) -> PadDef:
         roundrect_ratio=optional_number(roundrect_ratio_node, label="roundrect ratio"),
         paste_margin=optional_number(paste_margin_node, label="paste margin"),
         mask_margin=optional_number(mask_margin_node, label="mask margin"),
+        polygon=polygon,
     )
 
 

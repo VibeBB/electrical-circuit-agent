@@ -8,7 +8,7 @@ import math
 import re
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -24,6 +24,10 @@ _SUPPORTED_FAMILIES = {
     "gullwing_quad",
     "gullwing_dual",
     "chip",
+    "sot223",
+    "tabbed_dpak",
+    "sod",
+    "bga",
 }
 _SYMBOL_PIN_TYPES = {
     "input": "input",
@@ -63,17 +67,6 @@ def _format_number(value: float) -> str:
         raise LibWriterError("invalid_geometry")
     rendered = f"{round(value, 4):.4f}".rstrip("0").rstrip(".")
     return "0" if rendered in ("", "-0") else rendered
-
-
-def _canonical_sha256(value: BaseModel) -> str:
-    serialized = json.dumps(
-        value.model_dump(mode="json"),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return hashlib.sha256(serialized).hexdigest()
 
 
 def _checked_spec_sha256(spec: PartSpec, supplied: str) -> str:
@@ -151,8 +144,50 @@ def _outward(value: float, *, lower: bool) -> float:
     return float(scaled.to_integral_value(rounding=rounding) / 100)
 
 
-def _land_hash(land: LandPatternResult) -> str:
-    return _canonical_sha256(land)
+def _land_hash(land: LandPatternResult, spec: PartSpec) -> str:
+    legacy_primary_ep = (
+        spec.package.exposed_pad.number
+        if spec.package.family
+        in {"no_lead_quad", "no_lead_dual", "gullwing_quad", "gullwing_dual", "chip"}
+        and spec.package.exposed_pad is not None
+        else None
+    )
+    pads: list[dict[str, object]] = []
+    for pad in land.pads:
+        pad_data: dict[str, object] = {
+            "number": pad.number,
+            "x": pad.x,
+            "y": pad.y,
+            "width": pad.width,
+            "height": pad.height,
+            "shape": pad.shape,
+        }
+        if pad.rotation != 0:
+            pad_data["rotation"] = pad.rotation
+        if pad.polygon is not None:
+            pad_data["polygon"] = pad.polygon
+        if pad.kind != "signal" and pad.number != legacy_primary_ep:
+            pad_data["kind"] = pad.kind
+        pads.append(pad_data)
+    payload: dict[str, object] = {
+        "family": land.family,
+        "density": land.density,
+        "source": land.source,
+        "params": land.params,
+        "pads": pads,
+        "courtyard": land.courtyard,
+        "konnect_pads": land.konnect_pads,
+        "rule_chain": land.rule_chain,
+        "rule_chain_sha256": land.rule_chain_sha256,
+    }
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
 
 
 def _pad_node(
@@ -167,26 +202,61 @@ def _pad_node(
     width = pad.width
     height = pad.height
     shape = pad.shape
-    if shape not in {"rect", "roundrect", "oval", "circle"}:
+    is_polygon = shape == "polygon"
+    if shape not in {"rect", "roundrect", "oval", "circle", "polygon"}:
         raise LibWriterError("unsupported_pad_shape")
+    if is_polygon and pad.polygon is None:
+        raise LibWriterError("polygon_vertices_missing")
+    kicad_shape = "custom" if is_polygon else shape
+    at: list[sexpr.SExpr] = ["at", _format_number(float(x)), _format_number(float(y))]
+    if pad.rotation != 0 or is_polygon:
+        at.append(_format_number(pad.rotation))
     node: list[sexpr.SExpr] = [
         "pad",
         sexpr.quoted(str(number)),
         "smd",
-        str(shape),
-        ["at", _format_number(float(x)), _format_number(float(y)), "0"],
+        str(kicad_shape),
+        at,
         ["size", _format_number(float(width)), _format_number(float(height))],
     ]
     if shape == "roundrect":
         node.append(["roundrect_rratio", "0.25"])
-    if ep_paste_margin_mm is not None and str(number) == exposed_pad_number:
+    if ep_paste_margin_mm is not None and (
+        pad.kind == "exposed" or str(number) == exposed_pad_number
+    ):
         node.append(["solder_paste_margin", _format_number(ep_paste_margin_mm)])
     node.append(["layers", sexpr.quoted("F.Cu"), sexpr.quoted("F.Paste"), sexpr.quoted("F.Mask")])
+    if is_polygon:
+        polygon = pad.polygon
+        if polygon is None:
+            raise LibWriterError("polygon_vertices_missing")
+        node.append(["options", ["clearance", "outline"], ["anchor", "rect"]])
+        node.append(
+            [
+                "primitives",
+                [
+                    "gr_poly",
+                    [
+                        "pts",
+                        *[["xy", _format_number(px), _format_number(py)] for px, py in polygon],
+                    ],
+                    ["width", "0.05"],
+                    ["fill", "yes"],
+                ],
+            ]
+        )
     return node
 
 
 def _pin1_silk_circle(spec: PartSpec, land: LandPatternResult) -> sexpr.SExpr:
-    first_pin = next((pad for pad in land.pads if pad.number == "1"), None)
+    first_pin = next(
+        (
+            pad
+            for pad in land.pads
+            if pad.number == "1" or (spec.package.family == "bga" and pad.kind == "signal")
+        ),
+        None,
+    )
     if first_pin is None:
         raise LibWriterError("pin1_pad_missing")
     corner = spec.package.pin1_corner or "top_left"
@@ -263,7 +333,7 @@ def write_footprint(
         _outward(land.courtyard[2], lower=False),
         _outward(land.courtyard[3], lower=False),
     )
-    land_sha256 = _land_hash(land)
+    land_sha256 = _land_hash(land, spec)
     properties: list[sexpr.SExpr] = [
         _quoted_property(
             "Reference",
@@ -308,11 +378,11 @@ def write_footprint(
         ],
         _pin1_silk_circle(spec, land),
     ]
-    ep_number = spec.package.exposed_pad.number if spec.package.exposed_pad is not None else None
+    ep_numbers = {pad.number for pad in spec.package.all_exposed_pads}
     root.extend(
         _pad_node(
             pad,
-            exposed_pad_number=ep_number,
+            exposed_pad_number=pad.number if pad.number in ep_numbers else None,
             ep_paste_margin_mm=ep_paste_margin_mm,
         )
         for pad in sorted(land.pads, key=lambda item: _pad_number_key(item.number))
@@ -344,10 +414,7 @@ def _pin_group(
     spec: PartSpec, pin: PinSpec
 ) -> Literal["ground", "power", "left", "right", "remaining"]:
     normalized_name = re.sub(r"[^A-Z0-9]", "", pin.name.upper())
-    exposed_number = (
-        spec.package.exposed_pad.number if spec.package.exposed_pad is not None else None
-    )
-    if normalized_name in _GROUND_NAMES or pin.number == exposed_number:
+    if normalized_name in _GROUND_NAMES or pin.number in spec.package.auxiliary_pad_numbers:
         return "ground"
     if pin.electrical_type in ("power_in", "power_out"):
         return "power"
@@ -364,6 +431,39 @@ def _side_pin_position(index: int, count: int) -> float:
 
 def _snap_body_size(value: float) -> float:
     return math.ceil(value / 2.54) * 2.54
+
+
+def _symbol_pin_groups(spec: PartSpec, pins: list[PinSpec]) -> dict[str, list[PinSpec]]:
+    grouped: dict[str, list[PinSpec]] = {
+        "ground": [],
+        "power": [],
+        "left": [],
+        "right": [],
+        "remaining": [],
+    }
+    for pin in pins:
+        grouped[_pin_group(spec, pin)].append(pin)
+    remaining = sorted(grouped["remaining"], key=lambda pin: _pad_number_key(pin.number))
+    left_count = (len(remaining) + 1) // 2
+    grouped["left"].extend(remaining[:left_count])
+    grouped["right"].extend(remaining[left_count:])
+    for pin_group in grouped.values():
+        pin_group.sort(key=lambda pin: _pad_number_key(pin.number))
+    return grouped
+
+
+def _symbol_body_size(grouped: dict[str, list[PinSpec]]) -> tuple[float, float]:
+    left_right_count = max(len(grouped["left"]), len(grouped["right"]))
+    top_bottom_count = max(len(grouped["power"]), len(grouped["ground"]))
+    max_name_length = max(
+        (len(pin.name) for pin_group in grouped.values() for pin in pin_group),
+        default=1,
+    )
+    body_width = _snap_body_size(
+        max(5.08, max_name_length * 0.635 + 5.08, max(0, top_bottom_count - 1) * 2.54 + 5.08)
+    )
+    body_height = _snap_body_size(max(5.08, max(0, left_right_count - 1) * 2.54 + 5.08))
+    return body_width, body_height
 
 
 def _symbol_pin_node(
@@ -388,32 +488,14 @@ def _symbol_pin_node(
     ]
 
 
-def _symbol_node(
-    spec: PartSpec, symbol_name: str, footprint_id: str, spec_sha256: str
+def _symbol_unit_node(
+    spec: PartSpec,
+    symbol_name: str,
+    pins: list[PinSpec],
+    unit_number: int,
 ) -> sexpr.SExpr:
-    grouped: dict[str, list[PinSpec]] = {
-        "ground": [],
-        "power": [],
-        "left": [],
-        "right": [],
-        "remaining": [],
-    }
-    for pin in spec.pins:
-        grouped[_pin_group(spec, pin)].append(pin)
-    remaining = sorted(grouped["remaining"], key=lambda pin: _pad_number_key(pin.number))
-    left_count = (len(remaining) + 1) // 2
-    grouped["left"].extend(remaining[:left_count])
-    grouped["right"].extend(remaining[left_count:])
-    for pins in grouped.values():
-        pins.sort(key=lambda pin: _pad_number_key(pin.number))
-
-    left_right_count = max(len(grouped["left"]), len(grouped["right"]))
-    top_bottom_count = max(len(grouped["power"]), len(grouped["ground"]))
-    max_name_length = max((len(pin.name) for pin in spec.pins), default=1)
-    body_width = _snap_body_size(
-        max(5.08, max_name_length * 0.635 + 5.08, max(0, top_bottom_count - 1) * 2.54 + 5.08)
-    )
-    body_height = _snap_body_size(max(5.08, max(0, left_right_count - 1) * 2.54 + 5.08))
+    grouped = _symbol_pin_groups(spec, pins)
+    body_width, body_height = _symbol_body_size(grouped)
     half_width = body_width / 2
     half_height = body_height / 2
     unit_pins: list[sexpr.SExpr] = [
@@ -439,8 +521,24 @@ def _symbol_node(
             y = half_height + 2.54 if side == "power" else -(half_height + 2.54)
             orientation = 270 if side == "power" else 90
             unit_pins.append(_symbol_pin_node(pin, x=x, y=y, orientation=orientation))
-    datasheet = spec.datasheet.url or spec.datasheet.path
     return [
+        "symbol",
+        sexpr.quoted(f"{symbol_name}_0_{unit_number}"),
+        *unit_pins,
+    ]
+
+
+def _symbol_node(
+    spec: PartSpec,
+    symbol_name: str,
+    footprint_id: str,
+    spec_sha256: str,
+    unit_groups: list[list[PinSpec]] | None = None,
+) -> sexpr.SExpr:
+    datasheet = spec.datasheet.url or spec.datasheet.path
+    groups = [spec.pins] if unit_groups is None else unit_groups
+    half_height = max(_symbol_body_size(_symbol_pin_groups(spec, pins))[1] / 2 for pins in groups)
+    root: list[sexpr.SExpr] = [
         "symbol",
         sexpr.quoted(symbol_name),
         _symbol_property("Reference", "U", y=-half_height - 1.27, hidden=False),
@@ -450,8 +548,12 @@ def _symbol_node(
         _symbol_property("circuit_part_spec_sha256", spec_sha256),
         _symbol_property("circuit_land_pattern_sha256", ""),
         _symbol_property("circuit_writer_version", WRITER_VERSION),
-        ["symbol", sexpr.quoted(f"{symbol_name}_0_1"), *unit_pins],
     ]
+    root.extend(
+        _symbol_unit_node(spec, symbol_name, pins, unit_number)
+        for unit_number, pins in enumerate(groups, start=1)
+    )
+    return root
 
 
 def write_symbol(
@@ -461,6 +563,7 @@ def write_symbol(
     spec_sha256: str,
     symbol_name: str | None = None,
     footprint_id: str,
+    units: Literal["single", "bank"] = "single",
 ) -> WriteResult:
     checked_sha256 = _checked_spec_sha256(spec, spec_sha256)
     name = spec.mpn if symbol_name is None else symbol_name
@@ -468,6 +571,8 @@ def write_symbol(
         raise LibWriterError("symbol_name_missing")
     if not footprint_id:
         raise LibWriterError("footprint_id_missing")
+    headers: list[sexpr.SExpr]
+    symbols: list[sexpr.SExpr]
     if library.is_file():
         try:
             root = sexpr.parse_text(library.read_text(encoding="utf-8"))
@@ -478,13 +583,38 @@ def write_symbol(
         headers = [child for child in root[1:] if not _is_symbol_node(child)]
         symbols = [child for child in root[1:] if _is_symbol_node(child) and child[1] != name]
     else:
-        headers = [["version", "20241209"], ["generator", sexpr.quoted("kicad_symbol_editor")]]
+        version_header: sexpr.SExpr = ["version", "20241209"]
+        generator_header: sexpr.SExpr = [
+            "generator",
+            sexpr.quoted("kicad_symbol_editor"),
+        ]
+        headers = [version_header, generator_header]
         symbols = []
-    symbols.append(_symbol_node(spec, name, footprint_id, checked_sha256))
+    if units == "single":
+        symbol = _symbol_node(spec, name, footprint_id, checked_sha256)
+    elif units == "bank":
+        grouped: dict[str, list[PinSpec]] = {}
+        for pin in spec.pins:
+            grouped.setdefault(pin.bank or "COMMON", []).append(pin)
+        bank_names = sorted(
+            (bank for bank in grouped if bank != "COMMON"),
+            key=_pad_number_key,
+        )
+        ordered_names = bank_names + (["COMMON"] if "COMMON" in grouped else [])
+        symbol = _symbol_node(
+            spec,
+            name,
+            footprint_id,
+            checked_sha256,
+            [grouped[bank] for bank in ordered_names],
+        )
+    else:
+        raise LibWriterError("unsupported_symbol_units")
+    symbols.append(symbol)
     symbols.sort(key=lambda item: str(item[1]))
-    root = ["kicad_symbol_lib", *headers, *symbols]
+    root: list[sexpr.SExpr] = ["kicad_symbol_lib", *headers, *symbols]
     library.parent.mkdir(parents=True, exist_ok=True)
-    library.write_text(sexpr.serialize(cast(sexpr.SExpr, root)) + "\n", encoding="utf-8")
+    library.write_text(sexpr.serialize(root) + "\n", encoding="utf-8")
     digest = hashlib.sha256(library.read_bytes()).hexdigest()
     return WriteResult(
         path=str(library),

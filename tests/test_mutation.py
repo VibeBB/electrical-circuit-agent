@@ -82,6 +82,12 @@ EXPECTED_OPERATORS = {
     "partspec_pin1_corner_rotation",
     "partspec_sibling_package_mpn",
     "partspec_sibling_package_variant",
+    "pad_rotation_change",
+    "polygon_vertex_shift",
+    "exposed_pad_drop",
+    "depopulated_pin_added",
+    "bga_row_swap",
+    "tab_offset_shift",
     "model_mirror_x",
     "model_rotate_90",
     "model_rotate_180",
@@ -953,7 +959,10 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
     first = run_mutations(fixture)
 
     assert {operator.name for operator in MUTATION_OPERATORS} == EXPECTED_OPERATORS
-    assert len(first.outcomes) == len(MUTATION_OPERATORS)
+    applicable = {
+        operator.name for operator in MUTATION_OPERATORS if operator.applies(fixture.artifacts)
+    }
+    assert {outcome.mutation.operator for outcome in first.outcomes} == applicable
     assert first.baseline_findings == [
         "pin_source_single",
         "reading_order_divergence",
@@ -980,6 +989,8 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
         "footprint_pad_shift_0_1mm": ("land_geometry", "model_geometry"),
         "footprint_pitch_scale_1_02": ("land_geometry", "model_geometry"),
         "footprint_ep_size_delta_20_percent": ("land_geometry",),
+        "pad_rotation_change": ("land_geometry", "model_geometry"),
+        "exposed_pad_drop": ("land_geometry", "model_geometry", "pin_bijection"),
         "footprint_mm_to_inch": ("land_geometry", "model_geometry", "package_identity"),
         "footprint_inch_to_mm": ("land_geometry", "model_geometry", "package_identity"),
         "footprint_removed_pad": (
@@ -1017,7 +1028,11 @@ def test_mutation_operators_use_real_verifier_and_match_expected_matrix(
         )
         for outcome in first.outcomes
     }
-    assert actual_counting_families == expected_counting_families
+    assert actual_counting_families == {
+        name: families
+        for name, families in expected_counting_families.items()
+        if name in applicable
+    }
     assert all(
         outcome.counting_family_count
         == len(set(outcome.families).difference({"vision", "integrity"}))
@@ -1049,6 +1064,7 @@ def test_partspec_mutations_rederive_pdf_evidence_against_unchanged_artifacts(
         spec_path = cast(Path, kwargs["spec_path"])
         staged_specs.append(spec_path)
         staged_spec = PartSpec.model_validate_json(spec_path.read_text(encoding="utf-8"))
+        staged_spec.bind_source_file(spec_path)
         assert staged_spec == args[0]
         return original_verify(*args, **kwargs)  # type: ignore[arg-type]
 
@@ -1226,8 +1242,12 @@ def test_single_family_critical_mutations_fail_closed(tmp_path: Path) -> None:
     )
 
     assert report.passed is False
-    assert len(report.single_oracle) == len(MUTATION_OPERATORS)
+    applicable = {
+        operator.name for operator in MUTATION_OPERATORS if operator.applies(fixture.artifacts)
+    }
+    assert set(report.single_oracle) == applicable
     assert report.undetected == []
+    assert {outcome.mutation.operator for outcome in report.outcomes} == applicable
     assert all(outcome.status == "single_oracle" for outcome in report.outcomes)
 
 
@@ -1237,6 +1257,8 @@ def test_mutation_operators_change_their_declared_target(
 ) -> None:
     fixture = _known_good_library_fixture(tmp_path, monkeypatch)
     for operator in MUTATION_OPERATORS:
+        if not operator.applies(fixture.artifacts):
+            continue
         mutated, record = operator.apply(fixture.artifacts, 18)
         assert record.operator == operator.name
         assert record.target == operator.target

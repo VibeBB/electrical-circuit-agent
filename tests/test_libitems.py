@@ -52,6 +52,7 @@ def test_parse_modern_footprint_fields_and_graphics() -> None:
         "roundrect_ratio": None,
         "paste_margin": None,
         "mask_margin": None,
+        "polygon": None,
     }
     assert footprint.pads[1].drill == 0.4
     assert footprint.pads[1].layers == ["*.Cu", "*.Mask"]

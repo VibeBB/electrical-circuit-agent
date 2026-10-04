@@ -458,21 +458,20 @@ def _body_matches(
     return False
 
 
-def _thermal_pad_in_footprint(footprint: FootprintDef) -> bool:
-    areas = sorted(
-        (
-            pad.width * pad.height
-            for pad in footprint.pads
-            if pad.type != "np_thru_hole" and any(layer.endswith(".Cu") for layer in pad.layers)
-        ),
-        reverse=True,
-    )
-    return len(areas) > 1 and areas[0] > areas[1] * 1.5
-
-
-def _pin_count_matches(count: int, candidates: list[int], *, thermal_pad: bool) -> bool:
-    return count in candidates or (
-        thermal_pad and any(count == candidate + 1 for candidate in candidates)
+def _pin_count_matches(
+    count: int,
+    candidates: list[int],
+    *,
+    thermal_pad: bool,
+    auxiliary_pad_count: int = 0,
+) -> bool:
+    return (
+        count in candidates
+        or (thermal_pad and any(count == candidate + 1 for candidate in candidates))
+        or (
+            auxiliary_pad_count > 0
+            and any(count == candidate + auxiliary_pad_count for candidate in candidates)
+        )
     )
 
 
@@ -537,7 +536,8 @@ def check_package_identity(
     if identity.pin_count_candidates and not _pin_count_matches(
         len(footprint_numbers),
         identity.pin_count_candidates,
-        thermal_pad=_thermal_pad_in_footprint(footprint),
+        thermal_pad=bool(spec.package.all_exposed_pads),
+        auxiliary_pad_count=len(spec.package.auxiliary_pad_numbers),
     ):
         findings.append(
             _finding(
@@ -551,18 +551,13 @@ def check_package_identity(
         try:
             regions = occt.slab_regions(model, -0.005, 0.015)
             model_terminal_count = len(regions)
-            model_thermal_pad = (
-                len(regions) > 1
-                and max(region.area for region in regions)
-                > sorted((region.area for region in regions), reverse=True)[1] * 1.5
-            )
         except Exception:
             model_terminal_count = 0
-            model_thermal_pad = False
         if identity.pin_count_candidates and not _pin_count_matches(
             model_terminal_count,
             identity.pin_count_candidates,
-            thermal_pad=model_thermal_pad,
+            thermal_pad=bool(spec.package.all_exposed_pads),
+            auxiliary_pad_count=len(spec.package.auxiliary_pad_numbers),
         ):
             findings.append(
                 _finding(

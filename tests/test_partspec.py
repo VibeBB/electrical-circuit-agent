@@ -16,6 +16,7 @@ from circuit import partspec as partspec_module
 from circuit.advisory import build_review_record
 from circuit.datasheet import DatasheetExtraction, LaneResult, PageExtraction, PdfWord
 from circuit.partspec import (
+    BallGrid,
     CellRef,
     DatasheetRef,
     Dimension,
@@ -30,6 +31,7 @@ from circuit.partspec import (
     Reading,
     SpecFinding,
     SubstitutionRef,
+    TabSpec,
     _vision_transcription_matches,  # pyright: ignore[reportPrivateUsage]
     check_part_spec,
     load_part_spec,
@@ -306,6 +308,7 @@ def _fixture(
     spec_path = tmp_path / "part.spec.json"
     spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     attach_vision_reads(spec, spec_path, extraction_path)
+    spec.bind_source_file(spec_path)
     return spec, extraction, spec_path, extraction_path
 
 
@@ -956,6 +959,71 @@ def test_strict_models_and_dimension_bounds() -> None:
         LandPattern(source="datasheet", pads=[], dimensions={})
     with pytest.raises(ValidationError):
         PartSpec.model_validate({"artifact_kind": "circuit_part_spec", "unknown": True})
+
+
+def test_special_package_dimensions_are_checked_as_datasheet_readings(
+    tmp_path: Path,
+) -> None:
+    spec, _extraction, _spec_path, _extraction_path = _fixture(tmp_path)
+
+    def dimension(value: float) -> Dimension:
+        return Dimension(
+            nom=value,
+            reading=Reading(
+                page=1,
+                bbox=(0.0, 0.0, 1.0, 1.0),
+                vision=str(value),
+                vision_record="fixture.json",
+            ),
+        )
+
+    exposed = ExposedPad(
+        number="2",
+        length=dimension(0.8),
+        width=dimension(0.7),
+        center_x=dimension(-0.2),
+        center_y=dimension(0.1),
+    )
+    tab = TabSpec(
+        number="3",
+        width=dimension(2.0),
+        length=dimension(1.5),
+        offset=dimension(3.0),
+    )
+    package = spec.package.model_copy(
+        update={
+            "exposed_pad": exposed,
+            "exposed_pads": [
+                exposed.model_copy(update={"number": "4"}),
+            ],
+            "tab": tab,
+            "ball_grid": BallGrid(
+                rows=["A"],
+                columns=2,
+                pitch_x=dimension(0.8),
+                pitch_y=dimension(0.9),
+                ball_diameter=dimension(0.4),
+            ),
+        }
+    )
+    fields = {
+        field
+        for field, _dimension in partspec_module._dimensions(  # pyright: ignore[reportPrivateUsage]
+            spec.model_copy(update={"package": package})
+        )
+    }
+
+    assert {
+        "package.exposed_pad.center_x",
+        "package.exposed_pad.center_y",
+        "package.exposed_pads[0].center_x",
+        "package.tab.width",
+        "package.tab.length",
+        "package.tab.offset",
+        "package.ball_grid.pitch_x",
+        "package.ball_grid.pitch_y",
+        "package.ball_grid.ball_diameter",
+    } <= fields
 
 
 def test_load_part_spec_hash_and_happy_path(tmp_path: Path) -> None:

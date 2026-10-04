@@ -33,7 +33,7 @@ from .libitems import (
 from .libverify import VerifyFinding
 from .modeloracle import verify_model_export
 from .packageid import sibling_package_mpn
-from .partspec import Dimension, PartSpec, PartSpecReport, load_part_spec
+from .partspec import Dimension, LandPad, PartSpec, PartSpecReport, load_part_spec
 from .ruleprofile import load_rules
 
 CheckFamily = Literal[
@@ -103,6 +103,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
     "pin_bijection": (
         "duplicate_pin",
         "exposed_pad_unmapped",
+        "tab_unmapped",
         "kicad_cli_unavailable",
         "kicad_parse",
         "orderable_pin_count_mismatch",
@@ -121,10 +122,12 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "pin_table_missing",
         "pinout_missing",
         "corpus_pad_numbers_mismatch",
+        "depopulated_pin_present",
         "corpus_pin_map_mismatch",
         "corpus_symbol_pin_map_mismatch",
         "symbol_pin_grid",
         "symbol_pin_name",
+        "symbol_bank_pin_set",
         "symbol_pin_set",
         "symbol_pin_type",
         "symbol_property",
@@ -142,6 +145,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "pinout_number_duplicate",
         "pinout_number_missing",
         "pinout_permutation_diagnosis",
+        "bga_grid_mismatch",
         "pinout_pin1_corner_mismatch",
         "pinout_unverified",
         "pinout_view_unverified",
@@ -160,6 +164,9 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "lead_outside_pad",
         "lead_width_exceeds_pad",
         "corpus_pad_geometry_mismatch",
+        "land_pad_shape_mismatch",
+        "exposed_pad_missing",
+        "exposed_pad_mismatch",
         "pad_clearance",
         "pad_geometry",
         "pad_position",
@@ -392,6 +399,26 @@ def _write_footprint(path: Path, footprint: FootprintDef) -> None:
             node.append(["solder_paste_margin", _number(pad.paste_margin)])
         if pad.mask_margin is not None:
             node.append(["solder_mask_margin", _number(pad.mask_margin)])
+        if pad.shape == "custom":
+            if pad.polygon is None:
+                raise MutationError(f"custom pad {pad.number} has no polygon")
+            node.extend(
+                [
+                    ["options", ["clearance", "outline"], ["anchor", "rect"]],
+                    [
+                        "primitives",
+                        [
+                            "gr_poly",
+                            [
+                                "pts",
+                                *[["xy", _number(x), _number(y)] for x, y in pad.polygon],
+                            ],
+                            ["width", "0.05"],
+                            ["fill", "yes"],
+                        ],
+                    ],
+                ]
+            )
         root.append(node)
     for model in footprint.models:
         root.append(
@@ -411,9 +438,9 @@ def _write_symbol(path: Path, symbol: SymbolDef) -> None:
     property_nodes: list[sexpr.SExpr] = [
         ["property", _quoted(key), _quoted(value)] for key, value in properties.items()
     ]
-    pins: list[sexpr.SExpr] = []
+    pins_by_unit: dict[int, list[sexpr.SExpr]] = {}
     for pin in symbol.pins:
-        pins.append(
+        pins_by_unit.setdefault(pin.unit, []).append(
             [
                 "pin",
                 pin.electrical_type,
@@ -424,16 +451,19 @@ def _write_symbol(path: Path, symbol: SymbolDef) -> None:
                 ["number", _quoted(pin.number)],
             ]
         )
-    symbol_unit: sexpr.SExpr = [
-        "symbol",
-        _quoted(f"{symbol.name}_0_1"),
-        *pins,
+    symbol_units: list[sexpr.SExpr] = [
+        [
+            "symbol",
+            _quoted(f"{symbol.name}_0_{unit}"),
+            *pins_by_unit[unit],
+        ]
+        for unit in sorted(pins_by_unit)
     ]
     node: sexpr.SExpr = [
         "symbol",
         _quoted(symbol.name),
         *property_nodes,
-        symbol_unit,
+        *symbol_units,
     ]
     root: sexpr.SExpr = [
         "kicad_symbol_lib",
@@ -567,6 +597,8 @@ class _LibraryVerifier:
                     spec.model_dump_json(indent=2) + "\n",
                     encoding="utf-8",
                 )
+            spec = spec.model_copy(deep=True)
+            spec.bind_source_file(spec_path)
             if artifacts.source_spec_path is not None:
                 _copy_spec_evidence(
                     spec,
@@ -828,12 +860,17 @@ MutationTransform = Callable[
 ]
 
 
+def _always_applies(_artifacts: MutationArtifacts) -> bool:
+    return True
+
+
 @dataclass(frozen=True)
 class MutationOperator:
     name: str
     target: MutationTarget
     critical: bool
     transform: MutationTransform
+    applies: Callable[[MutationArtifacts], bool] = _always_applies
 
     def apply(self, artifacts: MutationArtifacts, seed: int) -> tuple[MutationArtifacts, Mutation]:
         operator_seed = int.from_bytes(
@@ -1171,6 +1208,217 @@ def _footprint_ep_size(
     return _transform_footprint(artifacts, pads), {"pad": pad.number, "scale": factor}
 
 
+def _footprint_pad_rotation_change(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    candidates = [
+        index
+        for index, pad in enumerate(artifacts.footprint.pads)
+        if pad.shape != "custom" and not math.isclose(pad.width, pad.height, abs_tol=0.02)
+    ]
+    if not candidates:
+        raise MutationError("footprint has no asymmetric non-custom pad to rotate")
+    index = candidates[0]
+    pads = list(artifacts.footprint.pads)
+    pad = pads[index]
+    rotation = (pad.rotation + 90.0) % 360.0
+    pads[index] = pad.model_copy(update={"rotation": rotation})
+    return _transform_footprint(artifacts, pads), {
+        "pad": pad.number,
+        "from_rotation_deg": pad.rotation,
+        "to_rotation_deg": rotation,
+    }
+
+
+def _footprint_polygon_vertex_shift(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    candidates = [
+        (index, pad)
+        for index, pad in enumerate(artifacts.footprint.pads)
+        if pad.shape == "custom" and pad.polygon is not None
+    ]
+    if not candidates:
+        raise MutationError("footprint has no custom polygon pad")
+    index, pad = next(
+        (
+            (index, candidate)
+            for index, candidate in candidates
+            if candidate.number in artifacts.spec.package.auxiliary_pad_numbers
+        ),
+        candidates[0],
+    )
+    polygon = pad.polygon
+    if polygon is None:
+        raise MutationError("custom pad polygon is unavailable")
+    right_edge = max(x for x, _ in polygon)
+    shift = max(0.2, pad.width * 0.75)
+    shifted = [
+        (x - shift, y) if math.isclose(x, right_edge, abs_tol=1e-9) else (x, y) for x, y in polygon
+    ]
+    if shifted == polygon:
+        raise MutationError("custom polygon has no shiftable rightmost vertex")
+    pads = list(artifacts.footprint.pads)
+    pads[index] = pad.model_copy(update={"polygon": shifted})
+    return _transform_footprint(artifacts, pads), {
+        "pad": pad.number,
+        "vertex_shift_x_mm": -shift,
+    }
+
+
+def _footprint_exposed_pad_drop(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    numbers = {pad.number for pad in artifacts.spec.package.all_exposed_pads}
+    index = next(
+        (index for index, pad in enumerate(artifacts.footprint.pads) if pad.number in numbers),
+        None,
+    )
+    if index is None:
+        raise MutationError("footprint has no exposed pad to remove")
+    pads = list(artifacts.footprint.pads)
+    removed = pads.pop(index)
+    return _transform_footprint(artifacts, pads), {"pad": removed.number}
+
+
+def _pad_from_land_pad(pad: LandPad) -> PadDef:
+    return PadDef(
+        number=pad.number,
+        type="smd",
+        shape="custom" if pad.shape == "polygon" else pad.shape,
+        x=pad.x,
+        y=pad.y,
+        rotation=pad.rotation,
+        width=pad.width,
+        height=pad.height,
+        drill=None,
+        layers=["F.Cu", "F.Paste", "F.Mask"],
+        roundrect_ratio=0.25 if pad.shape == "roundrect" else None,
+        paste_margin=None,
+        mask_margin=None,
+        polygon=pad.polygon,
+    )
+
+
+def _footprint_depopulated_pin_added(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    missing = artifacts.spec.package.missing_pins
+    if not missing:
+        raise MutationError("PartSpec has no depopulated pin")
+    number = missing[0]
+    package = artifacts.spec.package
+    position_package = package.model_copy(
+        update={
+            "pin_count": package.pin_count + 1,
+            "missing_pins": missing[1:],
+        }
+    )
+    position_spec = artifacts.spec.model_copy(update={"package": position_package})
+    position = next(
+        (pad for pad in compute_land_pattern(position_spec).pads if pad.number == number),
+        None,
+    )
+    if position is None:
+        raise MutationError(f"cannot derive the position of depopulated pin {number}")
+    return (
+        _transform_footprint(artifacts, [*artifacts.footprint.pads, _pad_from_land_pad(position)]),
+        {"pin": number},
+    )
+
+
+def _footprint_bga_row_swap(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    grid = artifacts.spec.package.ball_grid
+    if grid is None or len(grid.rows) < 2:
+        raise MutationError("BGA grid requires at least two rows")
+    first, second = grid.rows[:2]
+    pads = [
+        pad.model_copy(
+            update={
+                "number": (
+                    f"{second}{pad.number[len(first) :]}"
+                    if pad.number.startswith(first)
+                    else f"{first}{pad.number[len(second) :]}"
+                    if pad.number.startswith(second)
+                    else pad.number
+                )
+            }
+        )
+        for pad in artifacts.footprint.pads
+    ]
+    if pads == artifacts.footprint.pads:
+        raise MutationError("footprint has no populated sites in the first two BGA rows")
+    return _transform_footprint(artifacts, pads), {
+        "first_row": first,
+        "second_row": second,
+    }
+
+
+def _part_spec_tab_offset_shift(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    def nominal(dimension: Dimension) -> float | None:
+        if dimension.nom is not None:
+            return dimension.nom
+        if dimension.min is not None and dimension.max is not None:
+            return (dimension.min + dimension.max) / 2
+        return dimension.min if dimension.min is not None else dimension.max
+
+    tab = artifacts.spec.package.tab
+    if tab is None:
+        raise MutationError("PartSpec has no tab")
+    offset = nominal(tab.offset)
+    tab_width = nominal(tab.width)
+    tab_length = nominal(tab.length)
+    if offset is None or tab_width is None or tab_length is None:
+        raise MutationError("tab offset has no usable value")
+    shift = 0.5
+    shifted_offset = tab.offset.model_copy(
+        update={
+            "min": None if tab.offset.min is None else tab.offset.min + shift,
+            "nom": offset + shift,
+            "max": None if tab.offset.max is None else tab.offset.max + shift,
+        }
+    )
+    shifted_tab = tab.model_copy(update={"offset": shifted_offset})
+    package = artifacts.spec.package.model_copy(update={"tab": shifted_tab})
+    spec = artifacts.spec.model_copy(update={"package": package})
+    old_y = -offset
+    solids = list(occt.solids(artifacts.model))
+    facts = occt.inspect(artifacts.model).solids
+    matches = [
+        index
+        for index, fact in enumerate(facts)
+        if abs((fact.bbox.x_min + fact.bbox.x_max) / 2) <= 0.02
+        and abs((fact.bbox.y_min + fact.bbox.y_max) / 2 - old_y) <= 0.02
+        and abs((fact.bbox.x_max - fact.bbox.x_min) - tab_width) <= 0.05
+        and abs((fact.bbox.y_max - fact.bbox.y_min) - tab_length) <= 0.05
+    ]
+    if len(matches) != 1:
+        raise MutationError("cannot uniquely locate the tab terminal in the 3D model")
+    solids[matches[0]] = occt.transform(solids[matches[0]], translation=(0.0, -shift, 0.0))
+    return (
+        MutationArtifacts(
+            spec,
+            artifacts.symbol,
+            artifacts.footprint,
+            occt.compound(solids),
+            artifacts.model_path,
+            artifacts.source_spec_path,
+            artifacts.spec_check_path,
+        ),
+        {"offset_shift_mm": shift},
+    )
+
+
 def _footprint_unit_scale(factor: float) -> MutationTransform:
     def transform(
         artifacts: MutationArtifacts,
@@ -1471,6 +1719,36 @@ def _model_remove_pin1_marker(
     )
 
 
+def _has_asymmetric_pad(artifacts: MutationArtifacts) -> bool:
+    return any(
+        pad.shape != "custom" and not math.isclose(pad.width, pad.height, abs_tol=0.02)
+        for pad in artifacts.footprint.pads
+    )
+
+
+def _has_custom_pad(artifacts: MutationArtifacts) -> bool:
+    return any(
+        pad.shape == "custom" and pad.polygon is not None for pad in artifacts.footprint.pads
+    )
+
+
+def _has_exposed_pad(artifacts: MutationArtifacts) -> bool:
+    return bool(artifacts.spec.package.all_exposed_pads)
+
+
+def _has_depopulated_pin(artifacts: MutationArtifacts) -> bool:
+    return bool(artifacts.spec.package.missing_pins)
+
+
+def _has_bga_rows(artifacts: MutationArtifacts) -> bool:
+    grid = artifacts.spec.package.ball_grid
+    return grid is not None and len(grid.rows) >= 2
+
+
+def _has_tab(artifacts: MutationArtifacts) -> bool:
+    return artifacts.spec.package.tab is not None
+
+
 MUTATION_OPERATORS: tuple[MutationOperator, ...] = (
     MutationOperator("symbol_adjacent_pin_swap", "symbol", True, _symbol_adjacent_pin_swap),
     MutationOperator("symbol_pin_name_swap", "symbol", True, _symbol_pin_name_swap),
@@ -1492,6 +1770,48 @@ MUTATION_OPERATORS: tuple[MutationOperator, ...] = (
     ),
     MutationOperator(
         "footprint_swapped_pad_numbers", "footprint", True, _footprint_swap_pad_numbers
+    ),
+    MutationOperator(
+        "pad_rotation_change",
+        "footprint",
+        True,
+        _footprint_pad_rotation_change,
+        _has_asymmetric_pad,
+    ),
+    MutationOperator(
+        "polygon_vertex_shift",
+        "footprint",
+        True,
+        _footprint_polygon_vertex_shift,
+        _has_custom_pad,
+    ),
+    MutationOperator(
+        "exposed_pad_drop",
+        "footprint",
+        True,
+        _footprint_exposed_pad_drop,
+        _has_exposed_pad,
+    ),
+    MutationOperator(
+        "depopulated_pin_added",
+        "footprint",
+        True,
+        _footprint_depopulated_pin_added,
+        _has_depopulated_pin,
+    ),
+    MutationOperator(
+        "bga_row_swap",
+        "footprint",
+        True,
+        _footprint_bga_row_swap,
+        _has_bga_rows,
+    ),
+    MutationOperator(
+        "tab_offset_shift",
+        "part_spec",
+        True,
+        _part_spec_tab_offset_shift,
+        _has_tab,
     ),
     MutationOperator(
         "partspec_min_nom_max_column_shift", "part_spec", True, _part_spec_column_shift
@@ -1549,12 +1869,17 @@ def run_mutations(fixture: MutationFixture) -> MutationReport:
     single_oracle: list[str] = []
     undetected: list[str] = []
 
-    for operator in MUTATION_OPERATORS:
+    for operator in (
+        candidate for candidate in MUTATION_OPERATORS if candidate.applies(fixture.artifacts)
+    ):
         mutated, record = operator.apply(fixture.artifacts, fixture.seed)
-        if record.target == "model":
+        if record.target == "model" or mutated.model is not fixture.artifacts.model:
             with tempfile.TemporaryDirectory(prefix="circuit-mutation-") as directory:
                 model_path = Path(directory) / "mutated.step"
                 occt.write_step(mutated.model, model_path, product_name=mutated.spec.mpn)
+                manifest_source = Path(f"{fixture.artifacts.model_path}.gen.json")
+                if record.target != "model" and manifest_source.is_file():
+                    shutil.copyfile(manifest_source, Path(f"{model_path}.gen.json"))
                 verified = list(fixture.verify(replace(mutated, model_path=model_path)))
         else:
             verified = list(fixture.verify(mutated))

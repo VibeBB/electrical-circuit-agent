@@ -109,12 +109,113 @@ class Dimension(BaseModel):
         return self
 
 
+def _simple_polygon(vertices: list[tuple[float, float]]) -> bool:
+    if len(vertices) < 3 or len(set(vertices)) != len(vertices):
+        return False
+    if any(not math.isfinite(value) for point in vertices for value in point):
+        return False
+    area = sum(
+        first[0] * second[1] - second[0] * first[1]
+        for first, second in zip(vertices, vertices[1:] + vertices[:1], strict=True)
+    )
+    if math.isclose(area, 0.0, abs_tol=1e-9):
+        return False
+
+    def cross(
+        first: tuple[float, float],
+        second: tuple[float, float],
+        third: tuple[float, float],
+    ) -> float:
+        return (second[0] - first[0]) * (third[1] - first[1]) - (second[1] - first[1]) * (
+            third[0] - first[0]
+        )
+
+    def on_segment(
+        first: tuple[float, float],
+        second: tuple[float, float],
+        point: tuple[float, float],
+    ) -> bool:
+        return (
+            min(first[0], second[0]) - 1e-9 <= point[0] <= max(first[0], second[0]) + 1e-9
+            and min(first[1], second[1]) - 1e-9 <= point[1] <= max(first[1], second[1]) + 1e-9
+            and math.isclose(cross(first, second, point), 0.0, abs_tol=1e-9)
+        )
+
+    def intersects(
+        a: tuple[float, float],
+        b: tuple[float, float],
+        c: tuple[float, float],
+        d: tuple[float, float],
+    ) -> bool:
+        ab_c, ab_d = cross(a, b, c), cross(a, b, d)
+        cd_a, cd_b = cross(c, d, a), cross(c, d, b)
+        if ab_c * ab_d < 0 and cd_a * cd_b < 0:
+            return True
+        return (
+            (math.isclose(ab_c, 0.0, abs_tol=1e-9) and on_segment(a, b, c))
+            or (math.isclose(ab_d, 0.0, abs_tol=1e-9) and on_segment(a, b, d))
+            or (math.isclose(cd_a, 0.0, abs_tol=1e-9) and on_segment(c, d, a))
+            or (math.isclose(cd_b, 0.0, abs_tol=1e-9) and on_segment(c, d, b))
+        )
+
+    edges = list(zip(vertices, vertices[1:] + vertices[:1], strict=True))
+    for first_index, first_edge in enumerate(edges):
+        for second_index in range(first_index + 1, len(edges)):
+            if second_index in {first_index, first_index + 1} or (
+                first_index == 0 and second_index == len(edges) - 1
+            ):
+                continue
+            if intersects(*first_edge, *edges[second_index]):
+                return False
+    return True
+
+
 class ExposedPad(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     number: str
     length: Dimension
     width: Dimension
+    center_x: Dimension | None = None
+    center_y: Dimension | None = None
+    rotation_deg: float = 0.0
+    polygon: list[tuple[float, float]] | None = None
+
+    @model_validator(mode="after")
+    def validate_geometry(self) -> ExposedPad:
+        if not math.isfinite(self.rotation_deg):
+            raise ValueError("rotation_deg must be finite")
+        if self.polygon is not None and not _simple_polygon(self.polygon):
+            raise ValueError("polygon must be simple with at least three vertices")
+        return self
+
+
+class TabSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    number: str
+    width: Dimension
+    length: Dimension
+    offset: Dimension
+
+
+class BallGrid(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rows: list[str] = Field(min_length=1)
+    columns: int = Field(gt=0)
+    pitch_x: Dimension
+    pitch_y: Dimension
+    ball_diameter: Dimension
+
+    @field_validator("rows")
+    @classmethod
+    def validate_rows(cls, rows: list[str]) -> list[str]:
+        if any(re.fullmatch(r"(?:[A-H]|[J-N]|P|R|[T-W]|Y)", row) is None for row in rows):
+            raise ValueError("BGA rows must use allowed JEDEC letters")
+        if len(rows) != len(set(rows)) or rows != sorted(rows):
+            raise ValueError("BGA rows must be unique and sorted")
+        return rows
 
 
 class PackageSpec(BaseModel):
@@ -134,6 +235,10 @@ class PackageSpec(BaseModel):
         "gullwing_quad",
         "gullwing_dual",
         "chip",
+        "sot223",
+        "tabbed_dpak",
+        "sod",
+        "bga",
         "through_hole_inline",
         "custom",
     ]
@@ -149,6 +254,10 @@ class PackageSpec(BaseModel):
     lead_length: Dimension | None = None
     lead_width: Dimension | None = None
     exposed_pad: ExposedPad | None = None
+    exposed_pads: list[ExposedPad] = Field(default_factory=list[ExposedPad])
+    tab: TabSpec | None = None
+    missing_pins: list[str] = Field(default_factory=list)
+    ball_grid: BallGrid | None = None
     pins_per_side: tuple[int, int, int, int] | None = None
     drawing_view: Literal["top", "bottom"]
     pin1_corner: PinCorner
@@ -165,7 +274,67 @@ class PackageSpec(BaseModel):
             raise ValueError("pins_per_side is only valid for quad package families")
         if self.pins_per_side is not None and any(count <= 0 for count in self.pins_per_side):
             raise ValueError("pins_per_side counts must be positive")
+        tab_family = self.family in {"sot223", "tabbed_dpak"}
+        if tab_family != (self.tab is not None):
+            raise ValueError("sot223 and tabbed_dpak packages require exactly one tab")
+        if (self.family == "bga") != (self.ball_grid is not None):
+            raise ValueError("bga packages require exactly one ball_grid")
+        if self.family == "sod" and self.pin_count + len(self.missing_pins) != 2:
+            raise ValueError("sod packages must have two terminal positions")
+        exposed_numbers = [
+            exposed.number
+            for exposed in (
+                ([self.exposed_pad] if self.exposed_pad is not None else []) + self.exposed_pads
+            )
+        ]
+        auxiliary_numbers = exposed_numbers + ([self.tab.number] if self.tab is not None else [])
+        if len(exposed_numbers) != len(set(exposed_numbers)):
+            raise ValueError("exposed pad numbers must be unique")
+        if len(auxiliary_numbers) != len(set(auxiliary_numbers)):
+            raise ValueError("tab and exposed pad numbers must be unique")
+        if len(self.missing_pins) != len(set(self.missing_pins)):
+            raise ValueError("missing_pins entries must be unique")
+        if set(self.missing_pins) & set(auxiliary_numbers):
+            raise ValueError("missing pins cannot be tab or exposed pad numbers")
+        if self.ball_grid is not None:
+            site_count = len(self.ball_grid.rows) * self.ball_grid.columns
+            if len(self.missing_pins) >= site_count:
+                raise ValueError("BGA must have at least one populated ball site")
+            if self.pin_count != site_count - len(self.missing_pins):
+                raise ValueError("BGA pin_count must match populated ball sites")
+            grid_numbers = {
+                f"{row}{column}"
+                for row in self.ball_grid.rows
+                for column in range(1, self.ball_grid.columns + 1)
+            }
+            if not set(self.missing_pins).issubset(grid_numbers):
+                raise ValueError("BGA missing_pins must identify grid sites")
+        elif any(not number.isdigit() for number in self.missing_pins):
+            raise ValueError("non-BGA missing_pins entries must be numeric")
         return self
+
+    @property
+    def all_exposed_pads(self) -> list[ExposedPad]:
+        return ([self.exposed_pad] if self.exposed_pad is not None else []) + self.exposed_pads
+
+    @property
+    def auxiliary_pad_numbers(self) -> set[str]:
+        numbers = {pad.number for pad in self.all_exposed_pads}
+        if self.tab is not None:
+            numbers.add(self.tab.number)
+        return numbers
+
+
+def expected_signal_pin_numbers(package: PackageSpec) -> set[str]:
+    if package.ball_grid is not None:
+        return {
+            f"{row}{column}"
+            for row in package.ball_grid.rows
+            for column in range(1, package.ball_grid.columns + 1)
+        } - set(package.missing_pins)
+    return {
+        str(number) for number in range(1, package.pin_count + len(package.missing_pins) + 1)
+    } - set(package.missing_pins)
 
 
 class LandPad(BaseModel):
@@ -176,7 +345,20 @@ class LandPad(BaseModel):
     y: float
     width: float
     height: float
-    shape: Literal["rect", "roundrect", "oval", "circle"]
+    shape: Literal["rect", "roundrect", "oval", "circle", "polygon"]
+    rotation: float = 0.0
+    polygon: list[tuple[float, float]] | None = None
+    kind: Literal["signal", "exposed", "tab"] = "signal"
+
+    @model_validator(mode="after")
+    def validate_geometry(self) -> LandPad:
+        if not math.isfinite(self.rotation):
+            raise ValueError("pad rotation must be finite")
+        if (self.shape == "polygon") != (self.polygon is not None):
+            raise ValueError("polygon vertices are required only for polygon pads")
+        if self.polygon is not None and not _simple_polygon(self.polygon):
+            raise ValueError("polygon must be simple with at least three vertices")
+        return self
 
 
 class LandPattern(BaseModel):
@@ -215,6 +397,7 @@ class PinSpec(BaseModel):
         "no_connect",
     ]
     view: Literal["top", "bottom"] | None = None
+    bank: str | None = None
     reading: Reading
 
 
@@ -308,6 +491,14 @@ class PartSpec(BaseModel):
     orderable: list[OrderableVariant] = Field(min_length=1)
     authoring: str | None = None
     orderable_vision_read: str | None = None
+
+    @model_validator(mode="after")
+    def validate_missing_pins(self) -> PartSpec:
+        present_numbers = {pin.number for pin in self.pins}
+        overlap = present_numbers & set(self.package.missing_pins)
+        if overlap:
+            raise ValueError(f"missing pins cannot be present in PartSpec pins: {sorted(overlap)}")
+        return self
 
     @property
     def source_file_path(self) -> Path | None:
@@ -468,11 +659,43 @@ def _dimensions(spec: PartSpec) -> list[tuple[str, Dimension]]:
         if dimension is not None:
             found.append((f"package.{name}", dimension))
     if package.exposed_pad is not None:
+        exposed_dimensions = [("package.exposed_pad", package.exposed_pad)]
+    else:
+        exposed_dimensions = []
+    exposed_dimensions.extend(
+        (f"package.exposed_pads[{index}]", exposed)
+        for index, exposed in enumerate(package.exposed_pads)
+    )
+    for field, exposed in exposed_dimensions:
+        for name, dimension in (
+            ("length", exposed.length),
+            ("width", exposed.width),
+            ("center_x", exposed.center_x),
+            ("center_y", exposed.center_y),
+        ):
+            if dimension is not None:
+                found.append((f"{field}.{name}", dimension))
+    if package.tab is not None:
         found.extend(
-            [
-                ("package.exposed_pad.length", package.exposed_pad.length),
-                ("package.exposed_pad.width", package.exposed_pad.width),
-            ]
+            (
+                (f"package.tab.{name}", dimension)
+                for name, dimension in (
+                    ("width", package.tab.width),
+                    ("length", package.tab.length),
+                    ("offset", package.tab.offset),
+                )
+            )
+        )
+    if package.ball_grid is not None:
+        found.extend(
+            (
+                (f"package.ball_grid.{name}", dimension)
+                for name, dimension in (
+                    ("pitch_x", package.ball_grid.pitch_x),
+                    ("pitch_y", package.ball_grid.pitch_y),
+                    ("ball_diameter", package.ball_grid.ball_diameter),
+                )
+            )
         )
     if spec.land_pattern is not None:
         found.extend(
@@ -1424,9 +1647,7 @@ def _pin_checks(
     name_present = (
         re.search(rf"(?<!\w){re.escape(normalized_name)}(?!\w)", normalized_vision) is not None
     )
-    is_exposed_pad_pin = (
-        spec.package.exposed_pad is not None and pin.number == spec.package.exposed_pad.number
-    )
+    is_exposed_pad_pin = pin.number in spec.package.auxiliary_pad_numbers
     if (pin.number not in vision_tokens and not is_exposed_pad_pin) or not name_present:
         findings.append(
             SpecFinding(
@@ -2520,14 +2741,16 @@ def _pin_table_checks(
             r"thermal pad|exposed pad|powerpad|\bEP\b", name_value, re.IGNORECASE
         ):
             exposed_rows.append(name_value)
-            if spec.package.exposed_pad is not None:
-                table_pairs[(spec.package.exposed_pad.number, name_value)] += 1
+            exposed_index = len(exposed_rows) - 1
+            if exposed_index < len(spec.package.all_exposed_pads):
+                exposed_pad = spec.package.all_exposed_pads[exposed_index]
+                table_pairs[(exposed_pad.number, name_value)] += 1
             continue
         if not number_values or not name_value:
             continue
         table_pairs.update((number, name_value) for number in number_values)
 
-    if bool(exposed_rows) != (spec.package.exposed_pad is not None):
+    if len(exposed_rows) != len(spec.package.all_exposed_pads):
         findings.append(
             SpecFinding(
                 code="exposed_pad_table_mismatch",
@@ -2558,25 +2781,20 @@ def _pin_table_checks(
             )
         )
     signal_numbers = {
-        number
-        for number, _ in table_pairs
-        if number.isdigit()
-        and (spec.package.exposed_pad is None or number != spec.package.exposed_pad.number)
+        number for number, _ in table_pairs if number not in spec.package.auxiliary_pad_numbers
     }
     spec_signal_numbers = [
-        pin.number
-        for pin in ordinary_pins
-        if pin.number != (spec.package.exposed_pad.number if spec.package.exposed_pad else None)
+        pin.number for pin in ordinary_pins if pin.number not in spec.package.auxiliary_pad_numbers
     ]
     expected_signal_numbers = (
-        {str(number) for number in range(1, spec.package.pin_count + 1)}
+        expected_signal_pin_numbers(spec.package)
         if not alternative_numbers
         else set(spec_signal_numbers)
     )
     if (
-        all(number.isdigit() for number in spec_signal_numbers)
-        and signal_numbers != expected_signal_numbers
-    ):
+        spec.package.ball_grid is not None
+        or all(number.isdigit() for number in spec_signal_numbers)
+    ) and (signal_numbers != expected_signal_numbers):
         findings.append(
             SpecFinding(
                 code="pin_numbering_incomplete",
@@ -2679,16 +2897,36 @@ def _orderable_row_checks(
                 page=page_number,
             )
         )
+    expected_row_pin_counts = set(
+        range(
+            spec.package.pin_count,
+            spec.package.pin_count + len(spec.package.auxiliary_pad_numbers) + 1,
+        )
+    )
     if (
         (
             str(variant.pin_count) not in plumber_cells
-            and not any(package_pin_cell.fullmatch(cell) for cell in plumber_cells)
+            and not any(
+                re.fullmatch(
+                    rf"\s*{re.escape(variant.package_designator)}\s*\|\s*"
+                    rf"{variant.pin_count}\s*",
+                    cell,
+                )
+                for cell in plumber_cells
+            )
         )
         or (
             str(variant.pin_count) not in poppler_cells
-            and not any(package_pin_cell.fullmatch(cell) for cell in poppler_cells)
+            and not any(
+                re.fullmatch(
+                    rf"\s*{re.escape(variant.package_designator)}\s*\|\s*"
+                    rf"{variant.pin_count}\s*",
+                    cell,
+                )
+                for cell in poppler_cells
+            )
         )
-        or variant.pin_count != spec.package.pin_count
+        or variant.pin_count not in expected_row_pin_counts
     ):
         findings.append(
             SpecFinding(
@@ -3130,26 +3368,63 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
                     message=f"pin number {number} appears {count} times",
                 )
             )
-    exposed_number = package.exposed_pad.number if package.exposed_pad else None
-    signal_pin_count = sum(pin.number != exposed_number for pin in spec.pins)
+    auxiliary_numbers = package.auxiliary_pad_numbers
+    signal_pin_count = sum(pin.number not in auxiliary_numbers for pin in spec.pins)
     if signal_pin_count != package.pin_count:
         findings.append(
             SpecFinding(
                 code="pin_count_mismatch",
                 severity="error",
                 field="package.pin_count",
-                message=f"expected {package.pin_count} non-exposed pins, found {signal_pin_count}",
+                message=f"expected {package.pin_count} signal pins, found {signal_pin_count}",
             )
         )
-    if package.exposed_pad is not None and package.exposed_pad.number not in number_counts:
+    for index, exposed_pad in enumerate(package.all_exposed_pads):
+        if exposed_pad.number in number_counts:
+            continue
         findings.append(
             SpecFinding(
                 code="exposed_pad_unmapped",
                 severity="error",
-                field="package.exposed_pad.number",
+                field=f"package.exposed_pads[{index}].number",
                 message="exposed pad number is not present in the pin list",
             )
         )
+    if package.tab is not None and package.tab.number not in number_counts:
+        findings.append(
+            SpecFinding(
+                code="tab_unmapped",
+                severity="error",
+                field="package.tab.number",
+                message="tab number is not present in the pin list",
+            )
+        )
+    if package.family in {
+        "no_lead_quad",
+        "no_lead_dual",
+        "gullwing_quad",
+        "gullwing_dual",
+        "chip",
+        "sot223",
+        "tabbed_dpak",
+        "sod",
+        "bga",
+    }:
+        expected_numbers = expected_signal_pin_numbers(package)
+        actual_numbers = {pin.number for pin in spec.pins if pin.number not in auxiliary_numbers}
+        if actual_numbers != expected_numbers:
+            findings.append(
+                SpecFinding(
+                    code="pin_numbering_incomplete",
+                    severity="error",
+                    field="pins",
+                    message=(
+                        "signal pin numbers differ from populated package positions; "
+                        f"missing={sorted(expected_numbers - actual_numbers)}, "
+                        f"extra={sorted(actual_numbers - expected_numbers)}"
+                    ),
+                )
+            )
     expected_mpn = spec.substitution.substitute_mpn if spec.substitution is not None else spec.mpn
     matching_mpn = [
         variant for variant in spec.orderable if variant.mpn.casefold() == expected_mpn.casefold()
@@ -3165,15 +3440,16 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
         )
     quad_family = package.family in ("no_lead_quad", "gullwing_quad")
     dual_family = package.family in ("no_lead_dual", "gullwing_dual")
+    physical_pin_count = package.pin_count + len(package.missing_pins)
     side_counts: tuple[int, int, int, int] | None = None
     if quad_family:
         if package.pins_per_side is None:
-            if package.pin_count % 4 == 0:
-                pins_per_side = package.pin_count // 4
+            if physical_pin_count % 4 == 0:
+                pins_per_side = physical_pin_count // 4
                 side_counts = (pins_per_side, pins_per_side, pins_per_side, pins_per_side)
         else:
             side_counts = package.pins_per_side
-        if side_counts is None or sum(side_counts) != package.pin_count:
+        if side_counts is None or sum(side_counts) != physical_pin_count:
             findings.append(
                 SpecFinding(
                     code="pin_count_family",
@@ -3185,7 +3461,7 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
                     ),
                 )
             )
-    elif dual_family and package.pin_count % 2:
+    elif dual_family and physical_pin_count % 2:
         findings.append(
             SpecFinding(
                 code="pin_count_family",
@@ -3222,7 +3498,7 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
                     )
         elif pitch is not None and dual_family:
             body_length = _dimension_upper(package.body_length)
-            pins_per_side = package.pin_count // 2
+            pins_per_side = physical_pin_count // 2
             if (
                 pins_per_side > 1
                 and body_length is not None
@@ -3236,11 +3512,31 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
                         message="dual-row pitch span must be smaller than body_length",
                     )
                 )
-    if package.exposed_pad is not None:
+    if package.family in {"sot223", "tabbed_dpak"} and package.pitch is not None:
+        pitch = package.pitch.nom
+        if pitch is None and package.pitch.min is not None and package.pitch.max is not None:
+            pitch = (package.pitch.min + package.pitch.max) / 2
+        body_width = _dimension_upper(package.body_width)
+        lead_slots = package.pin_count + len(package.missing_pins)
+        if (
+            pitch is not None
+            and body_width is not None
+            and lead_slots > 1
+            and pitch * (lead_slots - 1) >= body_width
+        ):
+            findings.append(
+                SpecFinding(
+                    code="pitch_exceeds_body",
+                    severity="error",
+                    field="package.pitch",
+                    message="lead pitch span must be smaller than the body width",
+                )
+            )
+    for index, exposed_pad in enumerate(package.all_exposed_pads):
         body_length = _dimension_upper(package.body_length)
         body_width = _dimension_upper(package.body_width)
-        pad_length = _dimension_upper(package.exposed_pad.length)
-        pad_width = _dimension_upper(package.exposed_pad.width)
+        pad_length = _dimension_upper(exposed_pad.length)
+        pad_width = _dimension_upper(exposed_pad.width)
         if (
             body_length is not None
             and body_width is not None
@@ -3252,7 +3548,7 @@ def _consistency_checks(spec: PartSpec, findings: list[SpecFinding]) -> None:
                 SpecFinding(
                     code="exposed_pad_exceeds_body",
                     severity="error",
-                    field="package.exposed_pad",
+                    field=f"package.exposed_pads[{index}]",
                     message="exposed pad dimensions must be smaller than the package body",
                 )
             )

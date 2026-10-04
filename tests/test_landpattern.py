@@ -213,7 +213,13 @@ def test_no_lead_geometry_exposed_pad_and_lead_rectangles() -> None:
         ("4", -1.53, 0.75),
     ]
     assert result.pads[-1] == LandPad(
-        number="17", x=0.0, y=0.0, width=1.68, height=1.68, shape="roundrect"
+        number="17",
+        x=0.0,
+        y=0.0,
+        width=1.68,
+        height=1.68,
+        shape="roundrect",
+        kind="exposed",
     )
     assert result.konnect_pads[12]["rotation"] == 90.0
     assert result.konnect_pads[12]["width"] == 0.61
