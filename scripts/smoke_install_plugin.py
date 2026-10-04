@@ -53,7 +53,11 @@ def main(argv: list[str] | None = None) -> int:
 
         checker = _load_checker()
         want_sha = bool(SHA_RE.fullmatch(args.ref))
-        fetch_ref = None if want_sha else args.ref
+        # The SDK supports every ref form: 40-hex SHAs get a full clone +
+        # checkout, branch/tag names a shallow --branch clone. Passing the
+        # sha through keeps resolved_ref pinned to the release commit —
+        # installing default-branch HEAD races with concurrent merges.
+        fetch_ref = args.ref
         try:
             info = install_plugin(
                 f"github:{args.repo}",
