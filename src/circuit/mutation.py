@@ -32,6 +32,7 @@ from .libitems import (
 )
 from .libverify import VerifyFinding
 from .modeloracle import verify_model_export
+from .packageid import sibling_package_mpn
 from .partspec import Dimension, PartSpec, PartSpecReport, load_part_spec
 from .ruleprofile import load_rules
 
@@ -43,6 +44,7 @@ CheckFamily = Literal[
     "export_oracle",
     "model_geometry",
     "rule_profile",
+    "package_identity",
     "vision",
     "integrity",
 ]
@@ -56,6 +58,7 @@ _COUNTING_FAMILIES: tuple[CheckFamily, ...] = (
     "export_oracle",
     "model_geometry",
     "rule_profile",
+    "package_identity",
 )
 
 
@@ -272,6 +275,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "lineage_stale_change",
         "lineage_unrecorded_change",
         "model_manifest_invalid",
+        "package_identity_pdf_hash_mismatch",
         "parent_hash",
         "part_spec_unchecked",
         "provenance_missing",
@@ -283,6 +287,16 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "vision_compare_stale",
         "vision_record_mismatch",
         "vision_record_missing",
+    ),
+    "package_identity": (
+        "package_identity_ambiguous",
+        "package_identity_body_mismatch",
+        "package_identity_drawing_unresolved",
+        "package_identity_lane_mismatch",
+        "package_identity_mpn_unresolved",
+        "package_identity_pin_count_mismatch",
+        "package_identity_pin_count_unresolved",
+        "package_identity_verification_unavailable",
     ),
 }
 
@@ -1347,6 +1361,37 @@ def _part_spec_sibling_mpn(
     )
 
 
+def _part_spec_sibling_package_variant(
+    artifacts: MutationArtifacts,
+    _rng: random.Random,
+) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
+    datasheet_path = Path(artifacts.spec.datasheet.path)
+    if not datasheet_path.is_absolute() and artifacts.source_spec_path is not None:
+        datasheet_path = artifacts.source_spec_path.resolve().parent / datasheet_path
+    sibling = sibling_package_mpn(datasheet_path, artifacts.spec.mpn)
+    sibling_source = "pdf"
+    if sibling is None:
+        sibling = f"{artifacts.spec.mpn}-SIBLING-PACKAGE"
+        sibling_source = "synthetic"
+    orderable = [
+        item.model_copy(update={"mpn": sibling}) if index == 0 else item
+        for index, item in enumerate(artifacts.spec.orderable)
+    ]
+    spec = artifacts.spec.model_copy(update={"mpn": sibling, "orderable": orderable})
+    return (
+        MutationArtifacts(
+            spec,
+            artifacts.symbol,
+            artifacts.footprint,
+            artifacts.model,
+            artifacts.model_path,
+            artifacts.source_spec_path,
+            artifacts.spec_check_path,
+        ),
+        {"mpn": sibling, "sibling_source": sibling_source},
+    )
+
+
 def _model_transform(
     *,
     mirror_x: bool = False,
@@ -1455,6 +1500,12 @@ MUTATION_OPERATORS: tuple[MutationOperator, ...] = (
         "partspec_pin1_corner_rotation", "part_spec", True, _part_spec_rotate_pin1_corner
     ),
     MutationOperator("partspec_sibling_package_mpn", "part_spec", True, _part_spec_sibling_mpn),
+    MutationOperator(
+        "partspec_sibling_package_variant",
+        "part_spec",
+        True,
+        _part_spec_sibling_package_variant,
+    ),
     MutationOperator("model_mirror_x", "model", True, _model_transform(mirror_x=True)),
     MutationOperator("model_rotate_90", "model", True, _model_transform(rotation_z_deg=90)),
     MutationOperator("model_rotate_180", "model", True, _model_transform(rotation_z_deg=180)),

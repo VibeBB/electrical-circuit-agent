@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from . import authoring, kicad_cli, visionread
+from . import authoring, kicad_cli, occt, visionread
 from . import pinout as pinout_oracle
 from .datasheet import load_extraction
 from .klc import KlcReport, run_klc
@@ -53,6 +53,7 @@ from .lineage import (
 )
 from .model3d import GENERATOR_VERSION, GeneratedModel
 from .modeloracle import ModelExportReport, verify_model_export
+from .packageid import check_package_identity
 from .partspec import (
     Dimension,
     LandPad,
@@ -3109,6 +3110,77 @@ def verify_library_part(
         tolerance_mm,
         findings,
     )
+    identity_model: occt.Shape | None = None
+    model_failures: list[str] = []
+    if footprint is not None:
+        for model_ref in footprint.models:
+            model_value = model_ref.path
+            expansion_root = library_dir.parent if library_dir is not None else None
+            model_value = model_value.replace("${KIPRJMOD}", str(expansion_root or ""))
+            model_value = model_value.replace("$KIPRJMOD", str(expansion_root or ""))
+            expanded_model = os.path.expandvars(model_value)
+            if "$" in expanded_model or "${" in expanded_model:
+                model_failures.append(f"{model_ref.path}: unresolved model path variables")
+                continue
+            model_candidate = Path(expanded_model)
+            if not model_candidate.is_absolute():
+                model_candidate = footprint_path.parent / model_candidate
+            try:
+                resolved_model = model_candidate.resolve(strict=True)
+                identity_model = occt.read_step(resolved_model)
+                break
+            except (OSError, RuntimeError, ValueError) as exc:
+                model_failures.append(f"{model_ref.path}: {exc}")
+        if footprint.models and identity_model is None:
+            _finding(
+                findings,
+                "package_identity_verification_unavailable",
+                "error",
+                "model",
+                "no referenced 3D model could be read for package identity verification: "
+                + "; ".join(model_failures),
+            )
+
+    datasheet_path = Path(spec.datasheet.path)
+    if not datasheet_path.is_absolute():
+        datasheet_path = spec_path.resolve().parent / datasheet_path
+    try:
+        resolved_datasheet = datasheet_path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        resolved_datasheet = None
+        datasheet_error = f"datasheet path could not be resolved: {exc}"
+    else:
+        datasheet_error = (
+            None
+            if resolved_datasheet.is_file()
+            else f"datasheet path does not refer to a file: {resolved_datasheet}"
+        )
+    if datasheet_error is not None:
+        _finding(
+            findings,
+            "package_identity_verification_unavailable",
+            "error",
+            "datasheet",
+            datasheet_error,
+        )
+    elif footprint is not None and resolved_datasheet is not None:
+        try:
+            findings.extend(
+                check_package_identity(
+                    spec,
+                    footprint,
+                    identity_model,
+                    pdf_path=resolved_datasheet,
+                )
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            _finding(
+                findings,
+                "package_identity_verification_unavailable",
+                "error",
+                "datasheet",
+                f"package identity verification failed closed: {exc}",
+            )
 
     if library_dir is not None:
         _check_provenance_item(
