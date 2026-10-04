@@ -20,13 +20,13 @@
     "14": "VOS",
     "15": "PGND",
     "16": "PGND",
-    "17": "Thermal Pad"
+    "17": "Exposed Thermal Pad"
   },
   "pin1_corner": "top_left",
   "drawing_view": "top",
   "dimensions": {
-    "body_length": {"min": 2.9, "nom": 3.0, "max": 3.1},
-    "body_width": {"min": 2.9, "nom": 3.0, "max": 3.1},
+    "body_length": {"min": 2.9, "nom": null, "max": 3.1},
+    "body_width": {"min": 2.9, "nom": null, "max": 3.1},
     "height": {"min": 0.8, "nom": null, "max": 1.0},
     "pitch": {"min": null, "nom": 0.5, "max": null},
     "lead_span": null,
