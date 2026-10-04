@@ -794,6 +794,25 @@ build.
 - All KiCad Debian assets were fetched from Launchpad and their SHA-256
   values recomputed for the Dockerfile.
 
+### GitHub Actions latest state, Python 3.14, and 3.15 canary (2026-10-04)
+
+- Checked on: 2026-10-04
+- uv `0.12.22` → `0.12.23` (`[tool.uv] required-version`, Dockerfile
+  `ARG UV_VERSION`/`UV_DIGEST`, THIRD_PARTY_NOTICES).
+- Python pins move to 3.14: `uv python install`/`uv venv`/`python3.x`
+  inside circuit-tools, `.python-version`, scalar workflow
+  `python-version:` pins, and a new ci.yml matrix leg.
+- A 3.15 experimental matrix leg runs with step-level
+  `continue-on-error` and a `::warning::` report step — a
+  forward-compat canary ahead of the 2026-10-09 stable release, kept
+  out of the required-check set. Deferred as the default interpreter:
+  `openhands-sdk` → `fastuuid==0.14.0` → PyO3 0.26 caps supported
+  interpreters at 3.14, so `uv sync` fails on 3.15 today; the canary
+  leg detects when upstream wheels land.
+- The stale `python minor` deferral (3.14 adoption) is removed from
+  `scripts/dependency_update_deferrals.json` — the adoption now
+  happened, so a deferral would only shadow the report.
+
 ### OpenHands SDK v1.51.0, uv 0.12.22, and Konnect v0.13.0 update review
 
 - Checked on: 2026-10-03

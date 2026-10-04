@@ -5,12 +5,6 @@
       "version": "2.x",
       "reason": "openhands-sdk 1.51.0 requires fastmcp>=3.2.0,<4, which requires mcp<2 (latest 2.3.0). Defer MCP 2.x until a supported SDK/fastmcp release removes that constraint.",
       "recheck_by": "2027-04-01"
-    },
-    {
-      "target": "python minor",
-      "version": "3.x",
-      "reason": "openhands-sdk が Python 3.14 を未検証のため保留（requires-python >=3.12, CI は 3.12）。SDK のサポート範囲が 3.14 を含む版へ更新する際に再検討。",
-      "recheck_by": "2027-04-01"
     }
   ]
 }

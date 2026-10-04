@@ -32,7 +32,7 @@ build-backend = "hatchling.build"
 packages = ["src/circuit"]
 
 [tool.uv]
-required-version = "==0.12.22"
+required-version = "==0.12.23"
 
 [tool.ruff]
 line-length = 100

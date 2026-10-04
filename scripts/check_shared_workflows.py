@@ -10,7 +10,7 @@ EXPECTED: dict[str, str] = {
         "a75506d959fbf41f8a7bef4ef072b8eb4f21e684f7e1c7aeb7a6400a2443d47e"
     ),
     ".github/workflows/workflow-lint.yml#jobs": (
-        "c6114beab3cb3aa171f5a6e0bda5a603d8bbbe08ccc091b3f69565d0019218da"
+        "f1fcc63297dbc62baa3f31631f2ee1d91cb8ad197ffb36c5cd9b814bdf17995c"
     ),
     ".github/workflows/main-ci-failure-issue.yml#jobs": (
         "c300a8c9af84887351a0e8be882876a713e2c487b8ee5b069090c8c02bb37d5a"
@@ -20,6 +20,9 @@ EXPECTED: dict[str, str] = {
     ),
     ".github/workflows/scorecard.yml": (
         "ed54c51170b60646b307bb53e540f3cbc16fd465ab8de198f26b6830717ce45b"
+    ),
+    ".github/workflows/codeql.yml": (
+        "77d6a96b009d445db5bd7fdfc645389ab366b059b5712774b517ace7eccd1af6"
     ),
 }
 UNITS: dict[str, tuple[str, bytes | None]] = {
@@ -41,6 +44,10 @@ UNITS: dict[str, tuple[str, bytes | None]] = {
     ),
     ".github/workflows/scorecard.yml": (
         ".github/workflows/scorecard.yml",
+        None,
+    ),
+    ".github/workflows/codeql.yml": (
+        ".github/workflows/codeql.yml",
         None,
     ),
 }
