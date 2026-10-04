@@ -51,6 +51,7 @@ from circuit.partspec import (
 from circuit.ruleprofile import EffectiveRules, EvidenceRef, load_rules
 from circuit.visionread import VisionBatch, VisionReadItem
 from pinout_fixtures import QUAD16_NAMES, geometry_for_names, pinout_drawing
+from test_datasheet import _pdf  # pyright: ignore[reportPrivateUsage]
 from vision_fixtures import FIXTURE_IMPRESSION
 
 PadTransform = Callable[[LandPad], tuple[str, float, float, float, float, float]]
@@ -468,6 +469,51 @@ def _footprint_text(
     return "\n".join(lines)
 
 
+def _ensure_package_identity_pdf(tmp_path: Path, spec: PartSpec) -> PartSpec:
+    relative_path = Path(spec.datasheet.path)
+    if relative_path.is_absolute():
+        return spec
+    pdf_path = tmp_path / relative_path
+    if pdf_path.is_file():
+        return spec
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    body_nominals = [
+        dimension.nom
+        for dimension in (spec.package.body_length, spec.package.body_width)
+        if dimension.nom is not None
+    ]
+    lower = max(0.01, min(body_nominals) - 0.25)
+    upper = max(body_nominals) + 0.25
+    table_commands = [
+        "BT /F1 8 Tf 20 360 Td (Orderable Device) Tj ET",
+        "BT /F1 8 Tf 175 360 Td (Status) Tj ET",
+        "BT /F1 8 Tf 245 360 Td (Package Type) Tj ET",
+        "BT /F1 8 Tf 320 360 Td (Package Drawing) Tj ET",
+        "BT /F1 8 Tf 405 360 Td (Pins) Tj ET",
+        "BT /F1 8 Tf 450 360 Td (Package Qty) Tj ET",
+        f"BT /F1 8 Tf 20 340 Td ({spec.mpn}) Tj ET",
+        "BT /F1 8 Tf 175 340 Td (ACTIVE) Tj ET",
+        "BT /F1 8 Tf 245 340 Td (GEN) Tj ET",
+        "BT /F1 8 Tf 320 340 Td (PKG) Tj ET",
+        f"BT /F1 8 Tf 405 340 Td ({spec.package.pin_count}) Tj ET",
+        "BT /F1 8 Tf 450 340 Td (3000) Tj ET",
+    ]
+    _pdf(
+        pdf_path,
+        [([], 0), (["PACKAGE OUTLINE", "PKG0001", f"{lower:.2f} {upper:.2f} mm"], 0)],
+        page_size=(500, 500),
+        extra_commands=[table_commands, []],
+    )
+    digest = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+    return spec.model_copy(
+        update={
+            "datasheet": spec.datasheet.model_copy(
+                update={"path": str(pdf_path.resolve()), "sha256": digest}
+            )
+        }
+    )
+
+
 def _write_case(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -480,6 +526,7 @@ def _write_case(
     record_authoring: bool = True,
 ) -> tuple[PartSpec, LandPatternResult, Path, Path, Path, Path]:
     spec = _dual_spec() if spec is None else spec
+    spec = _ensure_package_identity_pdf(tmp_path, spec)
     authoring_ref = Path("authoring") / "part" / "run-1"
     spec = spec.model_copy(update={"authoring": authoring_ref.as_posix()})
     reference = compute_land_pattern(spec)
@@ -1570,6 +1617,67 @@ def test_supplied_part_spec_check_is_bound_to_current_spec(
         reference=reference,
     )
     assert "part_spec_unchecked" in _codes(stale)
+
+
+def test_package_identity_fails_closed_when_datasheet_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(tmp_path, monkeypatch)
+    spec, reference, spec_path, _check_path, symbol_path, footprint_path = case
+    missing_spec = spec.model_copy(
+        update={
+            "datasheet": spec.datasheet.model_copy(update={"path": str(tmp_path / "missing.pdf")})
+        }
+    )
+    spec_path.write_text(missing_spec.model_dump_json(indent=2), encoding="utf-8")
+
+    report = verify_library_part(
+        missing_spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+    )
+
+    finding = next(
+        item for item in report.findings if item.code == "package_identity_verification_unavailable"
+    )
+    assert finding.subject == "datasheet"
+    assert "missing.pdf" in finding.message
+    assert "No such file" in finding.message
+
+
+def test_package_identity_fails_closed_when_no_3d_model_is_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _write_case(
+        tmp_path,
+        monkeypatch,
+        footprint_kwargs={"model": "${TEST_3DMODEL_DIR}/missing.step"},
+    )
+    spec, reference, spec_path, _check_path, symbol_path, footprint_path = case
+
+    report = verify_library_part(
+        spec,
+        spec_path=spec_path,
+        symbol_lib=symbol_path,
+        symbol_name=spec.mpn,
+        footprint_path=footprint_path,
+        library_dir=None,
+        reference=reference,
+    )
+
+    finding = next(
+        item
+        for item in report.findings
+        if item.code == "package_identity_verification_unavailable" and item.subject == "model"
+    )
+    assert "missing.step" in finding.message
+    assert "No such file" in finding.message
 
 
 def test_independent_pin_source_comparison_and_single_source_warning(

@@ -4,7 +4,7 @@ import hashlib
 import itertools
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 import pdfplumber
 from pydantic import BaseModel, ConfigDict
@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from .partspec import PartSpec
 
 _ROW_TOLERANCE_PT = 2.0
+_PIN_HEADER_TOLERANCE_PT = 3.0
+_PIN_COUNT_HEADER_GAP_PT = 8.0
 _DESIGNATOR = re.compile(r"^[A-Z0-9]{1,8}$")
 _DRAWING_TOKEN = re.compile(r"^[A-Z0-9]{1,16}$")
 _INTEGER = re.compile(r"^\d+$")
@@ -71,9 +73,39 @@ def _row_groups(words: list[PdfWord], page: int) -> list[tuple[int, list[PdfWord
     ]
 
 
+def _pin_count_header_columns(row: list[PdfWord]) -> list[tuple[float, float]]:
+    columns: list[tuple[float, float]] = []
+    words = sorted(row, key=lambda item: item.x0)
+    index = 0
+    while index < len(words):
+        normalized = re.sub(r"\s+", " ", words[index].text.casefold().strip())
+        if normalized in {"pins", "pin count"}:
+            columns.append((words[index].x0, words[index].x1))
+        elif (
+            normalized == "pin"
+            and index + 1 < len(words)
+            and words[index + 1].text.casefold().strip() == "count"
+            and words[index + 1].x0 - words[index].x1 <= _PIN_COUNT_HEADER_GAP_PT
+        ):
+            columns.append((words[index].x0, words[index + 1].x1))
+            index += 1
+        index += 1
+    return columns
+
+
 def _drawing_page(words: list[PdfWord]) -> bool:
     text = " ".join(word.text for word in words).casefold()
-    return any(marker in text for marker in _DRAWING_MARKERS)
+    if any(marker in text for marker in _DRAWING_MARKERS if marker != "package drawing"):
+        return True
+    for _, row in _row_groups(words, 1):
+        row_text = " ".join(word.text for word in row).casefold()
+        if (
+            "package drawing" in row_text
+            and "orderable device" not in row_text
+            and "package qty" not in row_text
+        ):
+            return True
+    return False
 
 
 def _drawing_ids(words: list[PdfWord]) -> set[str]:
@@ -159,10 +191,10 @@ def _resolve_lane(
 ) -> tuple[PackageIdentity | None, str | None, str]:
     rows_by_page = {page: _row_groups(words, page) for page, words in pages.items()}
     orderable_rows = [
-        row
-        for rows in rows_by_page.values()
-        for row in rows
-        if any(word.text == mpn for word in row[1])
+        (page, row_index, row)
+        for page, rows in rows_by_page.items()
+        for row_index, (_, row) in enumerate(rows)
+        if any(word.text == mpn for word in row)
     ]
     if not orderable_rows:
         return None, "package_identity_mpn_unresolved", "MPN was not found as an exact PDF token"
@@ -171,12 +203,39 @@ def _resolve_lane(
     all_drawing_ids = {page: _drawing_ids(words) for page, words in drawing_pages.items()}
     designators: set[str] = set()
     pin_counts: set[int] = set()
-    for _, row in orderable_rows:
-        tokens = [word.text for word in row]
-        for token in tokens:
+    pin_count_unresolved = False
+    for page, row_index, row in orderable_rows:
+        pin_columns: list[tuple[float, float]] = []
+        for _, header_words in reversed(rows_by_page[page][:row_index]):
+            pin_columns = _pin_count_header_columns(header_words)
+            if pin_columns:
+                break
+        row_pin_counts = {
+            int(word.text)
+            for word in row
+            if _INTEGER.fullmatch(word.text)
+            and int(word.text) > 0
+            and any(
+                word.x1 >= left - _PIN_HEADER_TOLERANCE_PT
+                and word.x0 <= right + _PIN_HEADER_TOLERANCE_PT
+                for left, right in pin_columns
+            )
+        }
+        if not pin_columns:
+            pin_count_unresolved = True
+        elif row_pin_counts:
+            pin_counts.update(row_pin_counts)
+        else:
+            pin_count_unresolved = True
+
+        pin_count_tokens = {str(count) for count in row_pin_counts}
+        for word in row:
+            token = word.text
             if (
                 token != mpn
+                and token not in pin_count_tokens
                 and _DESIGNATOR.fullmatch(token)
+                and (not token.isdigit() or len(token) >= 4)
                 and (token.isupper() or token.isdigit())
                 and any(
                     drawing_id == token or drawing_id.startswith(token)
@@ -185,8 +244,6 @@ def _resolve_lane(
                 )
             ):
                 designators.add(token)
-            if _INTEGER.fullmatch(token) and int(token) > 0:
-                pin_counts.add(int(token))
     if len(designators) > 1:
         return (
             None,
@@ -229,15 +286,19 @@ def _resolve_lane(
     return (
         PackageIdentity(
             mpn=mpn,
-            row_pages=sorted({page for page, _ in orderable_rows}),
+            row_pages=sorted({page for page, _, _ in orderable_rows}),
             designator=designator,
             pin_count_candidates=sorted(pin_counts),
             drawing_page=drawing_page,
             drawing_id=drawing_ids[0] if drawing_ids else None,
             body_ranges_mm=body_ranges,
         ),
-        None,
-        "",
+        ("package_identity_pin_count_unresolved" if pin_count_unresolved else None),
+        (
+            "the orderable row has no positive integer under a preceding Pins or Pin Count header"
+            if pin_count_unresolved
+            else ""
+        ),
     )
 
 
@@ -251,15 +312,11 @@ def _extract_lane(
         with pdfplumber.open(pdf_path) as pdf:
             for page_number, page in enumerate(pdf.pages, start=1):
                 if poppler:
-                    words, detail = datasheet._poppler_words(  # pyright: ignore[reportPrivateUsage]
-                        pdf_path, page_number
-                    )
+                    words, detail = datasheet.poppler_words(pdf_path, page_number)
                     if detail:
                         return {}, detail
                 else:
-                    words = datasheet._pdfplumber_words(  # pyright: ignore[reportPrivateUsage]
-                        cast(Any, page)
-                    )
+                    words = datasheet.pdfplumber_words(page)
                 pages[page_number] = words
     except Exception as exc:
         return {}, str(exc)
@@ -316,7 +373,9 @@ def resolve_package_identity(
     poppler_identity, poppler_code, poppler_message = _resolve_lane(poppler_pages, mpn)
     plumber_identity, plumber_code, plumber_message = _resolve_lane(plumber_pages, mpn)
     if poppler_identity is not None and plumber_identity is not None:
-        if poppler_identity == plumber_identity:
+        if poppler_identity == plumber_identity and poppler_code == plumber_code:
+            if poppler_code is not None:
+                return poppler_identity, [_finding(poppler_code, "datasheet", poppler_message)]
             return poppler_identity, []
     elif poppler_code == plumber_code and poppler_code is not None:
         return None, [_finding(poppler_code, "datasheet", poppler_message)]
@@ -350,6 +409,7 @@ def sibling_package_mpn(pdf_path: Path, mpn: str) -> str | None:
                 for token in tokens
                 if token != mpn
                 and _DESIGNATOR.fullmatch(token)
+                and (not token.isdigit() or len(token) >= 4)
                 and (token.isupper() or token.isdigit())
                 and any(
                     drawing_id == token or drawing_id.startswith(token)
@@ -412,7 +472,7 @@ def _thermal_pad_in_footprint(footprint: FootprintDef) -> bool:
 
 def _pin_count_matches(count: int, candidates: list[int], *, thermal_pad: bool) -> bool:
     return count in candidates or (
-        thermal_pad and any(abs(count - candidate) == 1 for candidate in candidates)
+        thermal_pad and any(count == candidate + 1 for candidate in candidates)
     )
 
 
@@ -474,7 +534,7 @@ def check_package_identity(
         and pad.type != "np_thru_hole"
         and any(layer.endswith(".Cu") for layer in pad.layers)
     }
-    if not _pin_count_matches(
+    if identity.pin_count_candidates and not _pin_count_matches(
         len(footprint_numbers),
         identity.pin_count_candidates,
         thermal_pad=_thermal_pad_in_footprint(footprint),
@@ -499,7 +559,7 @@ def check_package_identity(
         except Exception:
             model_terminal_count = 0
             model_thermal_pad = False
-        if not _pin_count_matches(
+        if identity.pin_count_candidates and not _pin_count_matches(
             model_terminal_count,
             identity.pin_count_candidates,
             thermal_pad=model_thermal_pad,

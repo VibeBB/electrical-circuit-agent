@@ -295,6 +295,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "package_identity_lane_mismatch",
         "package_identity_mpn_unresolved",
         "package_identity_pin_count_mismatch",
+        "package_identity_pin_count_unresolved",
         "package_identity_verification_unavailable",
     ),
 }
@@ -1368,8 +1369,10 @@ def _part_spec_sibling_package_variant(
     if not datasheet_path.is_absolute() and artifacts.source_spec_path is not None:
         datasheet_path = artifacts.source_spec_path.resolve().parent / datasheet_path
     sibling = sibling_package_mpn(datasheet_path, artifacts.spec.mpn)
+    sibling_source = "pdf"
     if sibling is None:
         sibling = f"{artifacts.spec.mpn}-SIBLING-PACKAGE"
+        sibling_source = "synthetic"
     orderable = [
         item.model_copy(update={"mpn": sibling}) if index == 0 else item
         for index, item in enumerate(artifacts.spec.orderable)
@@ -1385,7 +1388,7 @@ def _part_spec_sibling_package_variant(
             artifacts.source_spec_path,
             artifacts.spec_check_path,
         ),
-        {"mpn": sibling},
+        {"mpn": sibling, "sibling_source": sibling_source},
     )
 
 

@@ -20,6 +20,7 @@ from statistics import median
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pdfplumber
+from pdfplumber.page import Page as PdfPlumberPage
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
@@ -249,7 +250,7 @@ def _relative(path: Path, out_dir: Path) -> str:
     return path.relative_to(out_dir).as_posix()
 
 
-def _poppler_words(pdf_path: Path, page_number: int) -> tuple[list[PdfWord], str]:
+def poppler_words(pdf_path: Path, page_number: int) -> tuple[list[PdfWord], str]:
     command = _command(_PDFTOTEXT_ENV, "pdftotext")
     with tempfile.TemporaryDirectory(prefix="circuit-pdftotext-") as temporary:
         html_path = Path(temporary) / "page.html"
@@ -290,6 +291,10 @@ def _poppler_words(pdf_path: Path, page_number: int) -> tuple[list[PdfWord], str
         except (OSError, ET.ParseError, KeyError, ValueError) as exc:
             return [], f"could not parse pdftotext XHTML: {exc}"
         return words, ""
+
+
+def _poppler_words(pdf_path: Path, page_number: int) -> tuple[list[PdfWord], str]:
+    return poppler_words(pdf_path, page_number)
 
 
 def _is_rotated_char(char: Mapping[str, Any]) -> bool:
@@ -392,14 +397,14 @@ def _rotated_char_words(chars: Sequence[Mapping[str, Any]]) -> list[PdfWord]:
     return sorted(words, key=lambda word: (word.top, word.x0))
 
 
-def _pdfplumber_words(page: Any) -> list[PdfWord]:
+def pdfplumber_words(page: PdfPlumberPage) -> list[PdfWord]:
     words: list[PdfWord] = []
 
     def is_normal_char(char: Mapping[str, Any]) -> bool:
         return not _is_rotated_char(char)
 
     filtered_page = page.filter(is_normal_char)
-    for word in cast(list[dict[str, Any]], filtered_page.extract_words()):
+    for word in filtered_page.extract_words():
         words.append(
             PdfWord(
                 text=str(word["text"]),
@@ -411,6 +416,10 @@ def _pdfplumber_words(page: Any) -> list[PdfWord]:
         )
     words.extend(_rotated_char_words(cast(Sequence[Mapping[str, Any]], page.chars)))
     return sorted(words, key=lambda word: (word.top, word.x0))
+
+
+def _pdfplumber_words(page: PdfPlumberPage) -> list[PdfWord]:
+    return pdfplumber_words(page)
 
 
 def _ocr_words(png_path: Path, dpi: int) -> tuple[list[PdfWord], str]:
@@ -541,7 +550,7 @@ def extract_datasheet(
             except (RasterizeError, OSError) as exc:
                 raise DatasheetError(f"could not rasterize page {page_number}: {exc}") from exc
 
-            page = cast(Any, pdf.pages[page_number - 1])
+            page = pdf.pages[page_number - 1]
             poppler_words, poppler_detail = _poppler_words(pdf_path, page_number)
             try:
                 plumber_words = _pdfplumber_words(page)
