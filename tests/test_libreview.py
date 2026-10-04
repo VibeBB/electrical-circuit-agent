@@ -196,6 +196,8 @@ def _expected_answers(spec: PartSpec, packet: str) -> dict[str, str]:
 def _install_review_trial(
     library: Path,
     packet: str,
+    *,
+    seed: int | None = 86,
 ) -> tuple[PartSpec, libreview.ReviewTrialState, list[dict[str, Any]]]:
     base = _spec()
     package = base.package.model_copy(
@@ -226,13 +228,20 @@ def _install_review_trial(
         scale=1.0,
     )
     dimensions = review_internal._dimension_records(spec, {crop.field: crop}, {})
-    state = review_internal._seeded_review_trial(spec, packet, dimensions, {crop.field: crop})
+    state = review_internal._seeded_review_trial(
+        spec,
+        packet,
+        dimensions,
+        {crop.field: crop},
+        seed=seed,
+    )
     assert state is not None
     repeated = review_internal._seeded_review_trial(
         spec,
         packet,
         review_internal._dimension_records(spec, {crop.field: crop}, {}),
         {crop.field: crop},
+        seed=state.seed,
     )
     assert repeated == state
     review_internal._write_review_trial_state(library, state)
@@ -275,6 +284,87 @@ def _install_review_trial(
         == state.plants[0].wrong_value
     )
     return spec, state, dimensions
+
+
+def test_review_trial_seed_is_private_and_independent_across_projects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seeds = [0xD15EA5E0ABCDEF12, 0x9182736455463728]
+
+    def next_seed(_bits: int) -> int:
+        return seeds.pop(0)
+
+    monkeypatch.setattr(review_internal.secrets, "randbits", next_seed)
+    packet = "c" * 16
+    projects = [tmp_path / "project-a" / "library", tmp_path / "project-b" / "library"]
+    states: list[libreview.ReviewTrialState] = []
+    for library in projects:
+        library.mkdir(parents=True)
+        _spec_value, state, _dimensions = _install_review_trial(library, packet, seed=None)
+        states.append(state)
+
+    first, second = states
+    assert first.packet_id == second.packet_id == packet
+    assert first.seed != second.seed
+    assert first.plants != second.plants
+    for library, state in zip(projects, states, strict=True):
+        packet_path = library / "reviews" / _spec().mpn / packet / "review.json"
+        packet_text = packet_path.read_text(encoding="utf-8")
+        assert '"seed"' not in packet_text
+        assert str(state.seed) not in packet_text
+        public_text_files = [
+            path
+            for path in packet_path.parent.rglob("*")
+            if path.is_file() and path.suffix in {".json", ".html", ".md", ".svg"}
+        ]
+        assert all(
+            str(state.seed) not in path.read_text(encoding="utf-8") for path in public_text_files
+        )
+        private_state = json.loads(
+            review_internal._review_trial_path(library, packet).read_text(encoding="utf-8")
+        )
+        assert private_state["seed"] == state.seed
+
+
+def test_review_trial_rebuild_reuses_private_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    library = tmp_path / "library"
+    library.mkdir()
+    packet = "d" * 16
+    spec, state, _dimensions = _install_review_trial(library, packet, seed=0xD15EA5E0ABCDEF12)
+    crop_path = library / "reviews" / spec.mpn / packet / "crops" / "body-length.png"
+    crop = review_internal._CropRecord(
+        field="package.body_length",
+        page=1,
+        path="crops/body-length.png",
+        sha256=hashlib.sha256(crop_path.read_bytes()).hexdigest(),
+        source_png_sha256="b" * 64,
+        bbox=(10, 10, 30, 20),
+        crop_bbox=(0, 0, 40, 30),
+        scale=1.0,
+    )
+    dimensions = review_internal._dimension_records(spec, {crop.field: crop}, {})
+
+    def unexpected_seed(_bits: int) -> int:
+        raise AssertionError("rebuilding a packet must reuse its stored seed")
+
+    monkeypatch.setattr(review_internal.secrets, "randbits", unexpected_seed)
+    reused, error = review_internal._review_trial_for_packet(
+        spec,
+        packet,
+        dimensions,
+        {crop.field: crop},
+        library,
+        library / "reviews" / spec.mpn / packet / "review.json",
+    )
+
+    assert error is None
+    assert reused == state
+    row = next(item for item in dimensions if item.get("field") == state.plants[0].field)
+    assert row[state.plants[0].column] == state.plants[0].wrong_value
 
 
 def test_packet_id_is_stable_and_binds_every_artifact_input() -> None:
@@ -1509,7 +1599,9 @@ def test_blink_view_alternates_same_registered_source_and_cad_frames() -> None:
 
 def test_apply_corrections_discards_matching_plant_before_updating_spec(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
     library = tmp_path / "library"
     library.mkdir()
     packet = "c" * 16

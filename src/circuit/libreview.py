@@ -10,6 +10,7 @@ import math
 import os
 import random
 import re
+import secrets
 import tempfile
 from collections import Counter
 from collections.abc import Iterable, Sequence
@@ -1632,7 +1633,8 @@ def review_status(
                 status_reasons.append("approval_must_not_include_corrections")
                 continue
             if set(decision.answers) != set(expected):
-                status_reasons.append("human_review_blind_mismatch")
+                if trial_state_error is None:
+                    status_reasons.append("human_review_blind_mismatch")
                 continue
             mismatched_answers = False
             for question_id in expected:
@@ -1812,14 +1814,22 @@ def _load_review_trial_state(
 def _load_bound_review_trial_state(
     library_dir: Path,
     packet_id: str,
+    *,
+    packet_path: Path | None = None,
 ) -> tuple[ReviewTrialState | None, str | None]:
     state, error = _load_review_trial_state(library_dir, packet_id)
     if error is not None:
         return None, error
-    packet_paths = list((library_dir / "reviews").glob(f"*/{packet_id}/review.json"))
+    packet_paths = (
+        [packet_path]
+        if packet_path is not None
+        else list((library_dir / "reviews").glob(f"*/{packet_id}/review.json"))
+    )
     if not packet_paths:
         return (None, None) if state is None else (None, "review_trial_state_hash_mismatch")
     if len(packet_paths) != 1:
+        return None, "review_trial_state_hash_mismatch"
+    if packet_paths[0].is_symlink() or not packet_paths[0].is_file():
         return None, "review_trial_state_hash_mismatch"
     try:
         packet_value = json.loads(packet_paths[0].read_text(encoding="utf-8"))
@@ -1859,9 +1869,11 @@ def _seeded_review_trial(
     packet_id: str,
     dimensions: list[dict[str, Any]],
     crops: dict[str, _CropRecord],
+    *,
+    seed: int | None = None,
 ) -> ReviewTrialState | None:
-    seed = int.from_bytes(hashlib.sha256(f"review-trial:{packet_id}".encode()).digest()[:8], "big")
-    rng = random.Random(seed)
+    trial_seed = secrets.randbits(64) if seed is None else seed
+    rng = random.Random(trial_seed)
     operators = [
         item
         for item in mutation.MUTATION_OPERATORS
@@ -1878,7 +1890,7 @@ def _seeded_review_trial(
         model_path=Path(),
     )
     try:
-        mutated, record = operator.apply(artifacts, seed)
+        mutated, record = operator.apply(artifacts, trial_seed)
     except mutation.MutationError:
         return None
     field_name = record.params.get("field")
@@ -1935,10 +1947,70 @@ def _seeded_review_trial(
     )
     return ReviewTrialState(
         packet_id=packet_id,
-        seed=seed,
+        seed=trial_seed,
         questions=[question],
         plants=[plant],
     )
+
+
+def _apply_review_trial_state(
+    spec: PartSpec,
+    state: ReviewTrialState,
+    dimensions: list[dict[str, Any]],
+    crops: dict[str, _CropRecord],
+) -> None:
+    questions = {question.question_id: question for question in state.questions}
+    for plant in state.plants:
+        field_name = plant.field.removeprefix("package.")
+        dimension = getattr(spec.package, field_name, None)
+        row = next((item for item in dimensions if item.get("field") == plant.field), None)
+        crop = crops.get(plant.field)
+        question = questions.get(plant.question_id)
+        if (
+            not field_name
+            or "." in field_name
+            or dimension is None
+            or row is None
+            or crop is None
+            or crop.sha256 != plant.evidence_crop_sha256
+            or question is None
+            or question.evidence_field != plant.field
+            or plant.question_id != f"{plant.field}.{plant.column}"
+            or getattr(dimension, plant.column) != plant.right_value
+            or plant.wrong_value == plant.right_value
+        ):
+            raise ValueError("stored review trial does not match current packet inputs")
+        row[plant.column] = plant.wrong_value
+
+
+def _review_trial_for_packet(
+    spec: PartSpec,
+    packet_id: str,
+    dimensions: list[dict[str, Any]],
+    crops: dict[str, _CropRecord],
+    library_dir: Path,
+    packet_path: Path,
+) -> tuple[ReviewTrialState | None, str | None]:
+    if packet_path.exists() or packet_path.is_symlink():
+        state, error = _load_bound_review_trial_state(
+            library_dir,
+            packet_id,
+            packet_path=packet_path,
+        )
+    else:
+        state, error = _load_review_trial_state(library_dir, packet_id)
+    if error is not None:
+        return None, error
+    if state is not None:
+        try:
+            _apply_review_trial_state(spec, state, dimensions, crops)
+        except ValueError:
+            return None, "review_trial_state_invalid"
+    else:
+        state = _seeded_review_trial(spec, packet_id, dimensions, crops)
+    if state is not None:
+        _write_review_trial_state(library_dir, state)
+    return state, None
 
 
 def _decision_catches_plant(decision: ReviewDecision, plant: ReviewTrialPlant) -> bool:
@@ -4741,9 +4813,24 @@ def build_review_packet(
         comparison_evidence,
     )
     dimensions = _dimension_records(spec, crops, vision_by_field)
-    trial_state = _seeded_review_trial(spec, current_id, dimensions, crops)
+    trial_state, trial_state_error = _review_trial_for_packet(
+        spec,
+        current_id,
+        dimensions,
+        crops,
+        library_dir,
+        packet_dir / "review.json",
+    )
+    if trial_state_error is not None:
+        findings.append(
+            ReviewFinding(
+                code=trial_state_error,
+                severity="error",
+                field="review_trial",
+                message="stored review trial state is invalid or does not match this packet",
+            )
+        )
     if trial_state is not None:
-        _write_review_trial_state(library_dir, trial_state)
         questions.extend(trial_state.questions)
     extracted_pages: list[dict[str, Any]] = (
         [
