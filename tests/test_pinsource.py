@@ -216,8 +216,16 @@ def test_pin_source_lineages_are_deduplicated_and_identity_is_checked() -> None:
         identity=["STM32F103C8"],
         derived_from=["stm32_open_pin_data"],
     )
+    orphan_derived = _source(
+        "amd_package_file",
+        [("1", "VDD")],
+        "8" * 64,
+        identity=["STM32F103C8"],
+        derived_from=["uncompared_lineage"],
+    )
 
     matched = compare_pin_sources(class_a, [independent, duplicate_lineage, derived])
+    orphan_lineage = compare_pin_sources(class_a, orphan_derived)
     mismatched = compare_pin_sources(
         class_a,
         _source("bsdl", [("1", "VDD")], "d" * 64, identity=["OTHER-DEVICE"]),
@@ -229,8 +237,77 @@ def test_pin_source_lineages_are_deduplicated_and_identity_is_checked() -> None:
 
     assert matched.independent_lineages == ["part_spec", "stm32_open_pin_data"]
     assert not matched.findings
+    assert orphan_lineage.independent_lineages == ["part_spec"]
     assert [item.code for item in mismatched.findings] == ["pin_source_identity_mismatch"]
     assert [item.code for item in short_prefix.findings] == ["pin_source_identity_mismatch"]
+
+
+@pytest.mark.parametrize(
+    ("spec_identity", "source_identity", "compatible"),
+    [
+        ("ABC-123", "ABC123", True),
+        ("RGT0016", "RGT", True),
+        ("RGT0016C", "RGT", False),
+        ("STM32F407VGT6", "STM32F", False),
+    ],
+)
+def test_identity_prefix_matching_limits_suffix_length(
+    spec_identity: str,
+    source_identity: str,
+    compatible: bool,
+) -> None:
+    spec_source = _source(
+        "part_spec",
+        [("1", "VDD")],
+        "a" * 64,
+        identity=[spec_identity],
+    )
+    pin_source = _source(
+        "amd_package_file",
+        [("1", "VDD")],
+        "b" * 64,
+        identity=[source_identity],
+    )
+
+    result = compare_pin_sources(spec_source, pin_source)
+
+    assert (
+        "pin_source_identity_mismatch" not in [item.code for item in result.findings]
+    ) is compatible
+
+
+@pytest.mark.parametrize(
+    ("mpn", "compatible"),
+    [
+        ("STM32F407VGT6", True),
+        ("STM32F407VET6", True),
+        ("STM32F407ZGT6", False),
+        ("STM32F405VGT6", False),
+        ("STM32F407VGT6TR", True),
+    ],
+)
+def test_stm32_refname_choice_groups_and_wildcards_match_mpn(
+    mpn: str,
+    compatible: bool,
+) -> None:
+    spec_source = _source(
+        "part_spec",
+        [("1", "VDD")],
+        "a" * 64,
+        identity=[mpn],
+    )
+    stm32_source = _source(
+        "stm32_open_pin_data",
+        [("1", "VDD")],
+        "b" * 64,
+        identity=["STM32F407V(E-G)Tx"],
+    )
+
+    result = compare_pin_sources(spec_source, stm32_source)
+
+    assert (
+        "pin_source_identity_mismatch" not in [item.code for item in result.findings]
+    ) is compatible
 
 
 @pytest.mark.parametrize(

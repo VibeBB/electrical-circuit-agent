@@ -551,7 +551,48 @@ def _identity_compatible(left: str, right: str) -> bool:
     if not left_key or not right_key:
         return False
     shorter, longer = sorted((left_key, right_key), key=len)
-    return shorter == longer or (len(shorter) >= 6 and longer.startswith(shorter))
+    return shorter == longer or (len(longer) - len(shorter) <= 4 and longer.startswith(shorter))
+
+
+def _stm32_identity_pattern(identity: str) -> str | None:
+    pattern = ""
+    index = 0
+    while index < len(identity):
+        character = identity[index]
+        if character == "(":
+            end = identity.find(")", index + 1)
+            if end < 0:
+                return None
+            alternatives = identity[index + 1 : end].split("-")
+            fragments = [_stm32_identity_fragment(alternative) for alternative in alternatives]
+            if any(not fragment for fragment in fragments):
+                return None
+            pattern += "(?:" + "|".join(fragments) + ")"
+            index = end + 1
+            continue
+        pattern += _stm32_identity_fragment(character)
+        index += 1
+    return pattern or None
+
+
+def _stm32_identity_fragment(value: str) -> str:
+    return "".join(
+        "[A-Z0-9]" if character == "x" else re.escape(character.upper())
+        for character in value
+        if character.isalnum()
+    )
+
+
+def _stm32_identity_compatible(ref_name: str, mpn: str) -> bool:
+    pattern = _stm32_identity_pattern(ref_name)
+    mpn_key = _identity_key(mpn)
+    if pattern is None or not mpn_key:
+        return False
+    for suffix_length in range(min(4, len(mpn_key)) + 1):
+        prefix = mpn_key[: len(mpn_key) - suffix_length]
+        if prefix and re.fullmatch(pattern, prefix):
+            return True
+    return False
 
 
 def compare_pin_sources(
@@ -575,6 +616,13 @@ def compare_pin_sources(
             _identity_compatible(source_identity, spec_identity)
             for source_identity in source.identity
             for spec_identity in a.identity
+        ) and not (
+            source.kind == "stm32_open_pin_data"
+            and bool(a.identity)
+            and any(
+                _stm32_identity_compatible(source_identity, a.identity[0])
+                for source_identity in source.identity
+            )
         ):
             findings.append(
                 PinSourceFinding(
