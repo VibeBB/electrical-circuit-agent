@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from circuit import datasheet, kicad_cli, libverify, occt, packageid
+from circuit import mutation as mutation_module
 from circuit.advisory import build_review_record
 from circuit.datasheet import load_extraction
 from circuit.libitems import FootprintDef, PadDef, SymbolDef, SymPin, parse_symbol
@@ -336,6 +337,8 @@ def _table_commands(
     top: int,
     row_height: int,
     font_size: int = 8,
+    header_font_size: int | None = None,
+    cell_font_sizes: dict[str, int] | None = None,
 ) -> list[str]:
     bottom = top - row_height * len(rows)
     commands = [
@@ -347,19 +350,35 @@ def _table_commands(
         ),
     ]
     for row_index, row in enumerate(rows):
-        baseline = top - row_height * row_index - row_height // 2 - max(1, (font_size - 2) // 2)
+        row_font_size = (
+            header_font_size if row_index == 0 and header_font_size is not None else font_size
+        )
         for column, cell in enumerate(row):
             if cell:
-                commands.append(
-                    f"BT /F1 {font_size} Tf {x_edges[column] + 4} {baseline} Td "
-                    f"({_pdf_escape(cell)}) Tj ET"
+                cell_font_size = (cell_font_sizes or {}).get(cell, row_font_size)
+                baseline = (
+                    top
+                    - row_height * row_index
+                    - row_height // 2
+                    - max(1, (cell_font_size - 2) // 2)
                 )
+                lines = cell.splitlines()
+                for line_index, line in enumerate(lines):
+                    line_baseline = baseline + ((len(lines) - 1) / 2 - line_index) * (
+                        cell_font_size + 1
+                    )
+                    commands.append(
+                        f"BT /F1 {cell_font_size} Tf {x_edges[column] + 4} "
+                        f"{line_baseline:.1f} Td ({_pdf_escape(line)}) Tj ET"
+                    )
     return commands
 
 
 def _synthetic_datasheet_pdf(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    include_pins_column: bool = True,
 ) -> tuple[PartSpec, Path]:
     spec = _vqfn_spec().model_copy(update={"mpn": "TESTVQFN16"})
     pin_rows = [["Pin", "Function"], *[[number, name] for number, name in QUAD16_NAMES.items()]]
@@ -377,11 +396,32 @@ def _synthetic_datasheet_pdf(
         ["Drawing ID", "VQFN-16-1EP", "", ""],
         ["Drawing revision", "A", "", ""],
     ]
-    orderable_rows = [
-        ["MPN", "Package", "Pins"],
-        [spec.mpn, "RGT", str(spec.package.pin_count)],
-        ["TESTSOIC8", "SOIC", "8"],
-    ]
+    orderable_rows = (
+        [
+            [
+                "Orderable\nDevice",
+                "Status",
+                "Package\nType",
+                "Package\nDrawing",
+                "Pins",
+                "Package\nQty",
+            ],
+            [spec.mpn, "ACTIVE", "VQFN", "RGT", str(spec.package.pin_count), "3000"],
+            ["TESTSOIC8", "ACTIVE", "SOIC", "SOIC", "8", "3000"],
+        ]
+        if include_pins_column
+        else [
+            [
+                "Orderable\nDevice",
+                "Status",
+                "Package\nType",
+                "Package\nDrawing",
+                "Package\nQty",
+            ],
+            [spec.mpn, "ACTIVE", "VQFN", "RGT", "3000"],
+            ["TESTSOIC8", "ACTIVE", "SOIC", "SOIC", "3000"],
+        ]
+    )
     commands = [
         *_table_commands(pin_rows, (20, 65, 150), 760, 15),
         *_table_commands(
@@ -392,10 +432,14 @@ def _synthetic_datasheet_pdf(
         ),
         *_table_commands(
             orderable_rows,
-            (265, 315, 370, 395),
+            (240, 277, 299, 318, 336, 346, 365)
+            if include_pins_column
+            else (240, 277, 299, 318, 336, 362),
             760,
             20,
-            font_size=7,
+            font_size=5,
+            header_font_size=3,
+            cell_font_sizes={"3000": 6},
         ),
         "BT /F1 9 Tf 460 866 Td (TOP VIEW) Tj ET",
         "BT /F1 9 Tf 460 826 Td (TOP LEFT) Tj ET",
@@ -582,7 +626,7 @@ def _synthetic_datasheet_pdf(
             "row": CellRef(table=orderable_table_index, row=1, col=0),
             "reading": spec.orderable[0].reading.model_copy(
                 update={
-                    "bbox": (265.0, 540.0, 395.0, 580.0),
+                    "bbox": (240.0, 540.0, 277.0, 580.0),
                     "vision": f"{spec.mpn} RGT {spec.package.pin_count}",
                     "vision_record": "datasheet-review.advisory.json",
                 }
@@ -667,12 +711,43 @@ def test_package_identity_schema_rejects_extra_fields() -> None:
         )
 
 
-def test_package_identity_accepts_both_thermal_pad_count_conventions() -> None:
+def test_package_identity_accepts_only_extra_thermal_pad_count() -> None:
     private_api: Any = packageid
 
     assert private_api._pin_count_matches(17, [16], thermal_pad=True)
-    assert private_api._pin_count_matches(16, [17], thermal_pad=True)
+    assert private_api._pin_count_matches(16, [16], thermal_pad=True)
+    assert not private_api._pin_count_matches(16, [17], thermal_pad=True)
     assert not private_api._pin_count_matches(16, [17], thermal_pad=False)
+
+
+def test_package_identity_uses_the_pins_column_not_package_quantity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, _ = _synthetic_datasheet_pdf(tmp_path, monkeypatch)
+
+    identity, findings = packageid.resolve_package_identity(Path(spec.datasheet.path), spec.mpn)
+
+    assert findings == []
+    assert identity is not None
+    assert identity.pin_count_candidates == [16]
+
+
+def test_package_identity_requires_a_pins_column(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec, _ = _synthetic_datasheet_pdf(
+        tmp_path,
+        monkeypatch,
+        include_pins_column=False,
+    )
+
+    identity, findings = packageid.resolve_package_identity(Path(spec.datasheet.path), spec.mpn)
+
+    assert identity is not None
+    assert identity.pin_count_candidates == []
+    assert [item.code for item in findings] == ["package_identity_pin_count_unresolved"]
 
 
 def test_package_identity_fails_closed_without_outline_or_on_lane_disagreement(
@@ -690,8 +765,7 @@ def test_package_identity_fails_closed_without_outline_or_on_lane_disagreement(
     def empty_lane(_page: object) -> list[datasheet.PdfWord]:
         return []
 
-    private_datasheet: Any = datasheet
-    monkeypatch.setattr(private_datasheet, "_pdfplumber_words", empty_lane)
+    monkeypatch.setattr(datasheet, "pdfplumber_words", empty_lane)
     _, findings = packageid.resolve_package_identity(Path(spec.datasheet.path), spec.mpn)
     assert [item.code for item in findings] == ["package_identity_lane_mismatch"]
 
@@ -987,12 +1061,13 @@ def test_partspec_mutations_rederive_pdf_evidence_against_unchanged_artifacts(
         "partspec_sibling_package_mpn",
         "partspec_sibling_package_variant",
     ):
-        mutated, _ = operators[name].apply(fixture.artifacts, fixture.seed)
+        mutated, details = operators[name].apply(fixture.artifacts, fixture.seed)
         assert mutated.footprint == fixture.artifacts.footprint
         assert mutated.model_path == fixture.artifacts.model_path
         if name == "partspec_sibling_package_variant":
             assert mutated.spec.mpn == "TESTSOIC8"
             assert mutated.spec.orderable[0].mpn == "TESTSOIC8"
+            assert details.params["sibling_source"] == "pdf"
         findings = list(fixture.verify(mutated))
         assert any(
             finding.severity == "error" and family_for_code(finding.code) == "evidence"
@@ -1001,6 +1076,25 @@ def test_partspec_mutations_rederive_pdf_evidence_against_unchanged_artifacts(
 
     assert len(staged_specs) == 5
     assert len({path.parent for path in staged_specs}) == 5
+
+
+def test_sibling_package_variant_marks_synthetic_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _known_good_library_fixture(tmp_path, monkeypatch, seed=32032)
+    operator = next(
+        item for item in MUTATION_OPERATORS if item.name == "partspec_sibling_package_variant"
+    )
+
+    def no_sibling(_path: Path, _mpn: str) -> None:
+        return None
+
+    monkeypatch.setattr(mutation_module, "sibling_package_mpn", no_sibling)
+
+    _, details = operator.apply(fixture.artifacts, fixture.seed)
+
+    assert details.params["sibling_source"] == "synthetic"
 
 
 def test_symbol_mutations_are_serialized_and_reach_real_verifier(

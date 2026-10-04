@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import email.message
 import hashlib
+import http.client
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import IO, cast
 from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import (
@@ -34,18 +36,25 @@ class _ManufacturerRedirectHandler(HTTPRedirectHandler):
     def redirect_request(
         self,
         req: Request,
-        fp: Any,
+        fp: IO[bytes],
         code: int,
         msg: str,
-        headers: Any,
+        headers: email.message.Message,
         newurl: str,
     ) -> Request | None:
         if not _is_approved_manufacturer_url(newurl):
             raise CorpusFetchError("datasheet redirect target is not an approved manufacturer URL")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        return super().redirect_request(
+            req,
+            fp,
+            code,
+            msg,
+            cast(http.client.HTTPMessage, headers),
+            newurl,
+        )
 
 
-def _open_url(request: Request, *, timeout: int) -> Any:
+def _open_url(request: Request, *, timeout: int) -> object:
     opener = build_opener(_ManufacturerRedirectHandler())
     return opener.open(request, timeout=timeout)
 
@@ -72,8 +81,13 @@ def fetch_corpus_datasheet(
 
     request = Request(entry.datasheet.url, headers={"User-Agent": "circuit-corpus-fetch/1"})
     try:
-        with _open_url(request, timeout=60) as response:
-            final_url = response.geturl() if hasattr(response, "geturl") else entry.datasheet.url
+        opened_response = _open_url(request, timeout=60)
+        if not isinstance(opened_response, http.client.HTTPResponse):
+            raise CorpusFetchError(
+                f"unexpected datasheet response type: {type(opened_response).__name__}"
+            )
+        with opened_response as response:
+            final_url = response.geturl()  # pyright: ignore[reportDeprecated]
             if not _is_approved_manufacturer_url(final_url):
                 raise CorpusFetchError(
                     "datasheet redirect target is not an approved manufacturer URL"
@@ -84,6 +98,8 @@ def fetch_corpus_datasheet(
     except (OSError, URLError) as error:
         raise CorpusFetchError(f"datasheet download failed: {error}") from error
 
+    if not payload.startswith(b"%PDF-"):
+        raise CorpusFetchError("datasheet response does not begin with %PDF-; expected a PDF")
     digest = hashlib.sha256(payload).hexdigest()
     if digest != entry.datasheet.sha256:
         raise CorpusFetchError(
