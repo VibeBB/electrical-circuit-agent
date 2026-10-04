@@ -516,12 +516,43 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         "circuit_vision_read",
         "Create datasheet image crops for visual reading; every image must receive an answer "
         "and a multi-sentence impression describing appearance, legibility, ambiguity, and "
-        "anything surprising.",
+        "anything surprising. Use som_tokens to reference numbered mechanical word tokens.",
         {
             "type": "object",
             "properties": {
                 "extraction_path": {"type": "string"},
-                "requests": {"type": "array", "items": {"type": "object"}},
+                "requests": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "field": {"type": "string"},
+                            "page": {"type": "integer", "minimum": 1},
+                            "bbox": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 4,
+                                "maxItems": 4,
+                            },
+                            "kind": {
+                                "type": "string",
+                                "enum": [
+                                    "transcribe",
+                                    "view",
+                                    "pin1_corner",
+                                    "pin_labels",
+                                    "table",
+                                    "som_tokens",
+                                    "compare_footprint",
+                                    "compare_symbol",
+                                    "compare_model",
+                                ],
+                            },
+                        },
+                        "required": ["field", "page", "bbox", "kind"],
+                        "additionalProperties": False,
+                    },
+                },
                 "out_dir": {"type": "string"},
             },
             "required": ["extraction_path", "requests"],

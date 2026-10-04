@@ -27,8 +27,10 @@ need to remain blind to each other's conclusions until both have committed.
   relative sidecar reference and verifies its SHA-256 before restoring the
   salted bindings. The sidecar is written before `batch.json`. Pre-tool guards
   deny every agent tool argument, file read, or terminal command that
-  references `.vision-control/`; only the MCP server reads it during normal
-  operation. This is context isolation, not a security boundary. Lane B uses
+  references `.vision-control/` or `.vision-token-map/`; only the MCP server
+  reads this private state during normal operation. The vision sidecar binds
+  token text and glyph findings by a SHA-256 recorded in the public batch.
+  This is context isolation, not a security boundary. Lane B uses
   pdfium; lane A and other lanes use Poppler, configurable through
   `CIRCUIT_PDFTOPPM`. The tool returns prompts, metadata, and image paths, not
   mechanical extraction text.
@@ -42,6 +44,16 @@ need to remain blind to each other's conclusions until both have committed.
   order, including header rows. Use an empty string for an empty cell.”
   Answers are parsed as `list[list[str]]`, normalized with NFKC and collapsed
   whitespace, and invalid shapes are marked `unparseable`.
+- Set-of-Mark reads number words extracted by Poppler and pdfplumber, overlay
+  those IDs on the crop, and resolve answer IDs back to the bound mechanical
+  text through a hash-bound private token-text sidecar outside batches and
+  authoring lanes. Unknown IDs and caller-supplied text that differs from the
+  bound word are rejected. Ambiguous-glyph checks render both rasterizer lanes
+  at 1200 dpi and compare against same-size characters from the PDF's embedded
+  font; their findings remain in private state so they do not disclose
+  extracted characters to the vision reader. Missing embedded fonts or
+  templates produce blocking findings rather than falling back to a system
+  font.
 - Vision answers are evidence, not replacements for mechanical readings.
   `Reading.vision_read`, `PinoutDrawing.labels_vision_read`,
   `PinTable.vision_read`, and `PartSpec.orderable_vision_read` bind to a batch

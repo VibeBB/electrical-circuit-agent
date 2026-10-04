@@ -42,7 +42,7 @@ not be placed in ordinary project storage or sent to web tools.
   derivation to lanes A and B, compares only after both lanes commit, and
   requires a fresh deterministic library verification and hash-bound human
   review before completion. The authoring context must not read the golden
-  corpus or `.vision-control` sidecars.
+  corpus or private `.vision-control` and `.vision-token-map` sidecars.
 - The authoring flow stops and creates a HumanRequest for an unavailable or
   mismatched datasheet, required substitute permission or alternative
   evidence, `model_terminals_unseparable`, or lane disagreement that source

@@ -68,6 +68,100 @@ def test_vision_transcription_matches_token_boundaries(
     assert _vision_transcription_matches(expected, actual) is matches
 
 
+def test_som_glyph_findings_fail_part_spec_evidence_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vision = partspec_module.visionread
+    prompt = vision.prompt_for_kind("som_tokens")
+    item = vision.VisionReadItem(
+        read_id="glyph-read",
+        field="pin_table",
+        kind="som_tokens",
+        page=1,
+        bbox=(1, 1, 2, 2),
+        crop_bbox=(0, 0, 10, 10),
+        dpi=600,
+        rasterizer="pdftoppm",
+        image_path="images/read.png",
+        image_sha256="b" * 64,
+        prompt=prompt,
+        prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        glyph_findings=[
+            vision.VisionGlyphFinding(
+                code="glyph_template_unavailable",
+                character="1",
+                lane="pdfium",
+                message="embedded glyph template is unavailable",
+            )
+        ],
+    )
+    extraction = DatasheetExtraction(
+        artifact_kind="circuit_datasheet_extraction",
+        pdf_path="part.pdf",
+        pdf_sha256="a" * 64,
+        page_count=1,
+        pages=[],
+        tools={},
+    )
+    batch = vision.VisionBatch(
+        artifact_kind="circuit_vision_read_batch",
+        batch_id="glyph-batch",
+        created_at="2026-01-01T00:00:00Z",
+        lane="main",
+        profile="test",
+        model="test",
+        pdf_path="part.pdf",
+        pdf_sha256=extraction.pdf_sha256,
+        items=[item],
+        control_salt="salt",
+        control_answer_sha256="c" * 64,
+        control_read_sha256="d" * 64,
+    )
+    answers = vision.VisionAnswerRecord(
+        artifact_kind="circuit_vision_read_answers",
+        batch_id=batch.batch_id,
+        answered_at="2026-01-01T00:00:00Z",
+        answers={item.read_id: "1"},
+        impressions={item.read_id: _IMPRESSION},
+        normalized={item.read_id: "1"},
+        status={item.read_id: "ok"},
+        control_passed=True,
+    )
+
+    def load_vision_read_stub(
+        _spec_dir: Path,
+        _reference: str,
+    ) -> tuple[Any, Any, Any]:
+        return batch, item, answers
+
+    monkeypatch.setattr(vision, "load_vision_read", load_vision_read_stub)
+    findings: list[SpecFinding] = []
+
+    binding = partspec_module._vision_read_binding(  # pyright: ignore[reportPrivateUsage]
+        tmp_path,
+        f"batch.json#{item.read_id}",
+        field="pin_table",
+        expected_kind="table",
+        page=1,
+        bbox=(1, 1, 2, 2),
+        reading=None,
+        extraction=extraction,
+        extraction_dir=tmp_path,
+        observation_log=None,
+        observed_hashes=set(),
+        findings=findings,
+    )
+
+    assert binding is not None
+    assert any(
+        finding.code == "glyph_template_unavailable"
+        and finding.severity == "error"
+        and finding.field == "pin_table"
+        for finding in findings
+    )
+
+
 @pytest.fixture(autouse=True)
 def _mock_rederivation(monkeypatch: pytest.MonkeyPatch) -> None:
     def rederive_pages(

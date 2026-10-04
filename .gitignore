@@ -6,3 +6,4 @@ __pycache__/
 .coverage*
 out/
 .vision-control/
+.vision-token-map/

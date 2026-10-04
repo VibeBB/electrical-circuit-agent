@@ -2070,7 +2070,10 @@ def _vision_read_binding(
             )
         )
         return None
-    if item.kind != expected_kind:
+    kind_matches = item.kind == expected_kind or (
+        item.kind == "som_tokens" and expected_kind in {"table", "pin_labels", "transcribe"}
+    )
+    if not kind_matches:
         findings.append(
             SpecFinding(
                 code="vision_read_kind_mismatch",
@@ -2081,6 +2084,16 @@ def _vision_read_binding(
             )
         )
         return None
+    for glyph_finding in item.glyph_findings:
+        findings.append(
+            SpecFinding(
+                code=glyph_finding.code,
+                severity="error",
+                field=field,
+                message=glyph_finding.message,
+                page=page,
+            )
+        )
     target_bbox = bbox
     if target_bbox is None and reading is not None:
         target_bbox = _reading_cells_bbox(reading, extraction, extraction_dir)
@@ -4330,11 +4343,19 @@ def check_part_spec(
             )
             if binding is None:
                 continue
-            _, _, normalized = binding
+            _, vision_item, normalized = binding
             value_matches = False
             if expected_kind == "transcribe":
-                value_matches = isinstance(normalized, str) and _vision_transcription_matches(
-                    reading.vision, normalized
+                if vision_item.kind == "som_tokens" and isinstance(normalized, dict):
+                    normalized_text = " ".join(cast(dict[str, str], normalized).values())
+                elif vision_item.kind == "som_tokens" and isinstance(normalized, list):
+                    normalized_text = " ".join(
+                        cell for row in cast(list[list[str]], normalized) for cell in row
+                    )
+                else:
+                    normalized_text = normalized if isinstance(normalized, str) else ""
+                value_matches = bool(normalized_text) and _vision_transcription_matches(
+                    reading.vision, normalized_text
                 )
             elif expected_kind == "pin1_corner":
                 corner = _PIN1_CORNER.search(reading.vision)

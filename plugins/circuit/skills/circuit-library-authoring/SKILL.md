@@ -16,9 +16,9 @@ triggers:
 Use this ordered workflow for every project-owned library part. Keep all source
 paths, hashes, provenance, licenses, generated artifacts, and gate reports
 under the project. Never edit files under `libraries/`, the installed KiCad
-libraries, or the CERN library tree. Never read `library/corpus` or
-`.vision-control`; corpus truth and vision-control identities are not
-authoring evidence.
+libraries, or the CERN library tree. Never read `library/corpus`,
+`.vision-control`, or `.vision-token-map`; corpus truth and vision-state
+identities are not authoring evidence.
 
 1. **Search manufacturer sources and reusable library items.** Search the
    manufacturer's official pin database first—such as ST STM32 Open Pin Data,

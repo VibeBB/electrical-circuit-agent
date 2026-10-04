@@ -29,7 +29,11 @@ def _blocked(payload: dict[str, object], lane: str) -> bool:
     if not isinstance(tool_input, dict):
         tool_input = {}
     values = _strings(tool_input)
-    if any(".vision-control" in value.replace("\\", "/").casefold() for value in values):
+    if any(
+        sidecar in value.replace("\\", "/").casefold()
+        for value in values
+        for sidecar in (".vision-control", ".vision-token-map")
+    ):
         return True
     if any(
         re.search(r"(?:^|[/\\])library[/\\]corpus(?:[/\\]|$)", value, re.IGNORECASE)

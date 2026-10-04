@@ -2851,3 +2851,5 @@ def test_tool_schema_enums_match_kicad_cli_literals() -> None:
     assert schemas["circuit_import"]["properties"]["kind"]["enum"] == list(
         mcp_server.kicad_cli.IMPORT_KINDS
     )
+    vision_request = schemas["circuit_vision_read"]["properties"]["requests"]["items"]
+    assert "som_tokens" in vision_request["properties"]["kind"]["enum"]
