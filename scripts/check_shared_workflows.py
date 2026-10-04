@@ -9,8 +9,8 @@ EXPECTED: dict[str, str] = {
     ".github/workflows/pr-branch-cleanup.yml": (
         "a75506d959fbf41f8a7bef4ef072b8eb4f21e684f7e1c7aeb7a6400a2443d47e"
     ),
-    ".github/workflows/workflow-lint.yml#jobs": (
-        "f1fcc63297dbc62baa3f31631f2ee1d91cb8ad197ffb36c5cd9b814bdf17995c"
+    ".github/workflows/workflow-lint.yml": (
+        "af5aab01aadd9fa523dd402bfc9ab84631d269731e4d6c1bcb14762193012811"
     ),
     ".github/workflows/main-ci-failure-issue.yml#jobs": (
         "c300a8c9af84887351a0e8be882876a713e2c487b8ee5b069090c8c02bb37d5a"
@@ -30,9 +30,9 @@ UNITS: dict[str, tuple[str, bytes | None]] = {
         ".github/workflows/pr-branch-cleanup.yml",
         None,
     ),
-    ".github/workflows/workflow-lint.yml#jobs": (
+    ".github/workflows/workflow-lint.yml": (
         ".github/workflows/workflow-lint.yml",
-        b"jobs:",
+        None,
     ),
     ".github/workflows/main-ci-failure-issue.yml#jobs": (
         ".github/workflows/main-ci-failure-issue.yml",

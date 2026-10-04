@@ -5,21 +5,17 @@ on:
     branches: [main]
     paths: [".github/**"]
   pull_request:
+  workflow_dispatch:
   schedule:
     - cron: "0 3 * * 1"
-  # Dispatched by the publish workflow on digest-lock branches so the
-  # lint verdict also reports on the head SHA. Only the pull_request run
-  # satisfies the required zizmor check: GitHub ignores workflow_dispatch
-  # check runs for required status checks, so the PR trigger must stay
-  # unfiltered on digest-lock PRs (they only touch docker/image-digests.json
-  # and the plugin's tools-image.json).
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Superseded pull_request runs are cancelled; main pushes and dispatched
+  # runs are never cancelled so in-flight main verification always lands.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
