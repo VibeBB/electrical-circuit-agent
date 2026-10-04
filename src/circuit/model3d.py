@@ -13,7 +13,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from . import occt
-from .landpattern import standard_pin_placements
+from .landpattern import Side, bga_pin_positions, standard_pin_placements
 from .partspec import Dimension, PartSpec
 
 GENERATOR_VERSION = "2"
@@ -23,6 +23,10 @@ _SUPPORTED = {
     "gullwing_quad",
     "no_lead_dual",
     "no_lead_quad",
+    "sot223",
+    "tabbed_dpak",
+    "sod",
+    "bga",
 }
 
 
@@ -73,6 +77,26 @@ def _nominal(
     return float(value)
 
 
+def _coordinate(
+    dimension: Dimension | None,
+    field: str,
+    derived_nominals: dict[str, str],
+) -> float:
+    if dimension is None:
+        return 0.0
+    value = dimension.nom
+    derived = value is None
+    if value is None:
+        if dimension.min is None or dimension.max is None:
+            raise Model3dError(f"{field} requires a nominal value or both min and max")
+        value = (dimension.min + dimension.max) / 2
+    if not math.isfinite(value):
+        raise Model3dError(f"{field} must be finite")
+    if derived:
+        derived_nominals[field] = "midpoint"
+    return float(value)
+
+
 def footprint_to_board_xy(
     x: float,
     y: float,
@@ -88,10 +112,14 @@ def footprint_to_board_xy(
     )
 
 
-def _numbered_pin_positions(spec: PartSpec) -> list[tuple[str, str, float]]:
+def _numbered_pin_positions(spec: PartSpec) -> list[tuple[str, Side, float]]:
+    if spec.package.family == "bga":
+        return []
     positions = standard_pin_placements(spec)
     corner = spec.package.pin1_corner
     family = spec.package.family
+    if family in {"sot223", "tabbed_dpak", "sod"}:
+        return positions
     if family == "chip":
         anchor_side = "left" if corner.endswith("left") else "right"
         anchor_position = 0.0
@@ -136,23 +164,49 @@ def expected_terminals(spec: PartSpec) -> list[ExpectedTerminal]:
     derived_nominals: dict[str, str] = {}
     body_length = _nominal(spec.package.body_length, "body_length", derived_nominals)
     body_width = _nominal(spec.package.body_width, "body_width", derived_nominals)
-    lead_length = _nominal(spec.package.lead_length, "lead_length", derived_nominals)
+    lead_length = (
+        _nominal(spec.package.lead_length, "lead_length", derived_nominals)
+        if family != "bga"
+        else 0.0
+    )
     lead_width = (
         _nominal(spec.package.lead_width, "lead_width", derived_nominals)
-        if family != "chip"
+        if family not in {"chip", "bga"}
         else body_width
     )
     lead_span = (
         _nominal(spec.package.lead_span, "lead_span", derived_nominals)
-        if family.startswith("gullwing_")
+        if family.startswith("gullwing_") or family in {"sot223", "tabbed_dpak", "sod"}
         else None
     )
     terminals: list[ExpectedTerminal] = []
+    if family == "bga":
+        if spec.package.ball_grid is None:
+            raise Model3dError("package.ball_grid is required")
+        ball_diameter = _nominal(
+            spec.package.ball_grid.ball_diameter,
+            "ball_grid.ball_diameter",
+            derived_nominals,
+        )
+        terminals.extend(
+            ExpectedTerminal(number, (x, y), (ball_diameter, ball_diameter))
+            for number, x, y in bga_pin_positions(spec)
+        )
     for number, side, position in _numbered_pin_positions(spec):
         sign = -1.0 if side in {"left", "top"} else 1.0
         if family == "chip":
             center = (sign * (body_length / 2 + lead_length / 2), 0.0)
             size = (lead_length, body_width)
+        elif family == "sod":
+            if lead_span is None:
+                raise Model3dError("package.lead_span is required for SOD terminals")
+            center = (sign * (lead_span / 2 - lead_length / 2), 0.0)
+            size = (lead_length, lead_width)
+        elif family in {"sot223", "tabbed_dpak"}:
+            if lead_span is None:
+                raise Model3dError("package.lead_span is required for package terminals")
+            center = (position, lead_span / 2 - lead_length / 2)
+            size = (lead_width, lead_length)
         else:
             if side in {"left", "right"}:
                 radial_extent = lead_span if lead_span is not None else body_width
@@ -163,26 +217,54 @@ def expected_terminals(spec: PartSpec) -> list[ExpectedTerminal]:
                 center = (position, sign * (radial_extent / 2 - lead_length / 2))
                 size = (lead_width, lead_length)
         terminals.append(ExpectedTerminal(number, center, size))
-    exposed = spec.package.exposed_pad
-    if exposed is not None:
-        ep_width = _nominal(exposed.width, "exposed_pad.width", derived_nominals)
-        ep_length = _nominal(exposed.length, "exposed_pad.length", derived_nominals)
-        terminals.append(ExpectedTerminal(exposed.number, (0.0, 0.0), (ep_width, ep_length)))
+    for index, exposed in enumerate(spec.package.all_exposed_pads):
+        ep_width = _nominal(exposed.width, f"exposed_pads[{index}].width", derived_nominals)
+        ep_length = _nominal(exposed.length, f"exposed_pads[{index}].length", derived_nominals)
+        center_x = _coordinate(
+            exposed.center_x,
+            f"exposed_pads[{index}].center_x",
+            derived_nominals,
+        )
+        center_y = _coordinate(
+            exposed.center_y,
+            f"exposed_pads[{index}].center_y",
+            derived_nominals,
+        )
+        terminals.append(
+            ExpectedTerminal(exposed.number, (center_x, center_y), (ep_width, ep_length))
+        )
+    if spec.package.tab is not None:
+        tab = spec.package.tab
+        terminals.append(
+            ExpectedTerminal(
+                tab.number,
+                (
+                    0.0,
+                    -_nominal(tab.offset, "tab.offset", derived_nominals),
+                ),
+                (
+                    _nominal(tab.width, "tab.width", derived_nominals),
+                    _nominal(tab.length, "tab.length", derived_nominals),
+                ),
+            )
+        )
     return terminals
 
 
 def _validate_pitch(
     spec: PartSpec,
-    positions: list[tuple[str, str, float]],
+    positions: list[tuple[str, Side, float]],
     *,
     body_width: float,
     body_length: float,
     pitch: float | None,
     lead_width: float | None,
 ) -> None:
-    if spec.package.family == "chip":
-        if spec.package.pin_count != 2 or len(positions) != 2:
-            raise Model3dError("chip packages must have exactly two terminals")
+    if spec.package.family in {"chip", "sod"}:
+        if len(positions) != spec.package.pin_count:
+            raise Model3dError("package terminal count does not match pin_count")
+        return
+    if spec.package.family == "bga":
         return
     if pitch is None:
         raise Model3dError("package.pitch is required for this family")
@@ -192,17 +274,27 @@ def _validate_pitch(
         raise Model3dError("package.lead_width must be smaller than package.pitch")
     if len(positions) != spec.package.pin_count:
         raise Model3dError("package terminal count does not match pin_count")
-    rows: dict[str, list[float]] = {}
-    for _, side, position in positions:
-        rows.setdefault(side, []).append(position)
+    rows: dict[str, list[tuple[str, float]]] = {}
+    for number, side, position in positions:
+        rows.setdefault(side, []).append((number, position))
     for side, row in rows.items():
-        ordered = sorted(row)
-        if len(ordered) != len(set(ordered)) or any(
-            not math.isclose(right - left, pitch, abs_tol=1e-9) for left, right in pairwise(ordered)
-        ):
+        ordered = sorted(row, key=lambda item: item[1])
+        for (left_number, left), (right_number, right) in pairwise(ordered):
+            try:
+                skipped_slots = abs(int(right_number) - int(left_number))
+            except ValueError:
+                skipped_slots = 1
+            if skipped_slots < 1 or not math.isclose(
+                right - left,
+                pitch * skipped_slots,
+                abs_tol=1e-9,
+            ):
+                raise Model3dError("package terminal rows do not match package.pitch")
+        positions_only = [position for _, position in ordered]
+        if len(positions_only) != len(set(positions_only)):
             raise Model3dError("package terminal rows do not match package.pitch")
         side_extent = body_length if side in {"left", "right"} else body_width
-        if ordered[-1] - ordered[0] + lead_width > side_extent + 1e-6:
+        if positions_only[-1] - positions_only[0] + lead_width > side_extent + 1e-6:
             raise Model3dError("package.pitch and lead_width exceed the package body extent")
 
 
@@ -328,29 +420,41 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
         )
         pitch = (
             _nominal(spec.package.pitch, "pitch", derived_nominals)
-            if family != "chip" and spec.package.pitch is not None
+            if family not in {"chip", "bga"} and spec.package.pitch is not None
+            else None
+        )
+        ball_diameter = (
+            _nominal(
+                spec.package.ball_grid.ball_diameter,
+                "ball_grid.ball_diameter",
+                derived_nominals,
+            )
+            if family == "bga" and spec.package.ball_grid is not None
             else None
         )
         lead_span = (
             _nominal(spec.package.lead_span, "lead_span", derived_nominals)
-            if family.startswith("gullwing_") and spec.package.lead_span is not None
+            if (family.startswith("gullwing_") or family in {"sot223", "tabbed_dpak", "sod"})
+            and spec.package.lead_span is not None
             else None
         )
         lead_length = (
             _nominal(spec.package.lead_length, "lead_length", derived_nominals)
             if spec.package.lead_length is not None
-            else None
+            else (0.0 if family == "bga" else None)
         )
         lead_width = (
             _nominal(spec.package.lead_width, "lead_width", derived_nominals)
-            if family != "chip" and spec.package.lead_width is not None
+            if family not in {"chip", "bga"} and spec.package.lead_width is not None
             else None
         )
         if lead_length is None:
             raise Model3dError("package.lead_length is required for package terminals")
-        if family != "chip" and lead_width is None:
+        if family not in {"chip", "bga"} and lead_width is None:
             raise Model3dError("package.lead_width is required for this family")
-        if family.startswith("gullwing_") and lead_span is None:
+        if (
+            family.startswith("gullwing_") or family in {"sot223", "tabbed_dpak", "sod"}
+        ) and lead_span is None:
             raise Model3dError("package.lead_span is required for gullwing terminals")
         if family == "gullwing_dual" and lead_span is not None and lead_span < body_width:
             raise Model3dError("package.lead_span must enclose the gullwing body width")
@@ -370,7 +474,7 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
             pitch=pitch,
             lead_width=lead_width,
         )
-        body_bottom = max(standoff, 0.03)
+        body_bottom = max(standoff, ball_diameter or 0.03)
         body_top = height
         if body_top <= body_bottom:
             raise Model3dError("height must exceed the body bottom")
@@ -386,6 +490,21 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
         )
         terminals: list[occt.Shape] = []
         terminal_map: list[dict[str, object]] = []
+        bga_positions = bga_pin_positions(spec) if family == "bga" else []
+        if family == "bga":
+            if ball_diameter is None:
+                raise Model3dError("package.ball_grid.ball_diameter is required")
+            for number, x, y in bga_positions:
+                solid_index = len(terminals) + 1
+                terminals.append(occt.cylinder(x, y, 0.0, ball_diameter / 2, ball_diameter))
+                terminal_map.append(
+                    {
+                        "number": number,
+                        "terminal_center_mm": [x, y],
+                        "terminal_size_mm": [ball_diameter, ball_diameter],
+                        "solid_index": solid_index,
+                    }
+                )
         for number, side, _position in numbered_positions:
             expected = expected_by_number[number]
             solid_index = len(terminals) + 1
@@ -402,7 +521,11 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
                         height,
                     )
                 )
-            elif family.startswith("gullwing_"):
+            elif family.startswith("gullwing_") or family in {
+                "sot223",
+                "tabbed_dpak",
+                "sod",
+            }:
                 if lead_span is None or lead_width is None:
                     raise Model3dError("gullwing lead dimensions are unavailable")
                 terminal, center = _gullwing_terminal(
@@ -435,32 +558,37 @@ def generate_model(spec: PartSpec, footprint: Path, out: Path) -> GeneratedModel
                     "solid_index": solid_index,
                 }
             )
-        terminal_numbers = [number for number, _, _ in numbered_positions]
-        exposed = spec.package.exposed_pad
-        if exposed is not None:
-            if exposed.number in terminal_numbers:
-                raise Model3dError("exposed pad number duplicates a package terminal")
-            ep_terminal = expected_by_number[exposed.number]
-            ep_width, ep_length = ep_terminal.size_xy
-            if ep_width > body_width or ep_length > body_length:
+        terminal_numbers = [number for number, _, _ in numbered_positions] + [
+            number for number, _, _ in bga_positions
+        ]
+        tab_number = spec.package.tab.number if spec.package.tab is not None else None
+        for auxiliary in expected_by_number.values():
+            if auxiliary.number in terminal_numbers:
+                continue
+            if auxiliary.number == tab_number:
+                pass
+            elif (
+                abs(auxiliary.center_xy[0]) + auxiliary.size_xy[0] / 2 > body_width / 2
+                or abs(auxiliary.center_xy[1]) + auxiliary.size_xy[1] / 2 > body_length / 2
+            ):
                 raise Model3dError("exposed_pad dimensions exceed the package body extents")
             solid_index = len(terminals) + 1
             terminals.append(
                 occt.box(
-                    -ep_width / 2,
-                    -ep_length / 2,
+                    auxiliary.center_xy[0] - auxiliary.size_xy[0] / 2,
+                    auxiliary.center_xy[1] - auxiliary.size_xy[1] / 2,
                     0.0,
-                    ep_width,
-                    ep_length,
+                    auxiliary.size_xy[0],
+                    auxiliary.size_xy[1],
                     min(0.2, height),
                 )
             )
-            terminal_numbers.append(exposed.number)
+            terminal_numbers.append(auxiliary.number)
             terminal_map.append(
                 {
-                    "number": exposed.number,
-                    "terminal_center_mm": list(ep_terminal.center_xy),
-                    "terminal_size_mm": list(ep_terminal.size_xy),
+                    "number": auxiliary.number,
+                    "terminal_center_mm": list(auxiliary.center_xy),
+                    "terminal_size_mm": list(auxiliary.size_xy),
                     "solid_index": solid_index,
                 }
             )

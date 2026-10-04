@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .partspec import Dimension, LandPad, PartSpec
+from .partspec import Dimension, ExposedPad, LandPad, PartSpec, TabSpec
 
 if TYPE_CHECKING:
     from .ruleprofile import EffectiveRules
@@ -21,6 +21,10 @@ Family = Literal[
     "gullwing_quad",
     "gullwing_dual",
     "chip",
+    "sot223",
+    "tabbed_dpak",
+    "sod",
+    "bga",
 ]
 Side = Literal["left", "bottom", "right", "top"]
 
@@ -106,6 +110,10 @@ def _family(spec: PartSpec) -> Family:
         "gullwing_quad",
         "gullwing_dual",
         "chip",
+        "sot223",
+        "tabbed_dpak",
+        "sod",
+        "bga",
     ):
         raise LandPatternError(f"unsupported package family: {family}")
     return family
@@ -126,8 +134,12 @@ def _required_dimension(spec: PartSpec, name: str) -> Dimension:
 
 def _goals(spec: PartSpec, density: Density) -> _Goals:
     family = _family(spec)
-    if family.startswith("gullwing"):
-        pitch = _required_dimension(spec, "pitch")
+    if family.startswith("gullwing") or family in {"sot223", "tabbed_dpak", "sod"}:
+        pitch = (
+            _required_dimension(spec, "pitch")
+            if spec.package.pitch is not None
+            else _required_dimension(spec, "lead_span")
+        )
         pitch_nominal = _nominal(pitch, field="package.pitch")
         key = "small" if pitch_nominal <= 0.625 else "large"
         table: dict[str, dict[Density, tuple[float, float, float, float]]] = {
@@ -194,12 +206,13 @@ def _pitch(spec: PartSpec) -> float:
 def _quad_counts(spec: PartSpec) -> tuple[int, int, int, int]:
     package = spec.package
     counts = package.pins_per_side
+    physical_count = package.pin_count + len(package.missing_pins)
     if counts is None:
-        if package.pin_count % 4:
+        if physical_count % 4:
             raise LandPatternError("quad pin_count must divide evenly across four sides")
-        each = package.pin_count // 4
+        each = physical_count // 4
         counts = (each, each, each, each)
-    if any(count <= 0 for count in counts) or sum(counts) != package.pin_count:
+    if any(count <= 0 for count in counts) or sum(counts) != physical_count:
         raise LandPatternError("pins_per_side must contain positive counts summing to pin_count")
     return counts
 
@@ -212,23 +225,39 @@ def _axis_positions(count: int, pitch: float, *, reverse: bool = False) -> list[
 def _placements(spec: PartSpec) -> list[_Placement]:
     package = spec.package
     family = _family(spec)
-    if family == "chip":
-        if package.pin_count != 2:
-            raise LandPatternError("chip packages must have exactly two pins")
+    if family in {"chip", "sod"}:
+        if package.pin_count + len(package.missing_pins) != 2:
+            raise LandPatternError(f"{family} packages must have exactly two terminal positions")
         return [
-            _Placement("1", "left", 0.0),
-            _Placement("2", "right", 0.0),
+            _Placement(str(number), "left" if number == 1 else "right", 0.0)
+            for number in (1, 2)
+            if str(number) not in package.missing_pins
         ]
+    if family in {"sot223", "tabbed_dpak"}:
+        pitch = _pitch(spec)
+        slot_count = package.pin_count + len(package.missing_pins)
+        return [
+            _Placement(str(number), "bottom", position)
+            for number, position in enumerate(_axis_positions(slot_count, pitch), start=1)
+            if str(number) not in package.missing_pins
+        ]
+    if family == "bga":
+        raise LandPatternError("BGA sites use bga_pin_positions")
     pitch = _pitch(spec)
     placements: list[_Placement] = []
     if family.endswith("dual"):
-        if package.pin_count % 2:
+        slot_count = package.pin_count + len(package.missing_pins)
+        if slot_count % 2:
             raise LandPatternError("dual package pin_count must be even")
-        half = package.pin_count // 2
+        half = slot_count // 2
         for index, position in enumerate(_axis_positions(half, pitch)):
-            placements.append(_Placement(str(index + 1), "left", position))
+            number = str(index + 1)
+            if number not in package.missing_pins:
+                placements.append(_Placement(number, "left", position))
         for index, position in enumerate(_axis_positions(half, pitch, reverse=True)):
-            placements.append(_Placement(str(half + index + 1), "right", position))
+            number = str(half + index + 1)
+            if number not in package.missing_pins:
+                placements.append(_Placement(number, "right", position))
         return placements
     counts = _quad_counts(spec)
     number = 1
@@ -240,9 +269,36 @@ def _placements(spec: PartSpec) -> list[_Placement]:
     )
     for side, count, reverse in rows:
         for position in _axis_positions(count, pitch, reverse=reverse):
-            placements.append(_Placement(str(number), side, position))
+            if str(number) not in package.missing_pins:
+                placements.append(_Placement(str(number), side, position))
             number += 1
     return placements
+
+
+def bga_pin_positions(spec: PartSpec) -> list[tuple[str, float, float]]:
+    grid = spec.package.ball_grid
+    if grid is None:
+        raise LandPatternError("package.ball_grid is required")
+    pitch_x = _nominal(grid.pitch_x, field="package.ball_grid.pitch_x")
+    pitch_y = _nominal(grid.pitch_y, field="package.ball_grid.pitch_y")
+    if pitch_x <= 0 or pitch_y <= 0:
+        raise LandPatternError("BGA pitches must be positive")
+    right_corner = spec.package.pin1_corner.endswith("right")
+    bottom_corner = spec.package.pin1_corner.startswith("bottom")
+    positions: list[tuple[str, float, float]] = []
+    for row_index, row in enumerate(grid.rows):
+        row_y = (row_index - (len(grid.rows) - 1) / 2) * pitch_y
+        if bottom_corner:
+            row_y = -row_y
+        for column in range(1, grid.columns + 1):
+            number = f"{row}{column}"
+            if number in spec.package.missing_pins:
+                continue
+            x = (column - (grid.columns + 1) / 2) * pitch_x
+            if right_corner:
+                x = -x
+            positions.append((number, _round_hundredth(x), _round_hundredth(row_y)))
+    return positions
 
 
 def standard_pin_placements(spec: PartSpec) -> list[tuple[str, Side, float]]:
@@ -324,6 +380,8 @@ def _round_pad(
     y: float,
     width: float,
     height: float,
+    *,
+    kind: Literal["signal", "exposed", "tab"] = "signal",
 ) -> LandPad:
     return LandPad(
         number=number,
@@ -332,6 +390,46 @@ def _round_pad(
         width=_round_hundredth(width),
         height=_round_hundredth(height),
         shape="roundrect",
+        kind=kind,
+    )
+
+
+def _coordinate(dimension: Dimension | None, *, field: str) -> float:
+    if dimension is None:
+        return 0.0
+    values = [value for value in (dimension.min, dimension.nom, dimension.max) if value is not None]
+    if not values:
+        raise LandPatternError(f"{field} has no usable value")
+    return _round_hundredth(
+        float(dimension.nom) if dimension.nom is not None else (min(values) + max(values)) / 2
+    )
+
+
+def _exposed_land_pad(exposed: ExposedPad, *, field: str) -> LandPad:
+    width = _nominal(exposed.width, field=f"{field}.width")
+    height = _nominal(exposed.length, field=f"{field}.length")
+    return LandPad(
+        number=exposed.number,
+        x=_coordinate(exposed.center_x, field=f"{field}.center_x"),
+        y=_coordinate(exposed.center_y, field=f"{field}.center_y"),
+        width=_round_hundredth(width),
+        height=_round_hundredth(height),
+        shape="polygon" if exposed.polygon is not None else "roundrect",
+        rotation=exposed.rotation_deg,
+        polygon=exposed.polygon,
+        kind="exposed",
+    )
+
+
+def _tab_land_pad(tab: TabSpec) -> LandPad:
+    return LandPad(
+        number=tab.number,
+        x=0.0,
+        y=-_nominal(tab.offset, field="package.tab.offset"),
+        width=_round_hundredth(_nominal(tab.width, field="package.tab.width")),
+        height=_round_hundredth(_nominal(tab.length, field="package.tab.length")),
+        shape="roundrect",
+        kind="tab",
     )
 
 
@@ -346,10 +444,30 @@ def _courtyard(
 ) -> tuple[float, float, float, float]:
     x0, y0, x1, y1 = _body_box(spec)
     for pad in pads:
-        x0 = min(x0, pad.x - pad.width / 2)
-        y0 = min(y0, pad.y - pad.height / 2)
-        x1 = max(x1, pad.x + pad.width / 2)
-        y1 = max(y1, pad.y + pad.height / 2)
+        if pad.polygon is not None:
+            radians = math.radians(pad.rotation)
+            cosine, sine = math.cos(radians), math.sin(radians)
+            points = [
+                (
+                    pad.x + x * cosine - y * sine,
+                    pad.y + x * sine + y * cosine,
+                )
+                for x, y in pad.polygon
+            ]
+            pad_x0 = min(point[0] for point in points)
+            pad_y0 = min(point[1] for point in points)
+            pad_x1 = max(point[0] for point in points)
+            pad_y1 = max(point[1] for point in points)
+        else:
+            radians = math.radians(pad.rotation)
+            pad_width = abs(pad.width * math.cos(radians)) + abs(pad.height * math.sin(radians))
+            pad_height = abs(pad.width * math.sin(radians)) + abs(pad.height * math.cos(radians))
+            pad_x0, pad_x1 = pad.x - pad_width / 2, pad.x + pad_width / 2
+            pad_y0, pad_y1 = pad.y - pad_height / 2, pad.y + pad_height / 2
+        x0 = min(x0, pad_x0)
+        y0 = min(y0, pad_y0)
+        x1 = max(x1, pad_x1)
+        y1 = max(y1, pad_y1)
     return (
         _outward_hundredth(x0 - excess, "floor"),
         _outward_hundredth(y0 - excess, "floor"),
@@ -370,9 +488,11 @@ def _konnect_pads(pads: list[LandPad], vertical: set[str]) -> list[dict[str, obj
             "y": pad.y,
             "width": pad.height if is_vertical else pad.width,
             "height": pad.width if is_vertical else pad.height,
-            "rotation": 90.0 if is_vertical else 0.0,
+            "rotation": pad.rotation + (90.0 if is_vertical else 0.0),
             "layers": ["F.Cu", "F.Paste", "F.Mask"],
         }
+        if pad.polygon is not None:
+            konnect_pad["polygon"] = pad.polygon
         if pad.shape == "roundrect":
             konnect_pad["roundrect_rratio"] = 0.25
         result.append(konnect_pad)
@@ -453,11 +573,75 @@ def compute_land_pattern(
         )
 
     goals = _effective_goals(spec, density, rules)
-    placements = _placements(spec)
-    terminal_length = _bounds(_required_dimension(spec, "lead_length"), field="package.lead_length")
-    if family == "chip":
-        width = _bounds(spec.package.body_width, field="package.body_width")
-        length = _bounds(spec.package.body_length, field="package.body_length")
+    pads: list[LandPad] = []
+    vertical: set[str] = set()
+    params = {
+        "F": fabrication_tolerance,
+        "P": placement_tolerance,
+        "toe": goals.toe,
+        "heel": goals.heel,
+        "side": goals.side,
+        "courtyard_excess": goals.courtyard,
+    }
+    if family == "bga":
+        grid = spec.package.ball_grid
+        if grid is None:
+            raise LandPatternError("package.ball_grid is required")
+        ball_diameter = _nominal(grid.ball_diameter, field="package.ball_grid.ball_diameter")
+        pad_diameter = _round_hundredth(0.8 * ball_diameter)
+        if pad_diameter <= 0:
+            raise LandPatternError("BGA pad diameter must be positive")
+        params.update(
+            {
+                "ball_diameter": ball_diameter,
+                "pad_diameter": pad_diameter,
+                "pitch_x": _nominal(grid.pitch_x, field="package.ball_grid.pitch_x"),
+                "pitch_y": _nominal(grid.pitch_y, field="package.ball_grid.pitch_y"),
+            }
+        )
+        pads.extend(
+            LandPad(
+                number=number,
+                x=x,
+                y=y,
+                width=pad_diameter,
+                height=pad_diameter,
+                shape="circle",
+            )
+            for number, x, y in bga_pin_positions(spec)
+        )
+    elif family in {"sot223", "tabbed_dpak"}:
+        placements = _placements(spec)
+        metrics = _metrics(
+            _bounds(_required_dimension(spec, "lead_span"), field="package.lead_span"),
+            _bounds(_required_dimension(spec, "lead_length"), field="package.lead_length"),
+            _bounds(_required_dimension(spec, "lead_width"), field="package.lead_width"),
+            goals,
+            fabrication_tolerance,
+            placement_tolerance,
+        )
+        params.update(metrics)
+        pads.extend(
+            _round_pad(
+                placement.number,
+                placement.position,
+                metrics["offset"],
+                metrics["Xmax"],
+                metrics["pad_length"],
+            )
+            for placement in placements
+        )
+    elif family in {"chip", "sod"}:
+        placements = _placements(spec)
+        terminal_length = _bounds(
+            _required_dimension(spec, "lead_length"), field="package.lead_length"
+        )
+        if family == "sod":
+            width = _bounds(_required_dimension(spec, "lead_width"), field="package.lead_width")
+            length = _bounds(_required_dimension(spec, "lead_span"), field="package.lead_span")
+        else:
+            width = _bounds(spec.package.body_width, field="package.body_width")
+            length = _bounds(spec.package.body_length, field="package.body_length")
         metrics = _metrics(
             length,
             terminal_length,
@@ -466,8 +650,7 @@ def compute_land_pattern(
             fabrication_tolerance,
             placement_tolerance,
         )
-        params = dict(metrics)
-        pads: list[LandPad] = []
+        params.update(metrics)
         for placement in placements:
             x = -metrics["offset"] if placement.side == "left" else metrics["offset"]
             pads.append(
@@ -479,8 +662,11 @@ def compute_land_pattern(
                     metrics["Xmax"],
                 )
             )
-        vertical: set[str] = set()
     else:
+        placements = _placements(spec)
+        terminal_length = _bounds(
+            _required_dimension(spec, "lead_length"), field="package.lead_length"
+        )
         lead_width = _bounds(_required_dimension(spec, "lead_width"), field="package.lead_width")
         if family.startswith("gullwing"):
             shared_length = _bounds(
@@ -543,11 +729,12 @@ def compute_land_pattern(
                 vertical.add(placement.number)
             pads.append(_round_pad(placement.number, x, y, width, height))
 
-    if spec.package.exposed_pad is not None:
-        exposed = spec.package.exposed_pad
-        ep_width = _nominal(exposed.width, field="package.exposed_pad.width")
-        ep_height = _nominal(exposed.length, field="package.exposed_pad.length")
-        pads.append(_round_pad(exposed.number, 0.0, 0.0, ep_width, ep_height))
+    pads.extend(
+        _exposed_land_pad(exposed, field=f"package.exposed_pads[{index}]")
+        for index, exposed in enumerate(spec.package.all_exposed_pads)
+    )
+    if spec.package.tab is not None:
+        pads.append(_tab_land_pad(spec.package.tab))
     return LandPatternResult(
         family=family,
         density=density,
@@ -573,6 +760,11 @@ def _max_material_leads(spec: PartSpec) -> tuple[float, float, float]:
     if family == "chip":
         terminal_width = _max_value(spec.package.body_width, field="package.body_width")
         length = _max_value(spec.package.body_length, field="package.body_length")
+    elif family in {"sod", "sot223", "tabbed_dpak"}:
+        terminal_width = _max_value(
+            _required_dimension(spec, "lead_width"), field="package.lead_width"
+        )
+        length = _max_value(_required_dimension(spec, "lead_span"), field="package.lead_span")
     else:
         terminal_width = _max_value(
             _required_dimension(spec, "lead_width"), field="package.lead_width"
@@ -588,6 +780,8 @@ def lead_rects(spec: PartSpec) -> dict[str, list[Rect]]:
     """Return maximum-material package lead rectangles in top-view coordinates."""
 
     family = _family(spec)
+    if family == "bga":
+        return {}
     placements = _placements(spec)
     span, terminal_length, terminal_width = _max_material_leads(spec)
     body_width = _max_value(spec.package.body_width, field="package.body_width")
@@ -600,6 +794,18 @@ def lead_rects(spec: PartSpec) -> dict[str, list[Rect]]:
             )
             x0, x1 = center_x - terminal_length / 2, center_x + terminal_length / 2
             y0, y1 = -terminal_width / 2, terminal_width / 2
+        elif family == "sod":
+            sign = -1 if placement.side == "left" else 1
+            center_x = sign * (span - terminal_length) / 2
+            x0, x1 = center_x - terminal_length / 2, center_x + terminal_length / 2
+            y0, y1 = -terminal_width / 2, terminal_width / 2
+        elif family in {"sot223", "tabbed_dpak"}:
+            center_y = (span - terminal_length) / 2
+            x0, x1 = (
+                placement.position - terminal_width / 2,
+                placement.position + terminal_width / 2,
+            )
+            y0, y1 = center_y - terminal_length / 2, center_y + terminal_length / 2
         elif placement.side in ("left", "right"):
             sign = -1 if placement.side == "left" else 1
             if family.startswith("gullwing"):

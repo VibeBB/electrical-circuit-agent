@@ -525,6 +525,7 @@ def _write_case(
     footprint_kwargs: dict[str, object] | None = None,
     stub_cli: bool = True,
     record_authoring: bool = True,
+    record_comparisons: bool = True,
 ) -> tuple[PartSpec, LandPatternResult, Path, Path, Path, Path]:
     spec = _dual_spec() if spec is None else spec
     spec = _ensure_package_identity_pdf(tmp_path, spec)
@@ -623,7 +624,8 @@ def _write_case(
                 model=model,
                 impression=FIXTURE_IMPRESSION,
             )
-    _write_comparison_records(spec, spec_path, symbol_path, footprint_path)
+    if record_comparisons:
+        _write_comparison_records(spec, spec_path, symbol_path, footprint_path)
     report_path = tmp_path / "part-spec-check.json"
     return spec, reference, spec_path, report_path, symbol_path, footprint_path
 
