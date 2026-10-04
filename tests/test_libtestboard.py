@@ -296,6 +296,61 @@ def test_paste_oracle_checks_only_active_layer_and_rejects_inactive_openings() -
     )
 
 
+def test_paste_oracle_allows_gerber_area_rounding_within_two_percent() -> None:
+    pad = LandPad(
+        number="1",
+        x=0.0,
+        y=0.0,
+        width=0.86,
+        height=0.86,
+        shape="roundrect",
+    )
+    expected_area = pad.width * pad.height - (4 - math.pi) * (pad.width * 0.25) ** 2
+    rules = load_rules("builtin:ipc7351b", Path("tests/data/corpus_parts"))
+
+    rounded_opening = GerberFeature(
+        x=0.0,
+        y=0.0,
+        width=0.86,
+        height=0.86,
+        area=expected_area * 1.001,
+        shape="macro",
+    )
+    oversized_opening = GerberFeature(
+        x=0.0,
+        y=0.0,
+        width=0.86,
+        height=0.86,
+        area=expected_area * 1.03,
+        shape="macro",
+    )
+
+    assert (
+        libtestboard._paste_mismatch(  # pyright: ignore[reportPrivateUsage]
+            [pad],
+            [rounded_opening],
+            component_side="F.Cu",
+            layer="F.Paste",
+            rotation_deg=0,
+            rules=rules,
+            exposed_numbers=set(),
+        )
+        is None
+    )
+    assert (
+        libtestboard._paste_mismatch(  # pyright: ignore[reportPrivateUsage]
+            [pad],
+            [oversized_opening],
+            component_side="F.Cu",
+            layer="F.Paste",
+            rotation_deg=0,
+            rules=rules,
+            exposed_numbers=set(),
+        )
+        is not None
+    )
+
+
 def test_manufacturing_drill_export_uses_kicad_separate_th_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

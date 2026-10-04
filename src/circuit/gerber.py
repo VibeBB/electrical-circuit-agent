@@ -299,11 +299,18 @@ def _parse_macro(
                 raise ExportParseError("unsupported outline macro primitive")
             exposure = values[0] != 0
             count = int(values[1])
-            if len(values) != 3 + count * 2:
+            if count < 3 or values[1] != count:
+                raise ExportParseError("outline macro vertex count is inconsistent")
+            coordinates_end = 2 + count * 2
+            closed_outline = (
+                len(values) == coordinates_end + 3
+                and values[coordinates_end : coordinates_end + 2] == values[2:4]
+            )
+            if len(values) != coordinates_end + 1 and not closed_outline:
                 raise ExportParseError("outline macro vertex count is inconsistent")
             primitive_values = (
                 float(count),
-                *(value * unit_scale for value in values[2 : 2 + count * 2]),
+                *(value * unit_scale for value in values[2:coordinates_end]),
                 values[-1],
             )
         elif code == 5:

@@ -58,6 +58,36 @@ def test_parse_gerber_aperture_macro_for_roundrect_geometry(tmp_path: Path) -> N
     assert feature.area == pytest.approx(0.5, abs=0.005)
 
 
+def test_parse_gerber_kicad_roundrect_macro_with_closed_outline(tmp_path: Path) -> None:
+    source = tmp_path / "kicad-roundrect.gbr"
+    source.write_text(
+        "%FSLAX46Y46*%\n"
+        "%MOMM*%\n"
+        "%AMRoundRect*\n"
+        "4,1,4,$2,$3,$4,$5,$6,$7,$8,$9,$2,$3,0*\n"
+        "1,1,$1+$1,$2,$3*\n"
+        "1,1,$1+$1,$4,$5*\n"
+        "1,1,$1+$1,$6,$7*\n"
+        "1,1,$1+$1,$8,$9*\n"
+        "20,1,$1+$1,$2,$3,$4,$5,0*\n"
+        "20,1,$1+$1,$4,$5,$6,$7,0*\n"
+        "20,1,$1+$1,$6,$7,$8,$9,0*\n"
+        "20,1,$1+$1,$8,$9,$2,$3,0*%\n"
+        "%ADD10RoundRect,0.060000X-0.240000X-0.060000X0.240000X-0.060000X"
+        "0.240000X0.060000X-0.240000X0.060000X0*%\n"
+        "D10*\n"
+        "X0000000000Y0000000000D03*\n"
+        "M02*\n",
+        encoding="ascii",
+    )
+
+    feature = parse_gerber(source).features[0]
+
+    assert feature.shape == "macro"
+    assert (feature.width, feature.height) == pytest.approx((0.6, 0.24))
+    assert feature.area == pytest.approx(0.6 * 0.24 - (4 - math.pi) * 0.06**2, abs=0.001)
+
+
 def test_parse_gerber_polygon_aperture_keeps_vertex_count_and_rotation(
     tmp_path: Path,
 ) -> None:

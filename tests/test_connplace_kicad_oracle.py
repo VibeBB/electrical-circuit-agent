@@ -52,6 +52,7 @@ def _kicad_cli_available() -> bool:
 def _kicad_cli_command(tmp_path: Path) -> list[str]:
     if shutil.which("kicad-cli") is not None:
         return ["kicad-cli"]
+    tmp_path.chmod(0o777)
     image = os.environ["CIRCUIT_TOOLS_IMAGE"]
     return [
         "docker",

@@ -39,6 +39,7 @@ _LIBRARY_ALIAS = "test"
 _UUID_NAMESPACE = uuid.UUID("f1a7f2a0-19e8-5dd0-a5c4-03c1f2cf32f0")
 _IPCD356_COORDINATE = re.compile(r"A\d{2}X([+-]\d+)Y([+-]\d+)X\d+Y\d+R\d{3}")
 _IPCD356_NET_ALIAS = re.compile(r"^P\s+NNAME(M\d{4})\s+(.+?)\s*$")
+_GERBER_AREA_REL_TOLERANCE = 0.02
 
 
 class TestBoardCheck(BaseModel):
@@ -940,7 +941,7 @@ def _compare_export_features(
         width_delta = abs(nearest.width - wanted.width)
         height_delta = abs(nearest.height - wanted.height)
         area_delta = abs(nearest.area - wanted.area) / wanted.area if wanted.area > 0 else math.inf
-        if width_delta > 0.01 or height_delta > 0.01 or area_delta > 0.02:
+        if width_delta > 0.01 or height_delta > 0.01 or area_delta > _GERBER_AREA_REL_TOLERANCE:
             errors.append(
                 f"{label} pad {wanted.pad.number} extents {nearest.width:.4f}x"
                 f"{nearest.height:.4f} mm, area delta {area_delta:.2%}"
@@ -1032,9 +1033,10 @@ def _paste_mismatch(
             ]
             area = sum(feature.area for feature in candidates)
             ratio = area / item.area if item.area > 0 else 0.0
-            if (
-                not candidates
-                or not rules.paste.ep_coverage_min <= ratio <= rules.paste.ep_coverage_max
+            if not candidates or not _paste_coverage_in_range(
+                ratio,
+                rules.paste.ep_coverage_min,
+                rules.paste.ep_coverage_max,
             ):
                 errors.append(
                     f"EP paste coverage for pad {item.pad.number} is {ratio:.4f}, outside "
@@ -1052,7 +1054,11 @@ def _paste_mismatch(
         )
         delta = math.hypot(feature.x - item.x, feature.y - item.y)
         ratio = feature.area / item.area if item.area > 0 else 0.0
-        if delta > 0.01 or not rules.paste.coverage_min <= ratio <= rules.paste.coverage_max:
+        if delta > 0.01 or not _paste_coverage_in_range(
+            ratio,
+            rules.paste.coverage_min,
+            rules.paste.coverage_max,
+        ):
             errors.append(
                 f"paste opening for pad {item.pad.number} center delta {delta:.4f} mm, "
                 f"coverage {ratio:.4f}"
@@ -1062,6 +1068,10 @@ def _paste_mismatch(
     if remaining:
         errors.append(f"paste layer contains {len(remaining)} unexpected opening(s)")
     return "; ".join(errors) if errors else None
+
+
+def _paste_coverage_in_range(ratio: float, minimum: float, maximum: float) -> bool:
+    return minimum - _GERBER_AREA_REL_TOLERANCE <= ratio <= maximum + _GERBER_AREA_REL_TOLERANCE
 
 
 def _drill_file(path: Path) -> Literal["PTH", "NPTH"] | None:

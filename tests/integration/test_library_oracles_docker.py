@@ -14,6 +14,8 @@ from circuit.partspec import (
     CellRef,
     DatasheetRef,
     Dimension,
+    LandPad,
+    LandPattern,
     OrderableVariant,
     PackageSpec,
     PartSpec,
@@ -104,6 +106,14 @@ def _spec() -> PartSpec:
             extraction_path="fixture-extraction.json",
         ),
         package=package,
+        land_pattern=LandPattern(
+            source="datasheet",
+            dimensions={"terminal_spacing": Dimension(nom=2.0, reading=_reading("2.0"))},
+            pads=[
+                LandPad(number="1", x=-1.0, y=0.0, width=0.8, height=1.0, shape="rect"),
+                LandPad(number="2", x=1.0, y=0.0, width=0.8, height=1.0, shape="rect"),
+            ],
+        ),
         pins=[
             PinSpec(number="1", name="VIN", electrical_type="input", reading=_reading("1 VIN")),
             PinSpec(number="2", name="GND", electrical_type="power_in", reading=_reading("2 GND")),
