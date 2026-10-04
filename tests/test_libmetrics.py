@@ -411,9 +411,24 @@ def test_review_relaxation_requires_fresh_hash_bound_metrics(
         release_relaxation_supported=True,
         findings=[],
     )
+    current = metrics.model_copy(
+        update={
+            "reviewer_catch_trials": [
+                libmetrics.ReviewerCatchTrialMetrics(
+                    reviewer="Reviewer A",
+                    trials=5,
+                    catches=1,
+                    misses=4,
+                    upper95_miss_rate=0.99,
+                    advisory=True,
+                )
+            ],
+            "reviewer_advisories": ["reviewer_catch_trial_advisory:Reviewer A"],
+        }
+    )
 
     def compute_metrics_for_fixture(_project: Path) -> LibraryMetrics:
-        return metrics
+        return current
 
     monkeypatch.setattr(libmetrics, "compute_metrics", compute_metrics_for_fixture)
     metrics_path = project / "library" / "library-metrics.json"
@@ -427,3 +442,45 @@ def test_review_relaxation_requires_fresh_hash_bound_metrics(
         match="review_relaxation_not_supported_by_metrics",
     ):
         libmetrics.require_relaxation_supported(project)
+
+
+def test_reviewer_catch_trial_advisory_is_exposed_without_becoming_a_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    _project_files(project)
+
+    def reviewer_outcomes(_library: Path) -> list[tuple[str, bool]]:
+        return [
+            ("Reviewer A", True),
+            ("Reviewer A", False),
+            ("Reviewer A", False),
+            ("Reviewer A", False),
+            ("Reviewer A", False),
+        ]
+
+    monkeypatch.setattr(
+        libreview,
+        "review_trial_outcomes",
+        reviewer_outcomes,
+    )
+
+    metrics = libmetrics.compute_metrics(project)
+
+    assert len(metrics.reviewer_catch_trials) == 1
+    reviewer = metrics.reviewer_catch_trials[0]
+    assert (reviewer.trials, reviewer.catches, reviewer.misses) == (5, 1, 4)
+    assert reviewer.upper95_miss_rate > 0.2
+    assert reviewer.advisory is True
+    assert metrics.reviewer_advisories == ["reviewer_catch_trial_advisory:Reviewer A"]
+    assert "reviewer_catch_trial_advisory:Reviewer A" not in metrics.findings
+    assert (
+        libmetrics.compute_metrics(
+            project,
+            reviewer_advisory_threshold=0.99,
+        )
+        .reviewer_catch_trials[0]
+        .advisory
+        is False
+    )
