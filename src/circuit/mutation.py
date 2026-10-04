@@ -207,6 +207,7 @@ _FAMILY_CODES: dict[CheckFamily, tuple[str, ...]] = {
         "model_pitch",
         "model_roundtrip",
         "model_terminal_mismatch",
+        "model_terminal_orientation_mismatch",
         "model_terminal_outside_pad",
         "model_terminal_unmatched",
         "model_terminals_unseparable",
@@ -1159,15 +1160,11 @@ def _select_pad_indices(
     count: int,
     exclude_exposed: bool = False,
 ) -> list[int]:
-    exposed_number = (
-        artifacts.spec.package.exposed_pad.number
-        if artifacts.spec.package.exposed_pad is not None
-        else None
-    )
+    auxiliary_numbers = artifacts.spec.package.auxiliary_pad_numbers
     choices = [
         index
         for index, pad in enumerate(artifacts.footprint.pads)
-        if pad.number and not (exclude_exposed and pad.number == exposed_number)
+        if pad.number and not (exclude_exposed and pad.number in auxiliary_numbers)
     ]
     if len(choices) < count:
         raise MutationError(f"footprint requires at least {count} eligible pads")
@@ -1181,22 +1178,23 @@ def _footprint_pad_shift(
     index = _select_pad_indices(artifacts, rng, count=1, exclude_exposed=True)[0]
     pads = list(artifacts.footprint.pads)
     pad = pads[index]
-    pads[index] = pad.model_copy(update={"x": pad.x + 0.1})
-    return _transform_footprint(artifacts, pads), {"pad": pad.number, "dx_mm": 0.1}
+    shift_x = pad.number in artifacts.spec.package.auxiliary_pad_numbers or abs(pad.x) < abs(pad.y)
+    update = {"x": pad.x + 0.1} if shift_x else {"y": pad.y + 0.1}
+    pads[index] = pad.model_copy(update=update)
+    shift_axis = "x" if shift_x else "y"
+    return _transform_footprint(artifacts, pads), {
+        "pad": pad.number,
+        f"d{shift_axis}_mm": 0.1,
+    }
 
 
 def _footprint_pitch_scale(
     artifacts: MutationArtifacts,
     _rng: random.Random,
 ) -> tuple[MutationArtifacts, dict[str, str | int | float | bool]]:
-    exposed_number = (
-        artifacts.spec.package.exposed_pad.number
-        if artifacts.spec.package.exposed_pad is not None
-        else None
-    )
     pads = [
         pad.model_copy(update={"x": pad.x * 1.02, "y": pad.y * 1.02})
-        if pad.number != exposed_number
+        if pad.number not in artifacts.spec.package.auxiliary_pad_numbers
         else pad
         for pad in artifacts.footprint.pads
     ]

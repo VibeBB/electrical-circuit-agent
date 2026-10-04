@@ -512,6 +512,7 @@ class PartSpec(BaseModel):
     def bind_source_file(self, path: Path) -> None:
         self._source_file_path = path.resolve()
 
+
 class ParsedDimension(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -371,6 +371,7 @@ def _make_fixture(
         model_path=model_path,
         work_dir=tmp_path / "mutation-work",
         run_export_oracle=False,
+        unexercised_codes=frozenset({"pin_source_single", "vision_compare_missing"}),
     )
     return fixture, spec, spec_path, library_path, footprint_path, model_path
 
@@ -441,11 +442,20 @@ def test_special_package_writer_and_verifier_round_trip(
     )
     report = fixture.verify(fixture.artifacts)
     findings = list(report)
-    assert not [
-        item.code
-        for item in findings
-        if item.code.startswith(("symbol_", "pad_", "land_", "fab_outline", "courtyard_", "silk_"))
-    ]
+    package_codes = (
+        "symbol_",
+        "pad_",
+        "land_",
+        "fab_outline",
+        "courtyard_",
+        "silk_",
+        "exposed_pad_",
+        "tab_",
+        "depopulated_pin_",
+        "bga_",
+        "model_",
+    )
+    assert not [item.code for item in findings if item.code.startswith(package_codes)]
     assert spec.package.family == expected_family
     parsed = parse_footprint(footprint_path)
     assert parsed.name == spec.package.drawing_id

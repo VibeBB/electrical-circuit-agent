@@ -2089,9 +2089,7 @@ def _check_model_terminals(
         return
     largest_pad_area = max((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) for _, bbox in pads)
     assigned: dict[int, list[tuple[float, float]]] = {index: [] for index in range(len(pads))}
-    exposed_pad_number = (
-        spec.package.exposed_pad.number if spec.package.exposed_pad is not None else None
-    )
+    auxiliary_pad_numbers = spec.package.auxiliary_pad_numbers
     for region in regions:
         region_bbox = region.bbox_xy
         center = (
@@ -2155,29 +2153,55 @@ def _check_model_terminals(
                         "BGA ball center does not match its numbered pad center",
                         model_sha256=model_sha256,
                     )
-            elif not _bound_model_terminal_fits_pad(
-                pads[pad_index][1],
-                region_bbox,
-                center,
-                exposed_pad=number == exposed_pad_number,
-            ):
-                _finding(
-                    findings,
-                    "model_terminal_outside_pad",
-                    "error",
-                    f"model.pad.{number}",
-                    "terminal region bbox is not contained by its numbered "
-                    "pad bbox within 0.025 mm",
-                    model_sha256=model_sha256,
-                )
-                _finding(
-                    findings,
-                    "model_terminal_mismatch",
-                    "error",
-                    f"model.pad.{number}",
-                    "PartSpec terminal geometry does not match the same-numbered footprint pad",
-                    model_sha256=model_sha256,
-                )
+            else:
+                terminal_width = region_bbox[2] - region_bbox[0]
+                terminal_height = region_bbox[3] - region_bbox[1]
+                if (
+                    number not in auxiliary_pad_numbers
+                    and abs(terminal_width - terminal_height) > 0.02
+                ):
+                    terminal_axis: Literal["x", "y"] = (
+                        "x" if terminal_width > terminal_height else "y"
+                    )
+                    axial_projection = _pad_projection(pad, terminal_axis)
+                    transverse_projection = _pad_projection(
+                        pad, "y" if terminal_axis == "x" else "x"
+                    )
+                    if (
+                        axial_projection[1] - axial_projection[0]
+                        <= transverse_projection[1] - transverse_projection[0] + 0.02
+                    ):
+                        _finding(
+                            findings,
+                            "model_terminal_orientation_mismatch",
+                            "error",
+                            f"model.pad.{number}",
+                            "footprint pad's long axis does not align with the modeled terminal",
+                            model_sha256=model_sha256,
+                        )
+                if not _bound_model_terminal_fits_pad(
+                    pads[pad_index][1],
+                    region_bbox,
+                    center,
+                    exposed_pad=number in auxiliary_pad_numbers,
+                ):
+                    _finding(
+                        findings,
+                        "model_terminal_outside_pad",
+                        "error",
+                        f"model.pad.{number}",
+                        "terminal region bbox is not contained by its numbered "
+                        "pad bbox within 0.025 mm",
+                        model_sha256=model_sha256,
+                    )
+                    _finding(
+                        findings,
+                        "model_terminal_mismatch",
+                        "error",
+                        f"model.pad.{number}",
+                        "PartSpec terminal geometry does not match the same-numbered footprint pad",
+                        model_sha256=model_sha256,
+                    )
             continue
         containing = [
             index
@@ -2263,10 +2287,7 @@ def _check_model_terminals(
                 (number, round(position, 4))
             )
         if any(
-            abs(
-                (right_position - left_position)
-                - pitch * _pin_slot_gap(left_number, right_number)
-            )
+            abs((right_position - left_position) - pitch * _pin_slot_gap(left_number, right_number))
             > 0.005
             for row in footprint_rows.values()
             for (left_number, left_position), (right_number, right_position) in pairwise(
@@ -2297,10 +2318,7 @@ def _check_model_terminals(
     for row in rows.values():
         ordered = sorted(row, key=lambda item: item[1])
         if any(
-            abs(
-                (right_position - left_position)
-                - pitch * _pin_slot_gap(left_number, right_number)
-            )
+            abs((right_position - left_position) - pitch * _pin_slot_gap(left_number, right_number))
             > 0.01
             for (left_number, left_position), (right_number, right_position) in pairwise(ordered)
         ):
