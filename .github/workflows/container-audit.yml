@@ -40,15 +40,25 @@ jobs:
       - name: Resolve and pull pinned images
         run: |
           set -euo pipefail
+          retry() {
+            local attempt
+            for attempt in 1 2 3; do
+              "$@" && return 0
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
           # One cache for every Trivy invocation in this job so the
           # vulnerability DB downloads once instead of once per scan.
           echo "TRIVY_CACHE_DIR=$RUNNER_TEMP/trivy-cache" >> "$GITHUB_ENV"
-          tools_ref=$(python3 -c 'import json; e=json.load(open("docker/image-digests.json", encoding="utf-8"))["circuit_tools"]; print(e["image"]+"@"+e["digest"])')
-          server_ref=$(python3 -c 'import json; e=json.load(open("docker/image-digests.json", encoding="utf-8"))["circuit_server"]; print(e["image"]+"@"+e["digest"])')
+          # print_locked_image.py resolves the entry by key and fails
+          # closed on a missing or non-digest-pinned lock entry.
+          tools_ref=$(python3 scripts/print_locked_image.py --entry circuit_tools)
+          server_ref=$(python3 scripts/print_locked_image.py --entry circuit_server)
           echo "PINNED_TOOLS_IMAGE=$tools_ref" >> "$GITHUB_ENV"
           echo "PINNED_SERVER_IMAGE=$server_ref" >> "$GITHUB_ENV"
-          docker pull "$tools_ref"
-          docker pull "$server_ref"
+          retry docker pull "$tools_ref"
+          retry docker pull "$server_ref"
       - name: Scan tools image (Trivy SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -119,12 +129,24 @@ jobs:
       - name: Run Docker CIS compliance reports
         run: |
           set -euo pipefail
-          trivy image --compliance docker-cis-1.6.0 --report all \
-            --format json --output "$RUNNER_TEMP/trivy-cis-circuit-tools.json" \
-            "${PINNED_TOOLS_IMAGE}"
-          trivy image --compliance docker-cis-1.6.0 --report all \
-            --format json --output "$RUNNER_TEMP/trivy-cis-circuit-server.json" \
-            "${PINNED_SERVER_IMAGE}"
+          run_cis() {
+            local image="$1" out="$2" attempt
+            for attempt in 1 2; do
+              # Trivy exits 0 even on the empty-results anomaly, so the
+              # retry keys on the MisconfSummary payload, not the exit
+              # code. The aggregation step stays fail-closed on empty.
+              if trivy image --compliance docker-cis-1.6.0 --report all \
+                --format json --output "$out" "$image" && \
+                python3 scripts/trivy_report_utils.py cis-nonempty "$out"; then
+                return 0
+              fi
+              echo "::warning::CIS report for $image returned no results (attempt $attempt)"
+              [ "$attempt" -lt 2 ] && sleep 15 || true
+            done
+            return 0
+          }
+          run_cis "${PINNED_TOOLS_IMAGE}" "$RUNNER_TEMP/trivy-cis-circuit-tools.json"
+          run_cis "${PINNED_SERVER_IMAGE}" "$RUNNER_TEMP/trivy-cis-circuit-server.json"
       - name: Run informational Lynis audit inside the tools image
         id: lynis
         continue-on-error: true
@@ -173,6 +195,8 @@ jobs:
           from collections import Counter
           from datetime import datetime, timezone
 
+          from scripts.trivy_report_utils import cis_summary_totals
+
           def image_block(image_ref, trivy_path, cis_path):
               trivy = json.load(open(trivy_path, encoding="utf-8"))
               vulns, secrets, licenses = Counter(), Counter(), 0
@@ -193,21 +217,13 @@ jobs:
                       secrets[s.get("Severity", "UNKNOWN").lower()] += 1
                   for lic in result.get("Licenses") or []:
                       licenses += 1
-              cis = {"passed": 0, "failed": 0}
               try:
                   cis_data = json.load(open(cis_path, encoding="utf-8"))
               except (OSError, ValueError):
                   cis_data = {}
               # --compliance nests check summaries deeper than top-level
-              # Results; walk recursively so the totals are real.
-              def _summaries(node):
-                  yield node
-                  for child in node.get("Results") or []:
-                      yield from _summaries(child)
-              for result in _summaries(cis_data):
-                  summary = result.get("MisconfSummary") or {}
-                  cis["passed"] += int(summary.get("Successes", 0))
-                  cis["failed"] += int(summary.get("Failures", 0))
+              # Results; the recursive walk totals the real summaries.
+              cis = cis_summary_totals(cis_data) if cis_data else {"passed": 0, "failed": 0}
               if cis["passed"] + cis["failed"] == 0:
                   # dead telemetry must fail, not masquerade as coverage
                   sys.exit("Docker CIS scan produced no results")
@@ -263,21 +279,21 @@ jobs:
           print(json.dumps(report, indent=2, sort_keys=True))
           PY
       - name: Upload tools Trivy JSON report
-        if: always()
+        if: always() && hashFiles('trivy-circuit-tools.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: circuit-tools-trivy-audit
           path: trivy-circuit-tools.json
           retention-days: 90
       - name: Upload server Trivy JSON report
-        if: always()
+        if: always() && hashFiles('trivy-circuit-server.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: circuit-server-trivy-audit
           path: trivy-circuit-server.json
           retention-days: 90
       - name: Upload hardening report
-        if: always()
+        if: always() && hashFiles('container-hardening.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: container-hardening

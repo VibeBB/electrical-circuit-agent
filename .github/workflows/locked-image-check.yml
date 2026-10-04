@@ -249,9 +249,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y poppler-utils librsvg2-bin
       - run: uv sync --locked
-      - name: Warn that tools image has no attestation metadata
+      - name: Fail when tools image has no attestation metadata
+        # Publish always emits attestations now; a lock without them means
+        # the attestation stage silently regressed — fail closed rather
+        # than skip provenance verification.
         if: needs.check-lock.outputs.attestation == ''
-        run: echo "::warning::circuit_tools image lock has no attestation metadata; skipping provenance verification."
+        run: |
+          echo "::error::circuit_tools image lock has no attestation metadata; the publish workflow must emit provenance attestations."
+          exit 1
       - name: Verify tools image provenance
         if: needs.check-lock.outputs.attestation != ''
         env:
@@ -262,9 +267,11 @@ jobs:
           gh attestation verify "oci://${IMAGE}@${DIGEST}" \
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
-      - name: Warn when tools image has no SBOM attestation
+      - name: Fail when tools image has no SBOM attestation
         if: needs.check-lock.outputs.sbom_attestation == ''
-        run: echo "::warning::circuit_tools image lock has no SBOM attestation; continuing"
+        run: |
+          echo "::error::circuit_tools image lock has no SBOM attestation; the publish workflow must emit SBOM attestations."
+          exit 1
       - name: Verify tools image SBOM attestation
         if: needs.check-lock.outputs.sbom_attestation != ''
         env:
@@ -276,9 +283,11 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
             --predicate-type https://spdx.dev/Document/v2.3
-      - name: Warn that server image has no attestation metadata
+      - name: Fail when server image has no attestation metadata
         if: needs.check-lock.outputs.server_attestation == ''
-        run: echo "::warning::circuit_server image lock has no attestation metadata; skipping provenance verification."
+        run: |
+          echo "::error::circuit_server image lock has no attestation metadata; the publish workflow must emit provenance attestations."
+          exit 1
       - name: Verify server image provenance
         if: needs.check-lock.outputs.server_attestation != ''
         env:
@@ -289,9 +298,11 @@ jobs:
           gh attestation verify "oci://${IMAGE}@${DIGEST}" \
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
-      - name: Warn when server image has no SBOM attestation
+      - name: Fail when server image has no SBOM attestation
         if: needs.check-lock.outputs.server_sbom_attestation == ''
-        run: echo "::warning::circuit_server image lock has no SBOM attestation; continuing"
+        run: |
+          echo "::error::circuit_server image lock has no SBOM attestation; the publish workflow must emit SBOM attestations."
+          exit 1
       - name: Verify server image SBOM attestation
         if: needs.check-lock.outputs.server_sbom_attestation != ''
         env:
