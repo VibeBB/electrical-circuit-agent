@@ -129,12 +129,14 @@ def _symbol_property(
 
 
 def _pad_number_key(number: str) -> tuple[object, ...]:
-    parts = tuple(
-        (0, int(item)) if item.isdigit() else (1, item)
-        for item in re.split(r"(\d+)", number.casefold())
-        if item
-    )
-    return (0 if number.isdigit() else 1, parts, number)
+    if number.isdigit():
+        return (0, int(number), number)
+    parts: list[tuple[int, int | str]] = []
+    for item in re.split(r"(\d+)", number.casefold()):
+        if not item:
+            continue
+        parts.append((0, int(item)) if item.isdigit() else (1, item))
+    return (1, *parts, number)
 
 
 def _outward(value: float, *, lower: bool) -> float:
