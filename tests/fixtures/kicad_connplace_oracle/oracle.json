@@ -3,10 +3,81 @@
   "board_path": "tests/fixtures/kicad_connplace_oracle/rotation_oracle.kicad_pcb",
   "board_saved_with": "kicad-cli pcb upgrade --force",
   "board_sha256": "4c06afc4242c523635801e23d4642c5be95b9645c639fcc4d059b9f5d6885e37",
-  "bottom_storage_note": "The B.Cu placements are direct placements, not GUI flips. In this KiCad-saved fixture, their stored local children match the on-disk library footprint.",
+  "bottom_storage_note": "The rotation_oracle fixture uses direct B.Cu placements, not GUI flips. Real GUI-flipped demo examples and their measured storage convention are recorded in gui_flipped_examples.",
   "dxf_path": "tests/fixtures/kicad_connplace_oracle/rotation_oracle.dxf",
   "dxf_sha256": "d0c68bdb5a49d13cfd6300efd1be874595c3e7303f73cfbd196d719bf3ef597c",
   "footprint_path": "tests/fixtures/kicad_connplace_oracle/Asymmetric.kicad_mod",
   "footprint_sha256": "c61b869b6e069c78d156263f7cfcaad4d34eba14a199a205d4aad74e5d7e627c",
-  "kicad_cli_version": "10.99.0"
+  "kicad_cli_version": "10.99.0",
+  "demo_archive_url": "https://gitlab.com/kicad/code/kicad/-/archive/master/kicad-master.tar.gz?path=demos",
+  "demo_archive_sha256": "a92b8601d9872466fbf9392bc46d6b6222a9d7b4230af17edb9a0b1a173dc663",
+  "demo_source_commit": "a1166fc53abbbf33024e265ebc19cfcb7496a267",
+  "footprint_library_url": "https://gitlab.com/kicad/libraries/kicad-footprints",
+  "footprint_library_commit": "9326b9efd0de1a3b286e3adfed68086ed3b278c4",
+  "gui_flip_coordinate_convention": "KiCad's GUI flip reflects library-local Y before placement rotation. B.Cu board-stored child coordinates are already in that reflected frame; transform those children without a second mirror.",
+  "gui_flip_fixture_generator": "scripts/generate_connplace_gui_flip_oracle.py",
+  "gui_flipped_examples": [
+    {
+      "reference": "U3",
+      "board_lib_id": "footprints:SOIC-20W_7.5x12.8mm_P1.27mm",
+      "board_source_path": "demos/video/video.kicad_pcb",
+      "board_source_url": "https://gitlab.com/kicad/code/kicad/-/blob/a1166fc53abbbf33024e265ebc19cfcb7496a267/demos/video/video.kicad_pcb",
+      "board_source_sha256": "f620675158ddd5c61e5ce9e15f4c92b230ae1df1cbcec6c502b8ce266e4007ea",
+      "board_fixture_path": "tests/fixtures/kicad_connplace_oracle/gui_flipped/video_U3.kicad_pcb",
+      "board_fixture_sha256": "84fe6fd348c096afbe701ef99da5f28ac5a54adbeb02764225f5ef573e67d54e",
+      "footprint_node_sha256": "e1a8ec3646e64ed0f2b9c13da0c7f8a5a1255013450d004703f1daee209bc38e",
+      "library_source_path": "Package_SO.pretty/SOIC-20W_7.5x12.8mm_P1.27mm.kicad_mod",
+      "library_source_url": "https://gitlab.com/kicad/libraries/kicad-footprints/-/blob/9326b9efd0de1a3b286e3adfed68086ed3b278c4/Package_SO.pretty/SOIC-20W_7.5x12.8mm_P1.27mm.kicad_mod",
+      "library_fixture_path": "tests/fixtures/kicad_connplace_oracle/gui_flipped/SOIC-20W_7.5x12.8mm_P1.27mm.kicad_mod",
+      "library_sha256": "9783bc19f518a72442ddbfe6289e767a42c3d23358b65c3447b6a36bdd0e7dcf",
+      "placement": {
+        "side": "B.Cu",
+        "origin_mm": [168.783, 106.553],
+        "rotation_deg": 0,
+        "kicad_cli_pos_csv": "\"U3\",\"74LS245\",\"SOIC-20W_7.5x12.8mm_P1.27mm\",168.783000,-106.553000,0.000000,bottom"
+      },
+      "pad1": {
+        "library_local_mm": [-4.65, -5.715],
+        "library_at_angle_deg": 0,
+        "board_stored_local_mm": [-4.65, 5.715],
+        "board_stored_at_angle_deg": 0,
+        "dxf_absolute_center_mm": [164.133, -112.268],
+        "dxf_absolute_bbox_mm": [163.108, -112.568, 165.158, -111.968]
+      },
+      "source_board_dxf_sha256": "24f49e1bea7d6f9fc46296fb7e3ca4c94affdd001f913634bf9b72024617da9d",
+      "fixture_dxf_sha256": "9e6f0d1b0707167cf30a43ba09722dc56dbb62823c1eb41e88036fbcae2bcaca",
+      "dxf_courtyard_bounds_mm": [162.853, -113.203, 174.713, -99.903]
+    },
+    {
+      "reference": "J8",
+      "board_lib_id": "Connector:Tag-Connect_TC2030-IDC-NL_2x03_P1.27mm_Vertical",
+      "board_source_path": "demos/royalblue54L_feather/RoyalBlue54L-Feather.kicad_pcb",
+      "board_source_url": "https://gitlab.com/kicad/code/kicad/-/blob/a1166fc53abbbf33024e265ebc19cfcb7496a267/demos/royalblue54L_feather/RoyalBlue54L-Feather.kicad_pcb",
+      "board_source_sha256": "535dbe212f43a8bab12b23277e176a94ac9694177258af2981c0e7b08e4b7252",
+      "board_fixture_path": "tests/fixtures/kicad_connplace_oracle/gui_flipped/royalblue_J8.kicad_pcb",
+      "board_fixture_sha256": "3815ac7a70420713a5e9755f5fe210503683ed4b31a44f1b9502c7b094c1ec17",
+      "footprint_node_sha256": "1e9a5886a03c3acb2d0dc0bd0b866fcbdc96529cd4a8eb782375ce60ad8415c2",
+      "library_source_path": "Connector.pretty/Tag-Connect_TC2030-IDC-NL_2x03_P1.27mm_Vertical.kicad_mod",
+      "library_source_url": "https://gitlab.com/kicad/libraries/kicad-footprints/-/blob/9326b9efd0de1a3b286e3adfed68086ed3b278c4/Connector.pretty/Tag-Connect_TC2030-IDC-NL_2x03_P1.27mm_Vertical.kicad_mod",
+      "library_fixture_path": "tests/fixtures/kicad_connplace_oracle/gui_flipped/Tag-Connect_TC2030-IDC-NL_2x03_P1.27mm_Vertical.kicad_mod",
+      "library_sha256": "73227c312fafa8c53e6569852a9b971afedca0dcfa559f94353c4175d37d30b3",
+      "placement": {
+        "side": "B.Cu",
+        "origin_mm": [128.61, 104.9725],
+        "rotation_deg": 90,
+        "position_export_note": "KiCad CLI pos --side back emitted no J8 row; DXF was used for the absolute child and pad coordinates."
+      },
+      "pad1": {
+        "library_local_mm": [-1.27, 0.635],
+        "library_at_angle_deg": 0,
+        "board_stored_local_mm": [-1.27, -0.635],
+        "board_stored_at_angle_deg": 90,
+        "dxf_absolute_center_mm": [127.975, -106.2425],
+        "dxf_absolute_bbox_mm": [127.584668, -106.632832, 128.365332, -105.852168]
+      },
+      "source_board_dxf_sha256": "f53d1066ecea46993d21ab0319ddf99decf72cf2a18e092a6cec5ae38f4a2997",
+      "fixture_dxf_sha256": "599b820ba1b48981b0d174a63901095cdff08824f6c8b2839dbc90b76c3c525b",
+      "dxf_courtyard_bounds_mm": [126.61, -108.4725, 130.61, -101.4725]
+    }
+  ]
 }

@@ -356,6 +356,29 @@ def _transform_vector(vector: Point, footprint: _BoardFootprint) -> Point:
     )
 
 
+def _mirror_library_local(point: Point, footprint: _BoardFootprint) -> Point:
+    if footprint.side == "B.Cu":
+        return point[0], -point[1]
+    return point
+
+
+def _transform_library_point(point: Point, footprint: _BoardFootprint) -> Point:
+    return _transform(_mirror_library_local(point, footprint), footprint)
+
+
+def _transform_library_vector(vector: Point, footprint: _BoardFootprint) -> Point:
+    return _transform_vector(_mirror_library_local(vector, footprint), footprint)
+
+
+def _mirror_library_axis(axis: str, footprint: _BoardFootprint) -> str:
+    if footprint.side == "B.Cu":
+        if axis == "+y":
+            return "-y"
+        if axis == "-y":
+            return "+y"
+    return axis
+
+
 def _bbox(points: tuple[Point, ...] | list[Point]) -> tuple[float, float, float, float] | None:
     if not points:
         return None
@@ -512,7 +535,7 @@ def _envelope_box(
         (x_max, y_min),
         (x_max, y_max),
     ]
-    transformed = [_transform(point, footprint) for point in local_corners]
+    transformed = [_transform_library_point(point, footprint) for point in local_corners]
     travel = _maximum_dimension_value(envelope.travel) + (envelope.access_margin_mm or 0.0)
     connector = spec.connector
     if connector is None or connector.mating_axis == "+z":
@@ -523,7 +546,7 @@ def _envelope_box(
         "+y": (0.0, 1.0),
         "-y": (0.0, -1.0),
     }
-    axis = _transform_vector(vectors[connector.mating_axis], footprint)
+    axis = _transform_library_vector(vectors[connector.mating_axis], footprint)
     swept = [*transformed, *((x + axis[0] * travel, y + axis[1] * travel) for x, y in transformed)]
     return _bbox(swept) or (0.0, 0.0, 0.0, 0.0)
 
@@ -663,13 +686,16 @@ def check_connector_placement(
             ]
             offset_matches = False
             if board_edge is not None:
+                expected_side = _mirror_library_axis(board_edge.side, footprint)
                 expected_offset = _dimension_value(board_edge.offset)
+                if expected_side != board_edge.side:
+                    expected_offset = -expected_offset
                 offset_matches = any(
                     (
                         abs(start[0] - expected_offset) <= 0.1
                         and abs(end[0] - expected_offset) <= 0.1
                     )
-                    if board_edge.side in {"+x", "-x"}
+                    if expected_side in {"+x", "-x"}
                     else (
                         abs(start[1] - expected_offset) <= 0.1
                         and abs(end[1] - expected_offset) <= 0.1

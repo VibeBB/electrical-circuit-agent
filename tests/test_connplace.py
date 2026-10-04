@@ -6,7 +6,7 @@ import pytest
 from circuit import connplace as connplace_module
 from circuit import occt, sexpr
 from circuit.connplace import check_connector_placement
-from connector_fixtures import connector_spec
+from connector_fixtures import connector_spec, dimension
 
 
 def _footprint(
@@ -17,6 +17,7 @@ def _footprint(
     rotation: float = 0.0,
     side: str = "F.Cu",
     board_edge: bool = False,
+    board_edge_line: tuple[tuple[float, float], tuple[float, float]] | None = None,
     height_property: str | None = None,
     model_path: Path | None = None,
 ) -> list[sexpr.SExpr]:
@@ -39,12 +40,13 @@ def _footprint(
             ["layer", sexpr.quoted("B.CrtYd" if side == "B.Cu" else "F.CrtYd")],
         ],
     ]
-    if board_edge:
+    if board_edge or board_edge_line is not None:
+        edge_start, edge_end = board_edge_line or ((0.0, -1.0), (0.0, 1.0))
         items.append(
             [
                 "fp_line",
-                ["start", "0", "-1"],
-                ["end", "0", "1"],
+                ["start", f"{edge_start[0]:g}", f"{edge_start[1]:g}"],
+                ["end", f"{edge_end[0]:g}", f"{edge_end[1]:g}"],
                 ["layer", sexpr.quoted("Dwgs.User")],
             ]
         )
@@ -73,6 +75,7 @@ def _board(
     thickness: float | None = 1.6,
     neighbor_height_property: str | None = None,
     neighbor_model_path: Path | None = None,
+    board_edge_line: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> None:
     root: list[sexpr.SExpr] = [
         "kicad_pcb",
@@ -95,6 +98,7 @@ def _board(
             rotation=rotation,
             side=side,
             board_edge=True,
+            board_edge_line=board_edge_line,
         ),
     ]
     if neighbor:
@@ -289,6 +293,96 @@ def test_bottom_side_connector_transform_passes_at_opposite_edge(tmp_path: Path)
     report = check_connector_placement(board, {"J1": _spec_path(tmp_path)})
 
     assert report.verdict == "pass"
+
+
+def test_gui_flipped_right_angle_uses_mirrored_part_spec_edge(tmp_path: Path) -> None:
+    base_spec = connector_spec("jst_ph_right_angle")
+    connector = base_spec.connector
+    assert connector is not None
+    board_edge = connector.board_edge
+    assert board_edge is not None
+    spec = base_spec.model_copy(
+        update={
+            "connector": connector.model_copy(
+                update={
+                    "mating_axis": "+y",
+                    "board_edge": board_edge.model_copy(
+                        update={"side": "+y", "offset": dimension(1.0)}
+                    ),
+                }
+            )
+        }
+    )
+    spec_path = tmp_path / "bottom-y-edge.part.spec.json"
+    spec_path.write_text(spec.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    stored_flipped_edge = ((-1.0, -1.0), (1.0, -1.0))
+
+    correct_board = tmp_path / "bottom-y-correct.kicad_pcb"
+    _board(
+        correct_board,
+        position=(5.0, 1.0),
+        side="B.Cu",
+        board_edge_line=stored_flipped_edge,
+    )
+    correct_report = check_connector_placement(correct_board, {"J1": spec_path})
+
+    wrong_board = tmp_path / "bottom-y-mirrored-wrong.kicad_pcb"
+    _board(
+        wrong_board,
+        position=(5.0, 9.0),
+        side="B.Cu",
+        board_edge_line=stored_flipped_edge,
+    )
+    wrong_report = check_connector_placement(wrong_board, {"J1": spec_path})
+
+    assert correct_report.verdict == "pass"
+    assert "connector_not_at_board_edge" not in {
+        finding.code for finding in correct_report.findings
+    }
+    assert "connector_not_at_board_edge" in {finding.code for finding in wrong_report.findings}
+
+
+def test_bottom_library_envelope_is_mirrored_before_rotation() -> None:
+    node = _footprint("J1", x=10.0, y=20.0, rotation=90.0, side="B.Cu")
+    footprint = connplace_module._parse_board_footprint(  # pyright: ignore[reportPrivateUsage]
+        node
+    )
+    board_transform = connplace_module._transform  # pyright: ignore[reportPrivateUsage]
+    library_transform = connplace_module._transform_library_point  # pyright: ignore[reportPrivateUsage]
+    assert board_transform((1.0, 2.0), footprint) == pytest.approx((12.0, 19.0))
+    assert library_transform((1.0, 2.0), footprint) == pytest.approx((8.0, 19.0))
+
+    base_spec = connector_spec("jst_ph_right_angle")
+    connector = base_spec.connector
+    assert connector is not None
+    envelope = connector.mating_envelope
+    assert envelope is not None
+    bottom_envelope = envelope.model_copy(
+        update={
+            "box": (1.0, 2.0, 3.0, 4.0),
+            "travel": dimension(2.0),
+            "access_margin_mm": 0.0,
+        }
+    )
+    board_edge = connector.board_edge
+    assert board_edge is not None
+    bottom_spec = base_spec.model_copy(
+        update={
+            "connector": connector.model_copy(
+                update={
+                    "mating_axis": "+y",
+                    "board_edge": board_edge.model_copy(
+                        update={"side": "+y", "offset": dimension(1.0)}
+                    ),
+                    "mating_envelope": bottom_envelope,
+                }
+            )
+        }
+    )
+    transform_envelope = connplace_module._envelope_box  # pyright: ignore[reportPrivateUsage]
+    assert transform_envelope(bottom_envelope, footprint, bottom_spec) == pytest.approx(
+        (4.0, 17.0, 8.0, 19.0)
+    )
 
 
 def test_unknown_mating_envelope_requests_human_review(tmp_path: Path) -> None:
