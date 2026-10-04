@@ -122,6 +122,21 @@ dispatch_pin_workflow() {
     command+=(-f "base_sha=$BASE_SHA")
   fi
   check_pin_pr_state
+  # Skip the dispatch when a pull_request run on the branch head already
+  # covers this workflow. A GITHUB_TOKEN push usually produces no run, so
+  # dispatch stays the default; the check only dedupes races with real
+  # PR-event runs.
+  local head_sha existing
+  head_sha=$(retry gh pr view "$PR_URL" --repo "$GITHUB_REPOSITORY" \
+    --json headRefOid --jq .headRefOid || true)
+  if [ -n "$head_sha" ]; then
+    existing=$(retry gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" \
+      --branch "$BRANCH" --limit 20 --json headSha --jq '.[].headSha' || true)
+    if printf '%s\n' "$existing" | grep -qx "$head_sha"; then
+      write_summary "${workflow} already covers pin PR head ${head_sha:0:12}; dispatch skipped."
+      return 0
+    fi
+  fi
   if ! retry "${command[@]}"; then
     check_pin_pr_state
     write_summary "Dispatch of ${workflow} for pin PR ${PR_URL} failed; required PR checks remain authoritative."

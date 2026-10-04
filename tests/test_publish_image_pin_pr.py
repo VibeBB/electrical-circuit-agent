@@ -22,11 +22,20 @@ set -eu
 printf '%s\\n' "$*" >> "$GH_STUB_CALLS"
 case "$1 $2" in
   "pr view")
-    case "$GH_STUB_CASE" in
-      merged) printf 'MERGED\\n' ;;
-      closed) printf 'CLOSED\\n' ;;
-      *) printf 'OPEN\\n' ;;
-    esac
+    if [[ "$*" == *"headRefOid"* ]]; then
+      printf '%s\\n' "${GH_STUB_HEAD_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+    else
+      case "$GH_STUB_CASE" in
+        merged) printf 'MERGED\\n' ;;
+        closed) printf 'CLOSED\\n' ;;
+        *) printf 'OPEN\\n' ;;
+      esac
+    fi
+    ;;
+  "run list")
+    if [[ "${GH_STUB_RUN_COVERS_HEAD:-0}" == "1" ]]; then
+      printf '%s\\n' "${GH_STUB_HEAD_SHA:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+    fi
     ;;
   "workflow run")
     ;;
@@ -166,6 +175,7 @@ def test_pin_pr_state_and_required_checks(
         assert "approval response noise" not in result.stdout + result.stderr
     if case == "action-required":
         assert "api -X POST repos/" in call_log
+        assert f"--ref {BRANCH}" in call_log
     if case == "required-failure":
         assert "--auto --squash --delete-branch" not in call_log
 
@@ -226,6 +236,25 @@ def test_unexpected_required_check_error_fails_with_stderr(
         "stub transport error: permission denied"
     ) in result.stderr
     assert calls.read_text(encoding="utf-8").count("pr checks ") == 1
+
+
+def test_dispatch_skipped_when_pull_request_run_covers_head(
+    publish_pin_pr: tuple[Path, dict[str, str], Path],
+    tmp_path: Path,
+) -> None:
+    script, env, calls = publish_pin_pr
+    env["GH_STUB_CASE"] = ""
+    env["GH_STUB_RUN_COVERS_HEAD"] = "1"
+
+    result = run_helper(script, env)
+    summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    call_log = calls.read_text(encoding="utf-8")
+
+    assert result.returncode == 0
+    assert f"--ref {BRANCH}" not in call_log
+    assert "already covers pin PR head" in summary
+    # Only the redundant dispatch is skipped; the merge path still runs.
+    assert "--squash --delete-branch" in call_log
 
 
 def test_publish_workflow_uses_pin_helper_and_sbom_guard() -> None:

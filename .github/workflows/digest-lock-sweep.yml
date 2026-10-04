@@ -52,7 +52,7 @@ jobs:
                   # the post-merge verification on main explicitly — the
                   # same runs publish_image_pin_pr.sh dispatches after a
                   # pin merge.
-                  for wf in ci.yml locked-image-check.yml; do
+                  for wf in ci.yml locked-image-check.yml workflow-lint.yml; do
                     gh workflow run "$wf" --repo "$GITHUB_REPOSITORY" --ref main \
                       || echo "::warning::post-merge dispatch of $wf failed"
                   done
@@ -66,3 +66,45 @@ jobs:
                 ;;
             esac
           done
+      - name: Backfill post-merge verification for externally merged lock PRs
+        # A deadline-armed auto-merge (or a human squash merge of a bot PR)
+        # lands on main via GITHUB_TOKEN and fires no push workflows. The
+        # merge path above only dispatches for PRs this run merged itself,
+        # so backfill recently-merged bot PRs whose merge SHA has no main
+        # run yet. Human merges leave a push-triggered run on the same SHA
+        # and are skipped by the dedupe.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d '8 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          merged=$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --limit 30 \
+            --json number,headRefName,mergeCommit,mergedAt \
+            --jq ".[] | select(.headRefName | startswith(\"bot/update-image-digests-\")) | select(.mergedAt > \"$cutoff\") | [.number, .mergeCommit.oid] | @tsv")
+          if [ -z "$merged" ]; then
+            echo "no recently merged digest-lock PRs" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # ci.yml is dispatched alongside the other post-merge workflows,
+          # so a ci.yml run on the merge SHA is the coverage marker for all
+          # of them (push runs from human merges also count).
+          covered=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+            --branch main --limit 30 --json headSha \
+            --jq 'map(.headSha) | join(" ")')
+          while IFS=$'\t' read -r pr merge_sha; do
+            [ -n "$merge_sha" ] || continue
+            case " $covered " in
+              *" $merge_sha "*)
+                echo "post-merge verification already covers #$pr ($merge_sha)" \
+                  | tee -a "$GITHUB_STEP_SUMMARY"
+                ;;
+              *)
+                echo "backfilling post-merge verification for #$pr ($merge_sha)" \
+                  | tee -a "$GITHUB_STEP_SUMMARY"
+                for wf in ci.yml locked-image-check.yml workflow-lint.yml; do
+                  gh workflow run "$wf" --repo "$GITHUB_REPOSITORY" --ref main \
+                    || echo "::warning::post-merge dispatch of $wf failed"
+                done
+                ;;
+            esac
+          done <<< "$merged"

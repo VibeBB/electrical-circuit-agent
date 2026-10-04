@@ -22,7 +22,9 @@ from scripts.check_dependency_updates import (
     check_kicad_ppa,
     check_pypi_lock,
     check_python_versions,
+    check_sdk_build_layout,
     check_uv_pin,
+    check_workflow_downloads,
     load_deferrals,
     lock_versions,
     parse_kicad_packages,
@@ -588,6 +590,147 @@ def test_check_github_actions_fetch_failure_is_unknown(tmp_path: Path) -> None:
     assert statuses[0].latest == "?"
     assert statuses[0].fetch_failed is True
     assert statuses[0].outdated is False
+
+
+def test_check_github_actions_parses_subpath_actions(tmp_path: Path) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    # Subpath actions (github/codeql-action/upload-sarif) resolve remote tags
+    # against the owner/repo prefix but keep their full path in the report.
+    (workflows / "scan.yml").write_text(
+        "      - uses: github/codeql-action/upload-sarif@" + "a" * 40 + " # v4.0.0\n",
+        encoding="utf-8",
+    )
+    commits = {"https://github.com/github/codeql-action": {"v4.0.0": "a" * 40}}
+
+    statuses = check_github_actions(tmp_path, list_remote_tag_commits=lambda url: commits[url])
+    assert len(statuses) == 1
+    status = statuses[0]
+    assert status.name == "Action github/codeql-action/upload-sarif"
+    assert status.latest == "a" * 40
+    assert status.outdated is False
+
+
+def test_check_workflow_downloads_parses_direct_pins(tmp_path: Path) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "workflow-lint.yml").write_text(
+        "run: curl -fLO https://github.com/rhysd/actionlint/releases/download/"
+        "v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz\n"
+        "run: pip install /tmp/zizmor-1.30.1-py3-none-manylinux_2_28_x86_64.whl\n",
+        encoding="utf-8",
+    )
+    (workflows / "publish.yml").write_text(
+        "      - uses: aquasecurity/trivy-action@" + "b" * 40 + "\n"
+        "        with:\n"
+        "          version: v0.75.0\n"
+        "          scan-type: image\n"
+        "      - name: next step\n",
+        encoding="utf-8",
+    )
+
+    def fetch_json(url: str) -> Any:
+        return {
+            "https://pypi.org/pypi/zizmor/json": {"info": {"version": "1.30.1"}},
+            "https://api.github.com/repos/rhysd/actionlint/releases/latest": {
+                "tag_name": "v1.7.12"
+            },
+            "https://api.github.com/repos/aquasecurity/trivy/releases/latest": {
+                "tag_name": "v0.76.0"
+            },
+        }[url]
+
+    statuses = check_workflow_downloads(tmp_path, fetch_json=fetch_json)
+    by_name = {status.name: status for status in statuses}
+    assert by_name["Actionlint (workflow-lint.yml)"].latest == "1.7.12"
+    assert by_name["Zizmor (workflow-lint.yml)"].latest == "1.30.1"
+    trivy = by_name["Trivy binary (publish.yml)"]
+    assert trivy.current == "0.75.0"
+    assert trivy.latest == "0.76.0"
+    assert trivy.outdated is True
+
+
+def test_check_workflow_downloads_flags_unpinned_trivy(tmp_path: Path) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "scan.yml").write_text(
+        "      - uses: aquasecurity/trivy-action@" + "c" * 40 + "\n"
+        "        with:\n"
+        "          scan-type: image\n"
+        "      - name: next step\n",
+        encoding="utf-8",
+    )
+
+    statuses = check_workflow_downloads(tmp_path, fetch_json=lambda url: {})
+    assert len(statuses) == 1
+    status = statuses[0]
+    assert status.name == "Trivy binary (scan.yml)"
+    assert status.current == "implicit"
+    assert status.outdated is False
+    assert "implicit" in status.note
+
+
+def test_check_sdk_build_layout_reports_layout_drift(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text(
+        '[[package]]\nname = "openhands-sdk"\nversion = "1.51.0"\n',
+        encoding="utf-8",
+    )
+    needle = dependency_updates_module.SDK_CACHE_NEEDLE.encode()
+
+    intact = check_sdk_build_layout(tmp_path, fetch=lambda url: needle)
+    assert intact[0].current == "v1.51.0"
+    assert intact[0].latest == "intact"
+    assert intact[0].outdated is False
+
+    changed = check_sdk_build_layout(tmp_path, fetch=lambda url: b"cache_tags = []")
+    assert changed[0].latest == "changed"
+    assert changed[0].outdated is True
+
+
+def test_trivy_report_utils_cis_totals_and_blocking_table(tmp_path: Path) -> None:
+    from scripts.trivy_report_utils import (
+        blocking_cve_rows,
+        cis_summary_totals,
+        main,
+        render_blocking_table,
+    )
+
+    report = {
+        "Results": [
+            {
+                "Target": "image",
+                "Vulnerabilities": [
+                    {
+                        "VulnerabilityID": "CVE-1",
+                        "PkgName": "openssl",
+                        "Severity": "CRITICAL",
+                        "InstalledVersion": "1.0",
+                        "FixedVersion": "1.1",
+                    },
+                    {
+                        "VulnerabilityID": "CVE-2",
+                        "PkgName": "curl",
+                        "Severity": "LOW",
+                        "InstalledVersion": "1.0",
+                        "FixedVersion": "2.0",
+                    },
+                ],
+                "MisconfSummary": {"Successes": 9, "Failures": 2},
+            }
+        ]
+    }
+    assert cis_summary_totals(report) == {"passed": 9, "failed": 2}
+    rows = blocking_cve_rows(report)
+    assert [row[0] for row in rows] == ["CVE-1"]
+    table = render_blocking_table("circuit-tools", rows)
+    assert "## Blocking circuit-tools findings" in table
+    assert "1 fixable HIGH/CRITICAL finding(s)" in table
+
+    report_path = tmp_path / "trivy.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    assert main(["cis-nonempty", str(report_path)]) == 0
+    report_path.write_text(json.dumps({"Results": []}), encoding="utf-8")
+    assert main(["cis-nonempty", str(report_path)]) == 1
 
 
 def test_check_python_versions_flags_older_minors(tmp_path: Path) -> None:

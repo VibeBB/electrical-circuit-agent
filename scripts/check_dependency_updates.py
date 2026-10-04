@@ -7,9 +7,13 @@ releases (Konnect, FreeRouting, Semeru JRE), GitLab commit pins (KiCad Library
 Utils), unpinned apt packages, the CERN KiCad libraries submodule, direct PyPI
 dependencies (compared against resolved versions in uv.lock), plus uv.lock
 transitive drift via `uv lock --upgrade --dry-run`, the uv required-version pin, Python minor
-pins against the latest stable CPython minor, GitHub Actions `uses:` pins,
-`git clone --branch` pins inside workflows (e.g. the pinned Lynis checkout
-in container-audit.yml), and the Docker base image tags.
+pins against the latest stable CPython minor, GitHub Actions `uses:` pins
+(including subpath actions like github/codeql-action/upload-sarif), direct
+download pins inside workflows (the actionlint tarball and zizmor wheel in
+workflow-lint.yml, and the Trivy binary `version:` inputs on aquasecurity
+actions), `git clone --branch` pins inside workflows (e.g. the pinned Lynis
+checkout in container-audit.yml), the upstream SDK build.py cache-tag layout
+the publish workflow patches, and the Docker base image tags.
 
 Renders a markdown report (and optionally JSON). Deferrals live in
 scripts/dependency_update_deferrals.json; see docs/operations.md for the
@@ -106,7 +110,19 @@ USER_AGENT = "circuit-agent-dependency-check"
 
 # ---------------------------------------------------------------------------
 
-_ACTION = re.compile(r"uses:\s*([\w.-]+/[\w.-]+)@([0-9a-f]{40})(?:\s*#\s*(v[\w.-]+))?")
+_ACTION = re.compile(
+    r"uses:\s*([\w.-]+/[\w.-]+(?:/[\w./-]+)?)@([0-9a-f]{40})(?:\s*#\s*(v[\w.-]+))?"
+)
+_ACTIONLINT_TARBALL = re.compile(r"actionlint_(\d+\.\d+\.\d+)_linux_amd64\.tar\.gz")
+_ZIZMOR_WHEEL = re.compile(r"zizmor-(\d+\.\d+\.\d+)-py3-none")
+_TRIVY_USES = re.compile(r"uses:\s*aquasecurity/(?:trivy-action|setup-trivy)@")
+_TRIVY_VERSION = re.compile(r"version:\s*['\"]?(v\d+\.\d+\.\d+)")
+_STEP_BOUNDARY = re.compile(r"\n {0,8}- ")
+_SDK_BUILD_PY_URL = (
+    "https://raw.githubusercontent.com/OpenHands/software-agent-sdk/"
+    "v{version}/openhands-agent-server/openhands/agent_server/docker/build.py"
+)
+SDK_CACHE_NEEDLE = "buildcache-{self.target}-{self.base_image_slug}{self.flavor_suffix}"
 _ARG = re.compile(r"^\s*ARG\s+([A-Z0-9_]+)=(\S+)\s*$", re.MULTILINE)
 _FROM = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
 _PYTHON_TAG = re.compile(r"v(\d+)\.(\d+)\.\d+")
@@ -497,9 +513,12 @@ def check_github_actions(
     tag_cache: dict[str, dict[str, str] | None] = {}
     for workflow in workflow_files(repo_root):
         for match in _ACTION.finditer(workflow.read_text(encoding="utf-8")):
-            repo, current, tag = match.groups()
+            action, current, tag = match.groups()
             if tag is None:
                 continue
+            # Subpath actions (e.g. github/codeql-action/upload-sarif) share
+            # the owning repository's tags, so look up the first two segments.
+            repo = "/".join(action.split("/")[:2])
             if repo not in tag_cache:
                 try:
                     tag_cache[repo] = list_remote_tag_commits(f"https://github.com/{repo}")
@@ -513,7 +532,7 @@ def check_github_actions(
             latest = commits.get(tag) if commits else None
             statuses.append(
                 Status(
-                    f"Action {repo}",
+                    f"Action {action}",
                     current,
                     latest or "?",
                     f"{workflow.name}:{tag}",
@@ -562,6 +581,129 @@ def check_git_clones(
                 )
             )
     return statuses
+
+
+def _github_release_tag(repo: str, fetch_json: FetchJson) -> str:
+    """Latest release tag of a GitHub repo ("" on fetch failure)."""
+    try:
+        release = fetch_json(f"https://api.github.com/repos/{repo}/releases/latest")
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(release, dict):
+        return ""
+    tag = cast(dict[str, Any], release).get("tag_name")
+    return tag if isinstance(tag, str) else ""
+
+
+def check_workflow_downloads(
+    repo_root: Path, *, fetch_json: FetchJson = _default_json
+) -> list[Status]:
+    """Direct-download pins inside workflows that no `uses:` line tracks.
+
+    Covers the actionlint tarball and the zizmor wheel fetched by
+    workflow-lint.yml plus the Trivy binary `version:` inputs on
+    aquasecurity/trivy-action and aquasecurity/setup-trivy steps; a trivy
+    step without an explicit `version:` is reported as implicit so the
+    drift risk stays visible.
+    """
+    findings: set[tuple[str, str, str]] = set()
+    unpinned_trivy: set[str] = set()
+    for workflow in workflow_files(repo_root):
+        text = workflow.read_text(encoding="utf-8")
+        for version in set(_ACTIONLINT_TARBALL.findall(text)):
+            findings.add(("Actionlint", version, workflow.name))
+        for version in set(_ZIZMOR_WHEEL.findall(text)):
+            findings.add(("Zizmor", version, workflow.name))
+        for uses in _TRIVY_USES.finditer(text):
+            segment = text[uses.end() : uses.end() + 1500]
+            boundary = _STEP_BOUNDARY.search(segment)
+            if boundary is not None:
+                segment = segment[: boundary.start()]
+            version_match = _TRIVY_VERSION.search(segment)
+            if version_match is None:
+                unpinned_trivy.add(workflow.name)
+            else:
+                findings.add(
+                    ("Trivy binary", version_match.group(1).removeprefix("v"), workflow.name)
+                )
+    latest_cache: dict[str, str] = {}
+
+    def latest(name: str) -> str:
+        if name in latest_cache:
+            return latest_cache[name]
+        if name == "Actionlint":
+            value = _github_release_tag("rhysd/actionlint", fetch_json).removeprefix("v")
+        elif name == "Zizmor":
+            try:
+                value = _pypi_latest("zizmor", fetch_json)
+            except (OSError, ValueError):
+                value = ""
+        else:
+            value = _github_release_tag("aquasecurity/trivy", fetch_json).removeprefix("v")
+        latest_cache[name] = value
+        return value
+
+    statuses: list[Status] = []
+    for name, current, workflow_name in sorted(findings):
+        remote = latest(name)
+        statuses.append(
+            Status(
+                f"{name} ({workflow_name})",
+                current,
+                remote or "?",
+                f"{workflow_name} direct pin",
+                bool(remote) and version_tuple(remote) > version_tuple(current),
+                "" if remote else "fetch failed",
+                fetch_failed=not remote,
+            )
+        )
+    for workflow_name in sorted(unpinned_trivy):
+        statuses.append(
+            Status(
+                f"Trivy binary ({workflow_name})",
+                "implicit",
+                "?",
+                f"{workflow_name} trivy-action",
+                False,
+                "no explicit version pin; the binary version is implicit in the pinned action",
+            )
+        )
+    return statuses
+
+
+def check_sdk_build_layout(repo_root: Path, *, fetch: Fetch = _default_fetch) -> list[Status]:
+    """Whether the pinned SDK's agent-server build.py still carries the
+    cache_tags expression publish-circuit-images.yml patches. Layout drift
+    there silently costs the stable registry cache tag on every server
+    build, so it is tracked as an update-class finding."""
+    sdk = lock_versions(repo_root).get("openhands-sdk")
+    if not sdk:
+        return []
+    try:
+        body = fetch(_SDK_BUILD_PY_URL.format(version=sdk)).decode("utf-8")
+    except (OSError, UnicodeError):
+        return [
+            Status(
+                "SDK build.py cache-tag layout",
+                f"v{sdk}",
+                "?",
+                "openhands-agent-server build.py",
+                False,
+                "fetch failed",
+                fetch_failed=True,
+            )
+        ]
+    intact = SDK_CACHE_NEEDLE in body
+    return [
+        Status(
+            "SDK build.py cache-tag layout",
+            f"v{sdk}",
+            "intact" if intact else "changed",
+            "openhands-agent-server build.py",
+            not intact,
+            "" if intact else "upstream layout changed; server builds lose the stable cache tag",
+        )
+    ]
 
 
 def docker_arg_pins(repo_root: Path) -> dict[str, str]:
@@ -940,6 +1082,8 @@ def check_dependency_updates(
         *check_python_versions(repo_root, list_remote_tags=cached_tags),
         *check_github_actions(repo_root, list_remote_tag_commits=list_remote_tag_commits),
         *check_git_clones(repo_root, list_remote_tags=cached_tags),
+        *check_workflow_downloads(repo_root, fetch_json=fetch_json),
+        *check_sdk_build_layout(repo_root, fetch=fetch),
         *check_docker_base(repo_root, fetch_json=fetch_json),
     ]
     return apply_deferrals(statuses, deferrals)

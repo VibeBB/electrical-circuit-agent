@@ -305,9 +305,13 @@ lock with placeholders is forbidden. Because GITHUB_TOKEN events do not start
 workflows, the publish workflow dispatches the lock-branch CI itself and
 merges the lock PR synchronously once that run succeeds; when the Actions
 policy lands the bot PR's `pull_request` run as `action_required`, it approves
-the run via the Actions API. After merging, it dispatches `ci.yml` and
-`locked-image-check.yml` on main as observational runs recorded in the step
-summary.
+the run via the Actions API. After merging, it dispatches `ci.yml`,
+`locked-image-check.yml`, and `workflow-lint.yml` on main as observational
+runs recorded in the step summary. When the publisher instead exits at the
+required-check deadline with auto-merge armed (or a human merges the bot
+PR), the merge fires no push workflows; `digest-lock-sweep.yml` covers that
+case by backfilling the same three dispatches for recently-merged
+`bot/update-image-digests-*` PRs whose merge SHA has no run on main yet.
 
 The publish flow pushes only the immutable `<sha>-tools` and
 `<sha>-latest-source` tags; `:latest` on both images is promoted with
@@ -333,9 +337,11 @@ lock). When the URL is present,
 `publish-circuit-images.yml` before pulling it. The workflow preserves its
 image-internal Konnect smoke and also prewarms the locked image through
 `circuit_launcher.py`, runs `doctor` and the shipped LED-loop authoring gate,
-and uploads its reports even on failure. Older locks without attestation
-metadata emit a warning and continue; a failed provenance verification fails
-the image check.
+and uploads its reports even on failure. Locks without attestation metadata
+fail the check: every publish since the attestation step landed emits all
+four fields, so a missing entry means the attestation stage regressed and
+skipping verification would hide it. A failed provenance verification also
+fails the image check.
 
 The scheduled dependency check writes Markdown and JSON reports under the
 runner's temporary directory, adds the run URL to the Markdown and step
@@ -389,6 +395,20 @@ matches the recorded commit for the tag (3.1.7 resolves to
 step instead of silently auditing different code. Refs resolved from shell
 variables (e.g. the `"v${SDK_VERSION}"` SDK checkout) are not literal pins
 and are skipped.
+
+Subpath `uses:` entries (`owner/repo/sub/path@sha`, e.g.
+`github/codeql-action/upload-sarif`) are tracked against the `owner/repo`
+remote while keeping the full path in the report. Direct-download pins
+inside workflows are checked the same way: the actionlint tarball and
+zizmor wheel fetched by `workflow-lint.yml` (against the latest upstream
+release/PyPI version), and the Trivy binary `version:` inputs on
+`trivy-action`/`setup-trivy` steps — an aquasecurity step without an
+explicit `version:` is reported as implicit rather than silently
+untracked. The checker also fetches the pinned SDK's agent-server
+`build.py` and reports when the `cache_tags` expression that
+`publish-circuit-images.yml` patches is no longer present, so upstream
+layout drift shows up as an update candidate instead of a silent cold
+build.
 
 ## Updating pins
 

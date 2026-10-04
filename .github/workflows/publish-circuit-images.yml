@@ -70,7 +70,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve image owner
-        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+        run: |
+          echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+          echo "TRIVY_DB_WEEK=$(date -u +%G-W%V)" >> "$GITHUB_ENV"
+          # One Trivy cache dir for every scan in the job; restored and
+          # saved weekly via actions/cache so the vulnerability DB is not
+          # refetched per run (same pattern as container-audit.yml).
+          echo "TRIVY_CACHE_DIR=$RUNNER_TEMP/trivy-cache" >> "$GITHUB_ENV"
+      - name: Restore Trivy vulnerability DB cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/trivy-cache
+          # Unique save key keeps the refreshed DB warm for later runs;
+          # the weekly restore-keys rotate the baseline once per ISO week.
+          key: trivy-db-${{ env.TRIVY_DB_WEEK }}-${{ github.run_id }}
+          restore-keys: |
+            trivy-db-${{ env.TRIVY_DB_WEEK }}-
+            trivy-db-
       - name: Resolve source revision
         id: source
         run: |
@@ -159,26 +175,8 @@ jobs:
         # HIGH/CRITICAL findings that actually blocked the publish.
         if: ${{ failure() && inputs.skip_tools != true && hashFiles('trivy-circuit-tools.json') != '' }}
         run: |
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-
-          data = json.load(open("trivy-circuit-tools.json", encoding="utf-8"))
-          rows = []
-          for result in data.get("Results") or []:
-              target = result.get("Target", "?")
-              for v in result.get("Vulnerabilities") or []:
-                  if v.get("Severity") in ("HIGH", "CRITICAL") and v.get("FixedVersion"):
-                      rows.append((v["VulnerabilityID"], v.get("PkgName", "?"),
-                                   v["Severity"], v.get("InstalledVersion", "?"),
-                                   v["FixedVersion"], target))
-          print("## Blocking circuit-tools findings")
-          print()
-          print("| CVE | Package | Severity | Installed | Fixed | Target |")
-          print("|---|---|---|---|---|---|")
-          for row in sorted(rows):
-              print("| " + " | ".join(row) + " |")
-          print(f"\n{len(rows)} fixable HIGH/CRITICAL finding(s)")
-          PY
+          python3 scripts/trivy_report_utils.py blocking-cves \
+            trivy-circuit-tools.json circuit-tools >> "$GITHUB_STEP_SUMMARY"
       - name: Upload tools Trivy SARIF
         if: ${{ always() && inputs.skip_tools != true && hashFiles('trivy-circuit-tools.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
@@ -309,6 +307,15 @@ jobs:
             echo "patched: registry cache tag is now buildcache-<target>-main"
           else
             echo "::warning::upstream build.py cache_tags layout changed; building without stable cache tag"
+            {
+              echo "## Server build cache tag patch skipped"
+              echo
+              echo "Upstream build.py no longer contains the pinned"
+              echo "\`cache_tags\` expression; this server build runs WITHOUT the"
+              echo "stable registry cache tag (a full cold build). The weekly"
+              echo "dependency check flags the drift as an update candidate —"
+              echo "fix the patch before it silently doubles server build time."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Build and publish server
         env:
@@ -384,26 +391,8 @@ jobs:
       - name: Report blocking server CVEs
         if: ${{ failure() && hashFiles('trivy-circuit-server.json') != '' }}
         run: |
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-
-          data = json.load(open("trivy-circuit-server.json", encoding="utf-8"))
-          rows = []
-          for result in data.get("Results") or []:
-              target = result.get("Target", "?")
-              for v in result.get("Vulnerabilities") or []:
-                  if v.get("Severity") in ("HIGH", "CRITICAL") and v.get("FixedVersion"):
-                      rows.append((v["VulnerabilityID"], v.get("PkgName", "?"),
-                                   v["Severity"], v.get("InstalledVersion", "?"),
-                                   v["FixedVersion"], target))
-          print("## Blocking circuit-server findings")
-          print()
-          print("| CVE | Package | Severity | Installed | Fixed | Target |")
-          print("|---|---|---|---|---|---|")
-          for row in sorted(rows):
-              print("| " + " | ".join(row) + " |")
-          print(f"\n{len(rows)} fixable HIGH/CRITICAL finding(s)")
-          PY
+          python3 scripts/trivy_report_utils.py blocking-cves \
+            trivy-circuit-server.json circuit-server >> "$GITHUB_STEP_SUMMARY"
       - name: Upload server Trivy SARIF
         if: ${{ always() && hashFiles('trivy-circuit-server.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
@@ -596,3 +585,41 @@ jobs:
             --title "Update circuit image digest lock" --body "$body")
           echo "pin PR: $pr_url" >> "$GITHUB_STEP_SUMMARY"
           bash scripts/publish_image_pin_pr.sh "$pr_url" "$branch" "${base_sha:-}" "ci.yml locked-image-check.yml workflow-lint.yml"
+      - name: Render publish phase timings
+        # Runs on failure too — the step list up to the failing step is
+        # exactly where a duration regression would hide.
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          import subprocess
+          from datetime import datetime
+
+          out = subprocess.run(
+              [
+                  "gh",
+                  "api",
+                  f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+                  f"{os.environ['GITHUB_RUN_ID']}/jobs?per_page=100",
+                  "--jq",
+                  ".jobs[0].steps",
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout
+          fmt = "%Y-%m-%dT%H:%M:%SZ"
+          print("## Publish phase timings")
+          print()
+          print("| step | elapsed |")
+          print("|---|---|")
+          for step in json.loads(out):
+              if not step.get("completed_at"):
+                  continue
+              started = datetime.strptime(step["started_at"], fmt)
+              completed = datetime.strptime(step["completed_at"], fmt)
+              print(f"| {step['name']} | {int((completed - started).total_seconds())}s |")
+          PY
