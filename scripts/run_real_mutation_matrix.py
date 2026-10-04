@@ -198,7 +198,22 @@ def _build_matrix(
             seed=62130,
         )
         matrix = run_mutations(fixture)
-        out_path.write_text(matrix.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        out_path.write_text(
+            json.dumps(
+                {
+                    "artifact_kind": "circuit_real_mutation_matrix",
+                    "entry": entry.id,
+                    "pdf_sha256": entry.datasheet.sha256,
+                    "synthetic_evidence": ["vision_reads", "advisory_reviews"],
+                    "synthetic_evidence_counted": False,
+                    "matrix": matrix.model_dump(mode="json"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         return matrix.passed
 
 
