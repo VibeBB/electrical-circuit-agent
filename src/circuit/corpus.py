@@ -579,7 +579,7 @@ def _check_footprint_pads(
                 actual.drill,
             )
         actual_shape = "polygon" if actual.shape == "custom" else actual.shape
-        if pad.shape is not None and actual_shape != pad.shape:
+        if pad.shape is not None and pad.polygon is None and actual_shape != pad.shape:
             add_finding(
                 "corpus_pad_shape_mismatch",
                 "error",

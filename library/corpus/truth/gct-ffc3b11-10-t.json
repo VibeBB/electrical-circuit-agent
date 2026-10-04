@@ -1,0 +1,45 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "gct-ffc3b11-10-t",
+  "package_family": "connector",
+  "pins": {},
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": null,
+    "body_width": null,
+    "height": {
+      "min": null,
+      "nom": 2.5,
+      "max": null
+    },
+    "pitch": {
+      "min": null,
+      "nom": 1.0,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [],
+  "connector": {
+    "mount": "smd",
+    "orientation": "right_angle",
+    "gender": "none",
+    "mating_axis": "+y",
+    "board_edge_side": null,
+    "board_edge_offset": null,
+    "mating_mirror": false,
+    "manufacturer_to_kicad": null
+  },
+  "expected_outcome": "human_request",
+  "notes": "1.0 mm pitch side-entry top-contact SMT FPC connector, 2.5 mm high, slide lock, with retention (fitting nail) pads on both sides. Accepts 0.30 +/- 0.03 FPC. Ordering grid FFC3B11-XX-T: contact count 04-40, T = tin plating. Using the illustrated row or a different contact count is a wrong-variant error.",
+  "expected_mechanical": [],
+  "drawing_id": null,
+  "ambiguous_drawing_ids": [],
+  "canary": "CIRCUIT-CORPUS-CANARY-f9e5003e-282e-4a50-a89e-3d12e8433732"
+}

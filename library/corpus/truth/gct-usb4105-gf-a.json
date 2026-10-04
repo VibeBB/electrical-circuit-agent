@@ -1,0 +1,58 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "gct-usb4105-gf-a",
+  "package_family": "connector",
+  "pins": {
+    "A1": "GND",
+    "B12": "GND",
+    "A4": "VBUS",
+    "B9": "VBUS",
+    "A5": "CC1",
+    "B8": "SBU2",
+    "A6": "DP1",
+    "B7": "DN2",
+    "A7": "DN1",
+    "B6": "DP2",
+    "A8": "SBU1",
+    "B5": "CC2",
+    "B4": "VBUS",
+    "A9": "VBUS",
+    "B1": "GND",
+    "A12": "GND"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": null,
+    "body_width": null,
+    "height": null,
+    "pitch": {
+      "min": null,
+      "nom": 0.5,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [],
+  "connector": {
+    "mount": "mixed",
+    "orientation": "right_angle",
+    "gender": "female",
+    "mating_axis": "+y",
+    "board_edge_side": "+y",
+    "board_edge_offset": null,
+    "mating_mirror": false,
+    "manufacturer_to_kicad": null
+  },
+  "expected_outcome": "human_request",
+  "notes": "Recommended PCB layout as viewed from the component side. Pad row order A1/B12, A4/B9, B8, A5, B7, A6, A7, B6, A8, B5, B4/A9, B1/A12: 4x 0.60 merged GND/VBUS pads and 8x 0.30 signal pads at 0.50 pitch (6.40, 4.80 and 3.50 spans). Two d0.65 NPTH locating holes on a 5.78 span; four plated shell slots on an 8.64 span. Shell slots must not be modelled as round holes or as a generic rectangular connector.",
+  "expected_mechanical": [],
+  "drawing_id": null,
+  "ambiguous_drawing_ids": [],
+  "canary": "CIRCUIT-CORPUS-CANARY-a277958c-87ba-47dc-9ae3-1255e07bd5a0"
+}

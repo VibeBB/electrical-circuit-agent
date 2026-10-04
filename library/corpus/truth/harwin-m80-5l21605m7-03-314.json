@@ -1,0 +1,37 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "harwin-m80-5l21605m7-03-314",
+  "package_family": "connector",
+  "pins": {},
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": null,
+    "body_width": null,
+    "height": null,
+    "pitch": null,
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [],
+  "connector": {
+    "mount": "tht",
+    "orientation": "right_angle",
+    "gender": "male",
+    "mating_axis": "+y",
+    "board_edge_side": "+y",
+    "board_edge_offset": null,
+    "mating_mirror": false,
+    "manufacturer_to_kicad": null
+  },
+  "expected_outcome": "human_request",
+  "notes": "16 signal contacts plus 3 shielded coax positions with jackscrew fixing. Every dimension is in raster form only; vision readings without a text lane must stay unknown. Synthetic fixtures for this part never establish official truth.",
+  "expected_mechanical": [],
+  "drawing_id": null,
+  "ambiguous_drawing_ids": [],
+  "canary": "CIRCUIT-CORPUS-CANARY-6e6509ea-2ba6-419b-b0af-905e2865aa22"
+}

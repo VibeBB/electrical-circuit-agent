@@ -214,7 +214,7 @@
       "id": "lm317-sot223",
       "manufacturer": "Texas Instruments",
       "mpn": "LM317DCYR",
-      "package_family": "gullwing_tab",
+      "package_family": "sot223",
       "datasheet": {
         "url": "https://www.ti.com/lit/ds/symlink/lm317.pdf",
         "sha256": "1646fb2e4f8cf8c2cbd93aaf22edad368571619ad062476deca8ee29f95c65d3",
@@ -486,7 +486,7 @@
       "id": "tlv1117lv-sot223",
       "manufacturer": "Texas Instruments",
       "mpn": "TLV1117LV33DCYR",
-      "package_family": "gullwing_tab",
+      "package_family": "sot223",
       "datasheet": {
         "url": "https://www.ti.com/lit/ds/symlink/tlv1117lv.pdf",
         "sha256": "84091b2a9521014cf80b72dca4cf6edf4dba2773d4aaec0d5716dbd1ff412bb8",
@@ -502,7 +502,7 @@
       "id": "lm1117-dpak",
       "manufacturer": "Texas Instruments",
       "mpn": "LM1117DT-3.3/NOPB",
-      "package_family": "gullwing_tab",
+      "package_family": "tabbed_dpak",
       "datasheet": {
         "url": "https://www.ti.com/lit/ds/symlink/lm1117.pdf",
         "sha256": "c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa",
@@ -641,6 +641,198 @@
       "confirmed_by": null,
       "confirmed_at": null,
       "notes": "Lead-authored from the official datasheet; drawing PW0014A, pages 35-36. Not human-confirmed."
+    },
+    {
+      "id": "tps7a02-dqn",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TPS7A0210PDQNR",
+      "package_family": "no_lead_quad",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tps7a02.pdf",
+        "sha256": "ed213c153f1db84762558fcac2ff9752e322151a1d44672cf554988b860cebc8",
+        "revision": "C (SBVS277C)"
+      },
+      "truth_path": "truth/tps7a02-dqn.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DQN0004A package outline and example board layout. Not human-confirmed."
+    },
+    {
+      "id": "tlv7031-dpw",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TLV7031DPWR",
+      "package_family": "no_lead_quad",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/tlv7031.pdf",
+        "sha256": "03c6901d3923c547a7d2b0901f5fbb7229ea9187138d8cabaa8518c81f80e397",
+        "revision": "J (SLVSE13J)"
+      },
+      "truth_path": "truth/tlv7031-dpw.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing DPW0005A package outline and example board layout. Not human-confirmed."
+    },
+    {
+      "id": "lm1117-ktt",
+      "manufacturer": "Texas Instruments",
+      "mpn": "LM1117S-ADJ/NOPB",
+      "package_family": "tabbed_dpak",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/lm1117.pdf",
+        "sha256": "c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa",
+        "revision": "Q (SNOS412Q)"
+      },
+      "truth_path": "truth/lm1117-ktt.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet; drawing KTT0003B package outline and example board layout. Not human-confirmed."
+    },
+    {
+      "id": "bq24072-rgt",
+      "manufacturer": "Texas Instruments",
+      "mpn": "BQ24072RGTR",
+      "package_family": "no_lead_quad",
+      "datasheet": {
+        "url": "https://www.ti.com/lit/ds/symlink/bq24072.pdf",
+        "sha256": "4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1",
+        "revision": "N (SLUS810N)"
+      },
+      "truth_path": "truth/bq24072-rgt.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official datasheet. The datasheet carries RGT0016B and RGT0016C and does not bind BQ24072RGTR to one land pattern unambiguously; the expected outcome is a human request. Not human-confirmed."
+    },
+    {
+      "id": "harwin-kona-ka1-mv10405m1",
+      "manufacturer": "Harwin",
+      "mpn": "KA1-MV10405M1",
+      "package_family": "connector",
+      "datasheet": {
+        "url": "https://content.harwin.com/asset/49e6fc9f-8d53-46a8-bb8b-e1416a72161a/DRG-03178-Technical-Drawing-Datasheet-KA1-MVXXX05M1-pdf.pdf",
+        "sha256": "b7eacb86e694814629057c600f78f08c00d3dcb778322939238300958c01983c",
+        "revision": "DRG-03178 issue 5 (04.10.24)"
+      },
+      "truth_path": "truth/harwin-kona-ka1-mv10405m1.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official Harwin drawing; Table 1 row KA1-MV10405M1. Mounting-hole plating is not stated, so the expected outcome is a human request. Not human-confirmed."
+    },
+    {
+      "id": "harwin-gecko-g125-mh104m4",
+      "manufacturer": "Harwin",
+      "mpn": "G125-MH104M4-04AD000P",
+      "package_family": "connector",
+      "datasheet": {
+        "url": "https://content.harwin.com/asset/5b51d822-8d48-4270-85a1-9ac768267eb5/DRG-03150-Technical-Drawing-Datasheet-G125-MH1XXM4-XXAD000P-pdf.pdf",
+        "sha256": "a85ecaea047f87c0f61db367c184f9060c5c73bf1108fd250425462c5e0a196b",
+        "revision": "DRG-03150 issue 1 (26.10.22)"
+      },
+      "truth_path": "truth/harwin-gecko-g125-mh104m4.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official Harwin family drawing. The recommended layout does not dimension the power-contact row relative to the signal rows, so full pad truth needs human confirmation. Not human-confirmed."
+    },
+    {
+      "id": "harwin-m80-5l21605m7-03-314",
+      "manufacturer": "Harwin",
+      "mpn": "M80-5L21605M7-03-314-00-000",
+      "package_family": "connector",
+      "datasheet": {
+        "url": "https://content.harwin.com/asset/fef84e20-925a-408a-962a-930ba24b3b6c/DRG-01452-Technical-Drawing-Datasheet-M80-5L21605M7-03-314-00-000-pdf.pdf",
+        "sha256": "06de60eb9e661690bf2f10184f946387ab208a6a75bf92b2d2902794e2b1bc08",
+        "revision": "DRG-01452 issue 2 (07.09.17)"
+      },
+      "truth_path": "truth/harwin-m80-5l21605m7-03-314.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Official Harwin drawing is image-only (no text layer), so deterministic extraction cannot bind geometry; the expected outcome is a human request. Not human-confirmed."
+    },
+    {
+      "id": "gct-usb4105-gf-a",
+      "manufacturer": "GCT",
+      "mpn": "USB4105-GF-A",
+      "package_family": "connector",
+      "datasheet": {
+        "url": "https://gct.co/files/drawings/usb4105.pdf",
+        "sha256": "fb331fbabee8392ed2937ed757c1610cb0f174b84625147c0b580a18eea8c0e5",
+        "revision": "USB4105 customer drawing"
+      },
+      "truth_path": "truth/gct-usb4105-gf-a.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official GCT drawing. Shell slots are plated oval holes that the corpus mechanical schema cannot express and pad rows are dimensioned from the PCB edge, so the expected outcome is a human request. Not human-confirmed."
+    },
+    {
+      "id": "gct-ffc3b11-10-t",
+      "manufacturer": "GCT",
+      "mpn": "FFC3B11-10-T",
+      "package_family": "connector",
+      "datasheet": {
+        "url": "https://gct.co/files/drawings/ffc3b11.pdf",
+        "sha256": "f0e1d28dbf9e9e4b0098d4a182d40d43b9eb5864f2d2ddbe76a2bf1b19df8709",
+        "revision": "FFC3B11 customer drawing"
+      },
+      "truth_path": "truth/gct-ffc3b11-10-t.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official GCT drawing. Contact-count dependent dimensions come from the 04-40 ordering table; until the 10-contact row and pin-1 side are human-confirmed the expected outcome is a human request. Not human-confirmed."
+    },
+    {
+      "id": "we-wr-sma-60312002114503",
+      "manufacturer": "Wurth Elektronik",
+      "mpn": "60312002114503",
+      "package_family": "connector",
+      "datasheet": {
+        "url": "https://www.we-online.com/components/products/datasheet/60312002114503.pdf",
+        "sha256": "988148de4bbfbc25c979f5607927ad9365d417fcc6d8145a78fbb767931e6964",
+        "revision": "60312002114503 datasheet"
+      },
+      "truth_path": "truth/we-wr-sma-60312002114503.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official Wurth datasheet. Ground-post drill diameters are not fully dimensioned, so the expected outcome is a human request. Not human-confirmed."
+    },
+    {
+      "id": "we-wr-sma-60312202114514",
+      "manufacturer": "Wurth Elektronik",
+      "mpn": "60312202114514",
+      "package_family": "connector",
+      "datasheet": {
+        "url": "https://www.we-online.com/components/products/datasheet/60312202114514.pdf",
+        "sha256": "fe660b660d6b88ac0a1fd37f12f95ef78ef27b9b04f82556a661f6d5f43d18f2",
+        "revision": "60312202114514 datasheet"
+      },
+      "truth_path": "truth/we-wr-sma-60312202114514.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Lead-authored from the official Wurth datasheet. Edge-launch tabs straddle top and bottom copper and the center land is dimensioned as a minimum, so the expected outcome is a human request. Not human-confirmed."
+    },
+    {
+      "id": "jst-ph-b4b-ph-k-s",
+      "manufacturer": "JST",
+      "mpn": "B4B-PH-K-S",
+      "package_family": "connector",
+      "datasheet": {
+        "url": "https://www.jst-mfg.com/product/pdf/eng/ePH.pdf",
+        "sha256": "447624f4f2f7d37c58c1eaa7ee314ad757fe7aff48f6186491ef6f69fbc00b96",
+        "revision": "ePH catalog"
+      },
+      "truth_path": "truth/jst-ph-b4b-ph-k-s.json",
+      "truth_status": "unconfirmed",
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "notes": "Official JST catalog uses Adobe-Japan1 fonts that the extraction lane cannot decode, so dimensions are unreadable to the deterministic lane; the expected outcome is a human request. Not human-confirmed."
     }
   ]
 }

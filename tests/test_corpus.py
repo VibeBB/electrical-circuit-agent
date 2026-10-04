@@ -25,7 +25,7 @@ from connector_fixtures import connector_spec
 
 REPO_ROOT = Path(__file__).parents[1]
 CORPUS_ROOT = REPO_ROOT / "library" / "corpus"
-_DATASHEET_SHA256_SNAPSHOT = "584ef469c312b3ec7cbf67ba94b3f8801caf303d04212e1c41e55b123af60013"
+_DATASHEET_SHA256_SNAPSHOT = "b11902c19c7cdb0d1dc0437485aefe8726b5b194779c45a626f436ca2a950ac3"
 
 
 def _reading(text: str) -> Reading:

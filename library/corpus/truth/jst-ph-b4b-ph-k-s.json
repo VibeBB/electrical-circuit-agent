@@ -1,0 +1,41 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "jst-ph-b4b-ph-k-s",
+  "package_family": "connector",
+  "pins": {},
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": null,
+    "body_width": null,
+    "height": null,
+    "pitch": {
+      "min": null,
+      "nom": 2.0,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [],
+  "connector": {
+    "mount": "tht",
+    "orientation": "vertical",
+    "gender": "male",
+    "mating_axis": "+z",
+    "board_edge_side": null,
+    "board_edge_offset": null,
+    "mating_mirror": false,
+    "manufacturer_to_kicad": null
+  },
+  "expected_outcome": "human_request",
+  "notes": "2.0 mm pitch PH top-entry shrouded header, 4 circuits. Text extraction fails (missing Adobe-Japan1 mapping), so the extraction lane must fail closed instead of reading blank dimensions.",
+  "expected_mechanical": [],
+  "drawing_id": null,
+  "ambiguous_drawing_ids": [],
+  "canary": "CIRCUIT-CORPUS-CANARY-e85f41fc-a8aa-4325-aad2-15d4711341eb"
+}
