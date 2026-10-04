@@ -28,3 +28,7 @@ For each new project-owned part, delegate library authoring to `circuit-library`
 and follow the ordered [`circuit-library-authoring`](../circuit-library-authoring/SKILL.md)
 skill before schematic authoring. Do not route around its HumanRequest stops or
 the required hash-bound library review.
+When `circuit_brief_library_check` returns `authoring_requests`, delegate each
+request to `circuit-library`, then rerun `circuit_brief_library_check` before
+proceeding. Never replace a requested part with a similar library item; retain the
+requests as `Q*` open questions until the gate passes or a human resolves them.

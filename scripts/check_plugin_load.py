@@ -57,6 +57,8 @@ EXPECTED_POST_TOOL_USE_HOOKS = {
     "record-vision-tool-event",
 }
 EXPECTED_CIRCUIT_MCP_TOOLS = {
+    "circuit_footprint_write",
+    "circuit_symbol_write",
     "circuit_model_generate",
     "circuit_model_inspect",
     "circuit_model_compare",

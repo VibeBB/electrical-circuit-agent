@@ -65,7 +65,8 @@ authoring evidence.
    must answer its vision items with impressions and seal with
    `circuit_part_author_commit`. Once both have committed, run
    `circuit_part_author_compare`, then `circuit_part_spec_check` on the
-   selected PartSpec. Do not reveal one lane's work to the other before both
+   selected PartSpec, writing its report as sibling `part.spec.check.json`.
+   Do not reveal one lane's work to the other before both
    commits. **Stop** and create a `library_review` HumanRequest if a
    content disagreement cannot be resolved from the datasheet; stop for a
    new acquisition request if the source or PartSpec does not match the
@@ -84,10 +85,15 @@ authoring evidence.
    **Stop** on contradictory or unsupported dimensions; do not tune away a
    deterministic finding.
 
-7. **Create or import the library artifacts.** Create a project-owned symbol
-   and footprint from the accepted PartSpec and land pattern, or import
-   eligible manufacturer CAD with `circuit_library_import`. Record each
-   generated/derived transformation and source with `circuit_library_record`.
+7. **Create or import the library artifacts.** Generate a project-owned
+   footprint with `circuit_footprint_write` and a symbol with
+   `circuit_symbol_write`, using the accepted, checked PartSpec and the
+   selected footprint identifier. The tools record generated provenance,
+   including input and output hashes; pass the same density and rule profile
+   used in step 6 through `rules_path`. Hand-written KiCad S-expressions are
+   prohibited; manufacturer CAD may only enter through
+   `circuit_library_import`. Record any additional derived transformation with
+   `circuit_library_record`.
    Generate the model with `circuit_model_generate` and inspect it with
    `circuit_model_inspect`. A reported `model_terminals_unseparable` requires
    a `library_review` HumanRequest describing the unseparable terminals and

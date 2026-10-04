@@ -1151,7 +1151,7 @@ def _dimension_value(dimension: Dimension, *, upper: bool = False) -> float | No
     return float(fallback) if fallback is not None else None
 
 
-def _body_box(spec: PartSpec) -> tuple[float, float, float, float] | None:
+def nominal_body_box(spec: PartSpec) -> tuple[float, float, float, float] | None:
     body_width = _dimension_value(spec.package.body_width)
     body_length = _dimension_value(spec.package.body_length)
     if body_width is None or body_length is None:
@@ -1189,7 +1189,7 @@ def _check_courtyard_and_fab(
             "footprint has no F.CrtYd or B.CrtYd graphics",
         )
     courtyard_box = _graphic_box(courtyard_graphics)
-    body = _body_box(spec)
+    body = nominal_body_box(spec)
     pad_boxes = list(_pad_boxes(footprint.pads).values())
     if courtyard_box is not None:
         enclosed = all(_contains(courtyard_box, box, 1e-6) for box in pad_boxes)

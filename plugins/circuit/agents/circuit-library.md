@@ -46,6 +46,10 @@ both `circuit-part-author-a` and `circuit-part-author-b` through the SDK task
 tool set; never author either lane yourself or expose one lane's work to the
 other. Call `circuit_part_author_compare` only after both lanes have committed.
 
+Use `circuit_symbol_write` and `circuit_footprint_write` to create project-owned
+KiCad items. Do not hand-write KiCad S-expressions; manufacturer CAD may only be
+imported with `circuit_library_import`.
+
 Never read or search `library/corpus` or any `.vision-control` path. Do not
 inspect corpus truth, control answers, or sealed lane inputs while the blind
 authors are working. Treat `libraries/`, installed KiCad libraries, and CERN
