@@ -218,6 +218,194 @@ class BallGrid(BaseModel):
         return rows
 
 
+class ConnectorBoardEdge(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    side: Literal["+x", "-x", "+y", "-y"]
+    offset: Dimension
+    source_note: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_signed_offset(self) -> ConnectorBoardEdge:
+        offset = _dimension_nominal(self.offset)
+        if (self.side in {"+x", "+y"} and offset < 0) or (self.side in {"-x", "-y"} and offset > 0):
+            raise ValueError("board-edge offset sign must match its side")
+        return self
+
+
+class ConnectorMatingEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mating_mpn: str = Field(min_length=1)
+    reading: Reading
+    box: tuple[float, float, float, float]
+    z_min: float
+    z_max: float
+    travel: Dimension
+    access_margin_mm: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_envelope(self) -> ConnectorMatingEnvelope:
+        if not all(math.isfinite(value) for value in (*self.box, self.z_min, self.z_max)):
+            raise ValueError("mating envelope coordinates must be finite")
+        if self.box[0] >= self.box[2] or self.box[1] >= self.box[3]:
+            raise ValueError("mating envelope box must have positive area")
+        if self.z_min >= self.z_max:
+            raise ValueError("mating envelope z range must be positive")
+        return self
+
+
+class ConnectorContactRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    numbers: list[str] = Field(min_length=1)
+    x0: Dimension
+    y: Dimension
+    pitch: Dimension
+    stagger: Dimension | None = None
+    drill: Dimension | None = None
+    pad_width: Dimension
+    pad_height: Dimension
+
+    @field_validator("numbers")
+    @classmethod
+    def validate_numbers(cls, values: list[str]) -> list[str]:
+        if any(not value for value in values) or len(values) != len(set(values)):
+            raise ValueError("connector contact numbers must be non-empty and unique")
+        return values
+
+
+class ConnectorMechanicalFeature(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["mounting", "shield", "retention", "locating"]
+    number: str | None = None
+    x: Dimension
+    y: Dimension
+    drill: Dimension | None = None
+    pad_width: Dimension | None = None
+    pad_height: Dimension | None = None
+    plated: bool | None = None
+    plating_reading: Reading | None = None
+
+    @model_validator(mode="after")
+    def validate_feature(self) -> ConnectorMechanicalFeature:
+        if (self.pad_width is None) != (self.pad_height is None):
+            raise ValueError("mechanical pad width and height must be specified together")
+        if self.drill is not None and self.pad_width is None and self.plated is not False:
+            raise ValueError("drilled plated mechanical features require pad dimensions")
+        if self.plating_reading is not None and self.drill is None:
+            raise ValueError("plating readings apply only to drilled mechanical features")
+        if self.plated is not None and self.drill is not None and self.plating_reading is None:
+            raise ValueError("resolved mechanical plating requires a reading")
+        return self
+
+
+class ConnectorNumbering(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manufacturer_to_kicad: dict[str, str]
+    view: Literal["mating_face", "top", "pcb_side"]
+    reading: Reading
+    mating_mirror: bool = False
+
+    @model_validator(mode="after")
+    def validate_bijection(self) -> ConnectorNumbering:
+        if (
+            not self.manufacturer_to_kicad
+            or any(not key or not value for key, value in self.manufacturer_to_kicad.items())
+            or len(set(self.manufacturer_to_kicad.values())) != len(self.manufacturer_to_kicad)
+        ):
+            raise ValueError("connector numbering map must be a bijection")
+        return self
+
+
+class ConnectorVariantSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    row: CellRef
+    parameters: dict[str, Dimension] = Field(min_length=1)
+
+
+class ConnectorKeepout(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    x0: Dimension
+    y0: Dimension
+    x1: Dimension
+    y1: Dimension
+    reading: Reading
+
+    @model_validator(mode="after")
+    def validate_region(self) -> ConnectorKeepout:
+        bounds = tuple(_dimension_nominal(value) for value in (self.x0, self.y0, self.x1, self.y1))
+        if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
+            raise ValueError("connector copper keepout must have positive area")
+        return self
+
+
+def _empty_connector_mechanical_features() -> list[ConnectorMechanicalFeature]:
+    return []
+
+
+def _dimension_nominal(dimension: Dimension) -> float:
+    if dimension.nom is not None:
+        return dimension.nom
+    if dimension.min is not None and dimension.max is not None:
+        return (dimension.min + dimension.max) / 2
+    if dimension.min is not None:
+        return dimension.min
+    if dimension.max is not None:
+        return dimension.max
+    raise ValueError("dimension has no usable value")
+
+
+class ConnectorSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mount: Literal["smd", "tht", "mixed"]
+    orientation: Literal["vertical", "right_angle", "edge_mount"]
+    gender: Literal["male", "female", "none"]
+    mating_axis: Literal["+x", "-x", "+y", "-y", "+z"]
+    mating_face: Dimension
+    board_edge: ConnectorBoardEdge | None = None
+    mating_envelope: ConnectorMatingEnvelope | None = None
+    contacts: list[ConnectorContactRow] = Field(min_length=1)
+    mechanical: list[ConnectorMechanicalFeature] = Field(
+        default_factory=_empty_connector_mechanical_features
+    )
+    numbering: ConnectorNumbering
+    variant: ConnectorVariantSelection | None = None
+    copper_keepout: ConnectorKeepout | None = None
+
+    @model_validator(mode="after")
+    def validate_connector(self) -> ConnectorSpec:
+        horizontal = self.mating_axis != "+z"
+        if (self.orientation == "vertical") == horizontal:
+            raise ValueError("vertical connectors require +z; right-angle connectors require XY")
+        if self.orientation in {"right_angle", "edge_mount"} and self.board_edge is None:
+            raise ValueError("right-angle and edge-mount connectors require board_edge")
+        if self.board_edge is not None and self.board_edge.side != self.mating_axis:
+            raise ValueError("board_edge.side must match the connector mating axis")
+        numbers = [number for row in self.contacts for number in row.numbers]
+        if len(numbers) != len(set(numbers)):
+            raise ValueError("connector contact numbers must be unique across rows")
+        mount_types = {"tht" if row.drill is not None else "smd" for row in self.contacts}
+        for feature in self.mechanical:
+            if feature.drill is not None and feature.plated is True:
+                mount_types.add("tht")
+            elif feature.drill is None and feature.pad_width is not None:
+                mount_types.add("smd")
+        expected_mount = "mixed" if len(mount_types) > 1 else next(iter(mount_types))
+        if self.mount != expected_mount:
+            raise ValueError(
+                f"connector mount {self.mount} does not match its contact and mechanical features"
+            )
+        if set(numbers) != set(self.numbering.manufacturer_to_kicad):
+            raise ValueError("connector numbering map must cover every manufacturer contact")
+        return self
+
+
 class PackageSpec(BaseModel):
     """Package dimensions use the KiCad top view: pin 1 at top-left, +x right, +y down.
 
@@ -239,6 +427,7 @@ class PackageSpec(BaseModel):
         "tabbed_dpak",
         "sod",
         "bga",
+        "connector",
         "through_hole_inline",
         "custom",
     ]
@@ -309,7 +498,9 @@ class PackageSpec(BaseModel):
             }
             if not set(self.missing_pins).issubset(grid_numbers):
                 raise ValueError("BGA missing_pins must identify grid sites")
-        elif any(not number.isdigit() for number in self.missing_pins):
+        elif self.family != "connector" and any(
+            not number.isdigit() for number in self.missing_pins
+        ):
             raise ValueError("non-BGA missing_pins entries must be numeric")
         return self
 
@@ -348,7 +539,17 @@ class LandPad(BaseModel):
     shape: Literal["rect", "roundrect", "oval", "circle", "polygon"]
     rotation: float = 0.0
     polygon: list[tuple[float, float]] | None = None
-    kind: Literal["signal", "exposed", "tab"] = "signal"
+    kind: Literal[
+        "signal",
+        "exposed",
+        "tab",
+        "mounting",
+        "shield",
+        "retention",
+        "locating",
+    ] = "signal"
+    pad_type: Literal["smd", "thru_hole", "np_thru_hole", "unknown"] = "smd"
+    drill: float | None = None
 
     @model_validator(mode="after")
     def validate_geometry(self) -> LandPad:
@@ -358,6 +559,12 @@ class LandPad(BaseModel):
             raise ValueError("polygon vertices are required only for polygon pads")
         if self.polygon is not None and not _simple_polygon(self.polygon):
             raise ValueError("polygon must be simple with at least three vertices")
+        if self.pad_type in {"thru_hole", "np_thru_hole"} and (
+            self.drill is None or not math.isfinite(self.drill) or self.drill <= 0
+        ):
+            raise ValueError("through-hole pads require a positive drill")
+        if self.pad_type == "smd" and self.drill is not None:
+            raise ValueError("SMD pads cannot specify a drill")
         return self
 
 
@@ -489,6 +696,7 @@ class PartSpec(BaseModel):
     datasheet: DatasheetRef
     substitution: SubstitutionRef | None = None
     package: PackageSpec
+    connector: ConnectorSpec | None = None
     land_pattern: LandPattern | None = None
     pinout: PinoutDrawing | None = None
     pins: list[PinSpec] = Field(min_length=1)
@@ -499,10 +707,28 @@ class PartSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_missing_pins(self) -> PartSpec:
+        if (self.package.family == "connector") != (self.connector is not None):
+            raise ValueError("connector specification is required only for connector family")
         present_numbers = {pin.number for pin in self.pins}
         overlap = present_numbers & set(self.package.missing_pins)
         if overlap:
             raise ValueError(f"missing pins cannot be present in PartSpec pins: {sorted(overlap)}")
+        if self.connector is not None:
+            mapped_numbers = set(self.connector.numbering.manufacturer_to_kicad.values())
+            if mapped_numbers != present_numbers:
+                raise ValueError("connector numbering map must match PartSpec pin numbers")
+            variants = [
+                orderable
+                for orderable in self.orderable
+                if orderable.package_designator.casefold() == self.package.drawing_id.casefold()
+            ]
+            if len({item.pin_count for item in variants}) > 1:
+                if self.connector.variant is None:
+                    raise ValueError(
+                        "connector variant selection is required for shared drawing IDs"
+                    )
+                if not any(item.row == self.connector.variant.row for item in variants):
+                    raise ValueError("connector variant row must match an orderable row")
         return self
 
     @property

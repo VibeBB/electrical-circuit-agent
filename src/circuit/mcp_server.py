@@ -20,7 +20,7 @@ from mcp.types import (
     ToolAnnotations,
     ToolsCapability,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from . import (
     __version__,
@@ -30,6 +30,7 @@ from . import (
     brief,
     confidential,
     connectivity,
+    connplace,
     corpus,
     datasheet,
     doctor,
@@ -671,6 +672,22 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         },
     ),
     (
+        "circuit_connector_placement_check",
+        "Check connector board-edge alignment and mating clearance on a PCB",
+        {
+            "type": "object",
+            "properties": {
+                "pcb_path": {"type": "string"},
+                "part_specs": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+                "output_path": {"type": "string"},
+            },
+            "required": ["pcb_path", "part_specs"],
+        },
+    ),
+    (
         "circuit_footprint_write",
         "Write a deterministic footprint from a checked PartSpec",
         {
@@ -1114,6 +1131,7 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_part_author_compare": _anno("Compare sealed authoring lanes", write=True),
     "circuit_part_spec_check": _anno("PartSpec check", write=True),
     "circuit_land_pattern": _anno("Land pattern", write=True),
+    "circuit_connector_placement_check": _anno("Connector placement check", write=False),
     "circuit_footprint_write": _anno("Write deterministic footprint", write=True),
     "circuit_symbol_write": _anno("Write deterministic symbol", write=True),
     "circuit_library_candidates": _anno("Library candidates", write=True),
@@ -1341,6 +1359,7 @@ _PART_BUILD_TOOL_NAMES = {
     "circuit_datasheet_extract",
     "circuit_part_spec_check",
     "circuit_land_pattern",
+    "circuit_connector_placement_check",
     "circuit_footprint_write",
     "circuit_symbol_write",
     "circuit_library_candidates",
@@ -1595,6 +1614,23 @@ def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
             "land-pattern",
         )
         output.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+        return result
+    if name == "circuit_connector_placement_check":
+        pcb_path = Path(str(args["pcb_path"]))
+        try:
+            part_specs_value = TypeAdapter(dict[str, str]).validate_python(
+                args.get("part_specs"),
+                strict=True,
+            )
+        except ValidationError as exc:
+            raise ValueError("part_specs must map footprint references to spec paths") from exc
+        part_specs = {ref: Path(path) for ref, path in part_specs_value.items()}
+        result = connplace.check_connector_placement(pcb_path, part_specs)
+        output_value = _optional_string(args.get("output_path"))
+        if output_value is not None:
+            output_path = Path(output_value)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         return result
     if name == "circuit_library_candidates":
         spec_path = Path(str(args["part_spec_path"]))

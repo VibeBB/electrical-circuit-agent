@@ -51,6 +51,12 @@ through `circuit_konnect_call` (batch them in its `ops` array so `load_toolset`
 shares the session); a stdio JSON-RPC client against the `konnect`
 binary is the last-resort fallback.
 
+Before DRC, run `circuit_connector_placement_check` for boards with connector
+footprints. Supply the PCB path and a `part_specs` map from each connector
+reference to its checked PartSpec file. Resolve every board-edge, mating-clearance,
+unknown-envelope, and missing-PartSpec finding before accepting placement; relay
+any returned HumanRequest rather than guessing the connector geometry.
+
 After rendering, fix silkscreen overlaps and illegible or upside-down reference
 designators reported by rendered views with `edit_board_footprint_graphic` before
 the final render. Treat the silkscreen and fab layers as drawing documentation:

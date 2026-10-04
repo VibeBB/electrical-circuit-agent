@@ -25,6 +25,7 @@ Family = Literal[
     "tabbed_dpak",
     "sod",
     "bga",
+    "connector",
 ]
 Side = Literal["left", "bottom", "right", "top"]
 
@@ -114,6 +115,7 @@ def _family(spec: PartSpec) -> Family:
         "tabbed_dpak",
         "sod",
         "bga",
+        "connector",
     ):
         raise LandPatternError(f"unsupported package family: {family}")
     return family
@@ -436,6 +438,18 @@ def _tab_land_pad(tab: TabSpec) -> LandPad:
 def _body_box(spec: PartSpec) -> tuple[float, float, float, float]:
     body_width = _nominal(spec.package.body_width, field="package.body_width")
     body_length = _nominal(spec.package.body_length, field="package.body_length")
+    connector = spec.connector
+    if connector is not None:
+        face = _nominal(connector.mating_face, field="connector.mating_face")
+        axis = connector.mating_axis
+        if axis == "+x":
+            return face - body_length, -body_width / 2, face, body_width / 2
+        if axis == "-x":
+            return -face, -body_width / 2, body_length - face, body_width / 2
+        if axis == "+y":
+            return -body_width / 2, face - body_length, body_width / 2, face
+        if axis == "-y":
+            return -body_width / 2, -face, body_width / 2, body_length - face
     return (-body_width / 2, -body_length / 2, body_width / 2, body_length / 2)
 
 
@@ -508,8 +522,9 @@ def _datasheet_pattern(
 ) -> LandPatternResult:
     if spec.land_pattern is None:
         raise LandPatternError("datasheet land-pattern is absent")
-    goals = _effective_goals(spec, density, rules)
+    goals = None if spec.package.family == "connector" else _effective_goals(spec, density, rules)
     pads = list(spec.land_pattern.pads)
+    courtyard_excess = 0.25 if goals is None else goals.courtyard
     return LandPatternResult(
         family=_family(spec),
         density=density,
@@ -517,16 +532,133 @@ def _datasheet_pattern(
         params={
             "F": fabrication_tolerance,
             "P": placement_tolerance,
-            "toe": goals.toe,
-            "heel": goals.heel,
-            "side": goals.side,
-            "courtyard_excess": goals.courtyard,
+            "courtyard_excess": courtyard_excess,
+            **({} if goals is None else {"toe": goals.toe, "heel": goals.heel, "side": goals.side}),
         },
         pads=pads,
-        courtyard=_courtyard(spec, pads, goals.courtyard),
+        courtyard=_courtyard(spec, pads, courtyard_excess),
         konnect_pads=_konnect_pads(pads, set()),
         rule_chain=[] if rules is None else rules.chain,
         rule_chain_sha256=None if rules is None else rules.chain_sha256,
+    )
+
+
+def _connector_pattern(spec: PartSpec, density: Density) -> LandPatternResult:
+    connector = spec.connector
+    if connector is None:
+        raise LandPatternError("connector specification is required")
+    pads: list[LandPad] = []
+    numbering = connector.numbering.manufacturer_to_kicad
+    for row in connector.contacts:
+        x0 = _coordinate(row.x0, field="connector.contacts.x0")
+        y = _coordinate(row.y, field="connector.contacts.y")
+        pitch = _nominal(row.pitch, field="connector.contacts.pitch")
+        stagger = (
+            _coordinate(row.stagger, field="connector.contacts.stagger")
+            if row.stagger is not None
+            else 0.0
+        )
+        width = _nominal(row.pad_width, field="connector.contacts.pad_width")
+        height = _nominal(row.pad_height, field="connector.contacts.pad_height")
+        drill = (
+            _nominal(row.drill, field="connector.contacts.drill") if row.drill is not None else None
+        )
+        for index, manufacturer_number in enumerate(row.numbers):
+            coordinate_index = (
+                len(row.numbers) - index - 1
+                if connector.numbering.view == "mating_face" and connector.numbering.mating_mirror
+                else index
+            )
+            pad_y = y + (stagger if coordinate_index % 2 else 0.0)
+            pads.append(
+                LandPad(
+                    number=numbering[manufacturer_number],
+                    x=x0 + coordinate_index * pitch,
+                    y=pad_y,
+                    width=width,
+                    height=height,
+                    shape="circle"
+                    if row.drill is not None and math.isclose(width, height)
+                    else "rect",
+                    pad_type="thru_hole" if drill is not None else "smd",
+                    drill=drill,
+                )
+            )
+    for feature in connector.mechanical:
+        if feature.pad_width is None and feature.pad_height is None and feature.drill is None:
+            continue
+        x = _coordinate(feature.x, field=f"connector.mechanical.{feature.kind}.x")
+        y = _coordinate(feature.y, field=f"connector.mechanical.{feature.kind}.y")
+        drill = (
+            _nominal(feature.drill, field=f"connector.mechanical.{feature.kind}.drill")
+            if feature.drill is not None
+            else None
+        )
+        width = (
+            _nominal(feature.pad_width, field=f"connector.mechanical.{feature.kind}.pad_width")
+            if feature.pad_width is not None
+            else drill
+        )
+        height = (
+            _nominal(
+                feature.pad_height,
+                field=f"connector.mechanical.{feature.kind}.pad_height",
+            )
+            if feature.pad_height is not None
+            else drill
+        )
+        if width is None or height is None:
+            raise LandPatternError("connector mechanical feature requires pad dimensions")
+        pad_type = (
+            "unknown"
+            if drill is not None and feature.plated is None
+            else "thru_hole"
+            if drill is not None and feature.plated
+            else "np_thru_hole"
+            if drill is not None
+            else "smd"
+        )
+        pads.append(
+            LandPad(
+                number=("" if pad_type == "np_thru_hole" else feature.number or ""),
+                x=x,
+                y=y,
+                width=width,
+                height=height,
+                shape="circle" if math.isclose(width, height) else "rect",
+                kind=feature.kind,
+                pad_type=pad_type,
+                drill=drill,
+            )
+        )
+    courtyard = _courtyard(spec, pads, 0.25)
+    return LandPatternResult(
+        family="connector",
+        density=density,
+        source="datasheet",
+        params={"courtyard_excess": 0.25},
+        pads=pads,
+        courtyard=courtyard,
+        konnect_pads=[
+            {
+                "number": pad.number,
+                "type": pad.pad_type,
+                "shape": pad.shape,
+                "x": pad.x,
+                "y": pad.y,
+                "width": pad.width,
+                "height": pad.height,
+                "drill": pad.drill,
+                "layers": (
+                    ["F.Cu", "B.Cu", "*.Mask"]
+                    if pad.pad_type == "thru_hole"
+                    else ["*.Mask"]
+                    if pad.pad_type in {"np_thru_hole", "unknown"}
+                    else ["F.Cu", "F.Paste", "F.Mask"]
+                ),
+            }
+            for pad in pads
+        ],
     )
 
 
@@ -563,6 +695,20 @@ def compute_land_pattern(
     ):
         raise LandPatternError("tolerances must be finite and non-negative")
     family = _family(spec)
+    if family == "connector":
+        if spec.land_pattern is not None:
+            if spec.land_pattern.source != "datasheet":
+                raise LandPatternError(
+                    "connector land patterns must use datasheet or contact geometry"
+                )
+            return _datasheet_pattern(
+                spec,
+                density,
+                fabrication_tolerance,
+                placement_tolerance,
+                rules,
+            )
+        return _connector_pattern(spec, density)
     if spec.land_pattern is not None and spec.land_pattern.source == "datasheet":
         return _datasheet_pattern(
             spec,

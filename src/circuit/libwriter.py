@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict
 from . import sexpr
 from .landpattern import LandPatternResult
 from .libverify import nominal_body_box
-from .partspec import LandPad, PartSpec, PinSpec
+from .partspec import Dimension, LandPad, PartSpec, PinSpec
 
 WRITER_VERSION = "1"
 _SUPPORTED_FAMILIES = {
@@ -28,6 +28,7 @@ _SUPPORTED_FAMILIES = {
     "tabbed_dpak",
     "sod",
     "bga",
+    "connector",
 }
 _SYMBOL_PIN_TYPES = {
     "input": "input",
@@ -128,14 +129,12 @@ def _symbol_property(
 
 
 def _pad_number_key(number: str) -> tuple[object, ...]:
-    if number.isdigit():
-        return (0, int(number), number)
-    parts: list[tuple[int, int | str]] = []
-    for item in re.split(r"(\d+)", number.casefold()):
-        if not item:
-            continue
-        parts.append((0, int(item)) if item.isdigit() else (1, item))
-    return (1, *parts, number)
+    parts = tuple(
+        (0, int(item)) if item.isdigit() else (1, item)
+        for item in re.split(r"(\d+)", number.casefold())
+        if item
+    )
+    return (0 if number.isdigit() else 1, parts, number)
 
 
 def _outward(value: float, *, lower: bool) -> float:
@@ -168,6 +167,10 @@ def _land_hash(land: LandPatternResult, spec: PartSpec) -> str:
             pad_data["polygon"] = pad.polygon
         if pad.kind != "signal" and pad.number != legacy_primary_ep:
             pad_data["kind"] = pad.kind
+        if spec.package.family == "connector" or pad.pad_type != "smd" or pad.drill is not None:
+            pad_data["pad_type"] = pad.pad_type
+            if pad.drill is not None:
+                pad_data["drill"] = pad.drill
         pads.append(pad_data)
     payload: dict[str, object] = {
         "family": land.family,
@@ -208,24 +211,37 @@ def _pad_node(
     if is_polygon and pad.polygon is None:
         raise LibWriterError("polygon_vertices_missing")
     kicad_shape = "custom" if is_polygon else shape
+    if pad.pad_type == "unknown":
+        raise LibWriterError("connector_plating_unresolved")
     at: list[sexpr.SExpr] = ["at", _format_number(float(x)), _format_number(float(y))]
     if pad.rotation != 0 or is_polygon:
         at.append(_format_number(pad.rotation))
     node: list[sexpr.SExpr] = [
         "pad",
         sexpr.quoted(str(number)),
-        "smd",
+        pad.pad_type,
         str(kicad_shape),
         at,
         ["size", _format_number(float(width)), _format_number(float(height))],
     ]
+    if pad.pad_type in {"thru_hole", "np_thru_hole"}:
+        if pad.drill is None:
+            raise LibWriterError("connector_drill_missing")
+        node.append(["drill", _format_number(pad.drill)])
     if shape == "roundrect":
         node.append(["roundrect_rratio", "0.25"])
     if ep_paste_margin_mm is not None and (
         pad.kind == "exposed" or str(number) == exposed_pad_number
     ):
         node.append(["solder_paste_margin", _format_number(ep_paste_margin_mm)])
-    node.append(["layers", sexpr.quoted("F.Cu"), sexpr.quoted("F.Paste"), sexpr.quoted("F.Mask")])
+    layers: list[str] = (
+        ["*.Cu", "*.Mask"]
+        if pad.pad_type == "thru_hole"
+        else ["*.Mask"]
+        if pad.pad_type == "np_thru_hole"
+        else ["F.Cu", "F.Paste", "F.Mask"]
+    )
+    node.append(["layers", *[sexpr.quoted(layer) for layer in layers]])
     if is_polygon:
         polygon = pad.polygon
         if polygon is None:
@@ -249,6 +265,40 @@ def _pad_node(
 
 
 def _pin1_silk_circle(spec: PartSpec, land: LandPatternResult) -> sexpr.SExpr:
+    if spec.connector is not None:
+        points: list[tuple[float, float]] = []
+        for pad in land.pads:
+            angle = math.radians(pad.rotation)
+            cosine, sine = math.cos(angle), math.sin(angle)
+            source = (
+                pad.polygon
+                if pad.polygon is not None
+                else [
+                    (-pad.width / 2, -pad.height / 2),
+                    (-pad.width / 2, pad.height / 2),
+                    (pad.width / 2, -pad.height / 2),
+                    (pad.width / 2, pad.height / 2),
+                ]
+            )
+            points.extend(
+                (
+                    pad.x + x * cosine - y * sine,
+                    pad.y + x * sine + y * cosine,
+                )
+                for x, y in source
+            )
+        if points:
+            center_x = min(x for x, _ in points) - 0.25
+            center_y = min(y for _, y in points) - 0.25
+            radius = 0.05
+            return [
+                "fp_circle",
+                ["center", _format_number(center_x), _format_number(center_y)],
+                ["end", _format_number(center_x + radius), _format_number(center_y)],
+                ["stroke", ["width", "0.15"], ["type", "solid"]],
+                ["fill", "solid"],
+                ["layer", sexpr.quoted("F.SilkS")],
+            ]
     first_pin = next(
         (
             pad
@@ -303,6 +353,80 @@ def _fab_chamfer(
     ]
 
 
+def _dimension_value(dimension: Dimension) -> float:
+    nominal = dimension.nom
+    if nominal is not None:
+        return float(nominal)
+    minimum = dimension.min
+    maximum = dimension.max
+    if minimum is not None and maximum is not None:
+        return (float(minimum) + float(maximum)) / 2
+    value = minimum if minimum is not None else maximum
+    if value is None:
+        raise LibWriterError("connector_dimension_missing")
+    return float(value)
+
+
+def _connector_board_edge_node(
+    spec: PartSpec, courtyard: tuple[float, float, float, float]
+) -> sexpr.SExpr | None:
+    connector = spec.connector
+    if connector is None or connector.board_edge is None:
+        return None
+    edge = connector.board_edge
+    offset = _dimension_value(edge.offset)
+    x = offset if edge.side in {"+x", "-x"} else 0.0
+    y = offset if edge.side in {"+y", "-y"} else 0.0
+    if edge.side == "+x" or edge.side == "-x":
+        start, end = (x, courtyard[1]), (x, courtyard[3])
+    elif edge.side == "+y":
+        start, end = (courtyard[0], y), (courtyard[2], y)
+    else:
+        start, end = (courtyard[0], y), (courtyard[2], y)
+    return [
+        "fp_line",
+        ["start", _format_number(start[0]), _format_number(start[1])],
+        ["end", _format_number(end[0]), _format_number(end[1])],
+        ["stroke", ["width", "0.05"], ["type", "solid"]],
+        ["layer", sexpr.quoted("Dwgs.User")],
+    ]
+
+
+def _connector_keepout_node(spec: PartSpec) -> sexpr.SExpr | None:
+    connector = spec.connector
+    if connector is None or connector.copper_keepout is None:
+        return None
+    keepout = connector.copper_keepout
+    points = [
+        (_dimension_value(keepout.x0), _dimension_value(keepout.y0)),
+        (_dimension_value(keepout.x1), _dimension_value(keepout.y0)),
+        (_dimension_value(keepout.x1), _dimension_value(keepout.y1)),
+        (_dimension_value(keepout.x0), _dimension_value(keepout.y1)),
+    ]
+    return [
+        "zone",
+        ["net", "0"],
+        ["net_name", sexpr.quoted("")],
+        ["layer", sexpr.quoted("F.Cu")],
+        ["hatch", "edge", "0.5"],
+        [
+            "keepout",
+            ["tracks", "not_allowed"],
+            ["vias", "not_allowed"],
+            ["pads", "not_allowed"],
+            ["copperpour", "not_allowed"],
+            ["footprints", "not_allowed"],
+        ],
+        [
+            "polygon",
+            [
+                "pts",
+                *[["xy", _format_number(x), _format_number(y)] for x, y in points],
+            ],
+        ],
+    ]
+
+
 def write_footprint(
     spec: PartSpec,
     land: LandPatternResult,
@@ -353,11 +477,26 @@ def write_footprint(
         _quoted_property("circuit_land_pattern_sha256", land_sha256),
         _quoted_property("circuit_writer_version", WRITER_VERSION),
     ]
+    if spec.connector is not None and spec.connector.board_edge is not None:
+        edge = spec.connector.board_edge
+        properties.append(
+            _quoted_property(
+                "circuit_board_edge",
+                f"{edge.side} {_format_number(_dimension_value(edge.offset))}",
+            )
+        )
+    attr: sexpr.SExpr | None = (
+        ["attr", "smd"]
+        if spec.connector is None or spec.connector.mount == "smd"
+        else ["attr", "through_hole"]
+        if spec.connector.mount == "tht"
+        else None
+    )
     root: list[sexpr.SExpr] = [
         "footprint",
         sexpr.quoted(footprint_name),
         ["layer", sexpr.quoted("F.Cu")],
-        ["attr", "smd"],
+        *([] if attr is None else [attr]),
         *properties,
         [
             "fp_rect",
@@ -378,6 +517,12 @@ def write_footprint(
         ],
         _pin1_silk_circle(spec, land),
     ]
+    board_edge = _connector_board_edge_node(spec, courtyard)
+    if board_edge is not None:
+        root.append(board_edge)
+    keepout = _connector_keepout_node(spec)
+    if keepout is not None:
+        root.append(keepout)
     ep_numbers = {pad.number for pad in spec.package.all_exposed_pads}
     root.extend(
         _pad_node(
