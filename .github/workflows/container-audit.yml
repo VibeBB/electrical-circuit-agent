@@ -136,7 +136,8 @@ jobs:
               # retry keys on the MisconfSummary payload, not the exit
               # code. The aggregation step stays fail-closed on empty.
               if trivy image --compliance docker-cis-1.6.0 --report all \
-                --format json --output "$out" "$image" && \
+                --ignorefile /dev/null --format json --output "$out" \
+                "$image" && \
                 python3 scripts/trivy_report_utils.py cis-nonempty "$out"; then
                 return 0
               fi
