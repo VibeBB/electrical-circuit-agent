@@ -26,6 +26,7 @@ concurrency:
 
 jobs:
   report:
+    if: github.event_name == 'workflow_run'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
@@ -34,6 +35,9 @@ jobs:
       # Files, comments on, and closes the main CI failure tracking issue.
       issues: write
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - name: Update tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
@@ -76,3 +80,38 @@ jobs:
           else
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label ci-main-failure --body "$body"
           fi
+
+  reconcile:
+    if: github.event_name != 'workflow_run'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      actions: read # reads the latest main run per watched workflow
+      contents: read
+      # Closes failure issues whose workflow's latest main run is green.
+      issues: write
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Close failure issues whose workflow is green on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --label ci-main-failure --limit 100 --json number,title \
+            --jq '.[] | "\(.number)\t\(.title)"' > "$RUNNER_TEMP/issues.txt"
+          while IFS=$'\t' read -r number title; do
+            case "$title" in
+              "main CI failure: "*) workflow=${title#main CI failure: } ;;
+              *) continue ;;
+            esac
+            conclusion=$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow "$workflow" --branch main --limit 1 \
+              --json conclusion --jq '.[0].conclusion // empty' || true)
+            if [ "$conclusion" = "success" ]; then
+              gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+                --comment "Back to green on main: the latest '$workflow' run succeeded."
+            fi
+          done < "$RUNNER_TEMP/issues.txt"

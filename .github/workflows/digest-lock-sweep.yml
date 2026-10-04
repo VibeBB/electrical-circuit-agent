@@ -17,9 +17,11 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
-      actions: write # dispatch post-merge verification workflows on main
-      contents: write # required to merge digest-lock PRs
-      pull-requests: write # merge stalled digest-lock PRs
+      # Dispatches the post-merge workflows on main; bot merges do not
+      # fire push events.
+      actions: write
+      contents: write # merges and deletes digest-lock branches
+      pull-requests: write # merges stalled digest-lock PRs
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -32,79 +34,58 @@ jobs:
           # Lock PRs sometimes stay open with auto-merge armed and every
           # required check green while GitHub's mergeability evaluation
           # reports "blocked" indefinitely. Re-try the merge every 6 hours;
-          # the branch ruleset still gates it, so an unsatisfied PR
-          # cannot merge.
+          # the branch ruleset still gates it, so an unsatisfied PR cannot merge.
+          dispatch_post_merge=false
           prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 50 \
             --json number,headRefName \
             --jq '.[] | select(.headRefName | startswith("bot/update-image-digests-")) | .number')
           if [ -z "$prs" ]; then
             echo "no open digest-lock PRs" | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
+          else
+            for pr in $prs; do
+              pr_url="https://github.com/$GITHUB_REPOSITORY/pull/$pr"
+              state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '.mergeable_state // "unknown"' || echo unknown)
+              case "$state" in
+                clean|blocked|behind|unstable)
+                  if gh pr merge --repo "$GITHUB_REPOSITORY" --squash --delete-branch "$pr"; then
+                    echo "merged $pr_url (was $state)" | tee -a "$GITHUB_STEP_SUMMARY"
+                    dispatch_post_merge=true
+                  else
+                    gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch "$pr" || true
+                    echo "$pr_url left open ($state; auto-merge armed)" | tee -a "$GITHUB_STEP_SUMMARY"
+                  fi
+                  ;;
+                *)
+                  echo "$pr_url skipped (mergeable_state=$state)" | tee -a "$GITHUB_STEP_SUMMARY"
+                  ;;
+              esac
+            done
           fi
-          for pr in $prs; do
-            pr_url="https://github.com/$GITHUB_REPOSITORY/pull/$pr"
-            state=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '.mergeable_state // "unknown"' || echo unknown)
-            case "$state" in
-              clean|blocked|behind|unstable)
-                if gh pr merge --repo "$GITHUB_REPOSITORY" --squash --delete-branch "$pr"; then
-                  echo "merged $pr_url (was $state)" | tee -a "$GITHUB_STEP_SUMMARY"
-                  # A GITHUB_TOKEN merge fires no push event, so dispatch
-                  # the post-merge verification on main explicitly — the
-                  # same runs publish_image_pin_pr.sh dispatches after a
-                  # pin merge.
-                  for wf in ci.yml locked-image-check.yml workflow-lint.yml; do
-                    gh workflow run "$wf" --repo "$GITHUB_REPOSITORY" --ref main \
-                      || echo "::warning::post-merge dispatch of $wf failed"
-                  done
-                else
-                  gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch "$pr" || true
-                  echo "$pr_url left open ($state; auto-merge armed)" | tee -a "$GITHUB_STEP_SUMMARY"
-                fi
-                ;;
-              *)
-                echo "$pr_url skipped (mergeable_state=$state)" | tee -a "$GITHUB_STEP_SUMMARY"
-                ;;
-            esac
-          done
-      - name: Backfill post-merge verification for externally merged lock PRs
-        # A deadline-armed auto-merge (or a human squash merge of a bot PR)
-        # lands on main via GITHUB_TOKEN and fires no push workflows. The
-        # merge path above only dispatches for PRs this run merged itself,
-        # so backfill recently-merged bot PRs whose merge SHA has no main
-        # run yet. Human merges leave a push-triggered run on the same SHA
-        # and are skipped by the dedupe.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          cutoff=$(date -u -d '8 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-          merged=$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --limit 30 \
-            --json number,headRefName,mergeCommit,mergedAt \
-            --jq ".[] | select(.headRefName | startswith(\"bot/update-image-digests-\")) | select(.mergedAt > \"$cutoff\") | [.number, .mergeCommit.oid] | @tsv")
-          if [ -z "$merged" ]; then
-            echo "no recently merged digest-lock PRs" | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
+          # Bot merges do not fire push events, so a lock merge that landed
+          # outside a live publisher — a merge above, or an auto-merge
+          # armed by the publisher that completed after it exited — never
+          # triggers the post-merge workflows. Cover any recent lock merge
+          # that has no ci.yml dispatch since its merge; one run verifies main.
+          if [ "$dispatch_post_merge" != true ]; then
+            cutoff=$(date -u -d '7 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+            while IFS= read -r merged_at; do
+              [ -n "$merged_at" ] || continue
+              [ "$merged_at" \> "$cutoff" ] || continue
+              runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+                --branch main --event workflow_dispatch \
+                --created ">=$merged_at" --json databaseId --jq 'length' || echo 0)
+              if [ "${runs:-0}" = "0" ]; then
+                dispatch_post_merge=true
+                break
+              fi
+            done < <(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --limit 10 \
+              --json headRefName,mergedAt \
+              --jq '.[] | select(.headRefName | startswith("bot/update-image-digests-")) | .mergedAt')
           fi
-          # ci.yml is dispatched alongside the other post-merge workflows,
-          # so a ci.yml run on the merge SHA is the coverage marker for all
-          # of them (push runs from human merges also count).
-          covered=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
-            --branch main --limit 30 --json headSha \
-            --jq 'map(.headSha) | join(" ")')
-          while IFS=$'\t' read -r pr merge_sha; do
-            [ -n "$merge_sha" ] || continue
-            case " $covered " in
-              *" $merge_sha "*)
-                echo "post-merge verification already covers #$pr ($merge_sha)" \
-                  | tee -a "$GITHUB_STEP_SUMMARY"
-                ;;
-              *)
-                echo "backfilling post-merge verification for #$pr ($merge_sha)" \
-                  | tee -a "$GITHUB_STEP_SUMMARY"
-                for wf in ci.yml locked-image-check.yml workflow-lint.yml; do
-                  gh workflow run "$wf" --repo "$GITHUB_REPOSITORY" --ref main \
-                    || echo "::warning::post-merge dispatch of $wf failed"
-                done
-                ;;
-            esac
-          done <<< "$merged"
+          if [ "$dispatch_post_merge" = true ]; then
+            gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref main || true
+            gh workflow run locked-image-check.yml --repo "$GITHUB_REPOSITORY" --ref main || true
+            # Match the pin script's post-merge dispatch list.
+            gh workflow run workflow-lint.yml --repo "$GITHUB_REPOSITORY" --ref main || true
+            echo "dispatched post-merge verification on main" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi

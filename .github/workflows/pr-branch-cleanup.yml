@@ -29,6 +29,9 @@ jobs:
       contents: write # git ref deletion
       pull-requests: read # the sweep checks for open pull requests
     steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - name: Delete the closed pull request's automation branch
         if: >-
           github.event_name == 'pull_request'
@@ -41,9 +44,10 @@ jobs:
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           # The merge may have already deleted the branch; keep the raw 422
-          # JSON off the log so it does not mask real failures.
-          if ! gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" \
-              2>/dev/null; then
+          # JSON off the log so it does not mask real failures. --silent hides
+          # the error body gh api writes to stdout.
+          if ! gh api --silent -X DELETE \
+              "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" 2>/dev/null; then
             echo "branch $BRANCH is already gone"
           fi
       - name: Sweep automation branches with no open pull request
@@ -57,12 +61,22 @@ jobs:
           while IFS= read -r branch; do
             open=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open \
               --head "$branch" --json number --jq 'length')
-            if [ "$open" = "0" ]; then
-              if gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" \
-                  2>/dev/null; then
-                echo "deleted stale branch $branch"
-              else
-                echo "failed to delete $branch"
-              fi
+            if [ "$open" != "0" ]; then
+              continue
+            fi
+            # A bot branch can briefly exist before its pull request is
+            # opened; skip branches whose tip commit is younger than 10 min.
+            ts=$(gh api "repos/$GITHUB_REPOSITORY/commits/$branch" \
+              --jq '.commit.committer.date' 2>/dev/null || echo "")
+            if [ -n "$ts" ] \
+                && [ "$(( $(date +%s) - $(date -d "$ts" +%s) ))" -lt 600 ]; then
+              echo "skipping new branch $branch"
+              continue
+            fi
+            if gh api --silent -X DELETE \
+                "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" 2>/dev/null; then
+              echo "deleted stale branch $branch"
+            else
+              echo "failed to delete $branch"
             fi
           done < branches.txt
