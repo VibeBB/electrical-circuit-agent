@@ -71,12 +71,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve image owner
         run: |
-          echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
-          echo "TRIVY_DB_WEEK=$(date -u +%G-W%V)" >> "$GITHUB_ENV"
-          # One Trivy cache dir for every scan in the job; restored and
-          # saved weekly via actions/cache so the vulnerability DB is not
-          # refetched per run (same pattern as container-audit.yml).
-          echo "TRIVY_CACHE_DIR=$RUNNER_TEMP/trivy-cache" >> "$GITHUB_ENV"
+          # The Trivy cache dir is shared by every scan in the job and
+          # restored/saved weekly via actions/cache so the vulnerability
+          # DB is not refetched per run (same pattern as container-audit.yml).
+          {
+            echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}"
+            echo "TRIVY_DB_WEEK=$(date -u +%G-W%V)"
+            echo "TRIVY_CACHE_DIR=$RUNNER_TEMP/trivy-cache"
+          } >> "$GITHUB_ENV"
       - name: Restore Trivy vulnerability DB cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
