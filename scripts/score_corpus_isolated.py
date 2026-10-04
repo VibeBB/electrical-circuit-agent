@@ -128,6 +128,7 @@ def build_docker_argv(
     source_root: Path,
     candidate_root: Path,
     output_dir: Path,
+    datasheet_cache: Path | None = None,
     entry_id: str,
     part_spec: str,
     footprint: str,
@@ -136,7 +137,7 @@ def build_docker_argv(
     model: str,
 ) -> list[str]:
     """Build the constrained Docker invocation for one corpus entry."""
-    return [
+    arguments = [
         "docker",
         "run",
         "--rm",
@@ -149,38 +150,71 @@ def build_docker_argv(
         _mount(source_root, "/circuit-source", readonly=True),
         "--mount",
         _mount(corpus_root, "/corpus", readonly=True),
-        "--mount",
-        _mount(candidate_root, "/candidate", readonly=True),
-        "--mount",
-        _mount(output_dir, "/output", readonly=False),
-        "--env",
-        "PYTHONPATH=/circuit-source",
-        "--env",
-        "PYTHONDONTWRITEBYTECODE=1",
-        "--workdir",
-        "/tmp",
-        image,
-        "python3",
-        "-c",
-        _CONTAINER_SCORE,
-        entry_id,
-        part_spec,
-        footprint,
-        symbol_lib,
-        symbol_name,
-        model,
     ]
+    if datasheet_cache is not None:
+        arguments.extend(
+            [
+                "--mount",
+                _mount(datasheet_cache, "/datasheets", readonly=True),
+                "--env",
+                "CIRCUIT_CORPUS_CACHE=/datasheets",
+            ]
+        )
+    arguments.extend(
+        [
+            "--mount",
+            _mount(candidate_root, "/candidate", readonly=True),
+            "--mount",
+            _mount(output_dir, "/output", readonly=False),
+            "--env",
+            "PYTHONPATH=/circuit-source",
+            "--env",
+            "PYTHONDONTWRITEBYTECODE=1",
+            "--workdir",
+            "/tmp",
+            image,
+            "python3",
+            "-c",
+            _CONTAINER_SCORE,
+            entry_id,
+            part_spec,
+            footprint,
+            symbol_lib,
+            symbol_name,
+            model,
+        ]
+    )
+    return arguments
 
 
-def _corpus_hashes(corpus_root: Path) -> tuple[str, dict[str, str]]:
+def _corpus_hashes(corpus_root: Path) -> tuple[str, dict[str, str], dict[str, str]]:
     manifest_path = corpus_root / "corpus.json"
     manifest = corpus.load_manifest(manifest_path)
     manifest_hash = corpus.sha256(manifest_path)
     truth_hashes: dict[str, str] = {}
+    datasheet_hashes: dict[str, str] = {}
     for entry in manifest.entries:
         _, truth_hash = corpus.load_truth(corpus_root, entry)
         truth_hashes[entry.id] = truth_hash
-    return manifest_hash, truth_hashes
+        datasheet_hashes[entry.id] = entry.datasheet.sha256
+    return manifest_hash, truth_hashes, datasheet_hashes
+
+
+def _matching_datasheet_sha256(cache_root: Path | None, expected_sha256: str) -> str | None:
+    if cache_root is None:
+        return None
+    try:
+        cached_pdfs = sorted(cache_root.glob("*.pdf"))
+    except OSError:
+        return None
+    for path in cached_pdfs:
+        try:
+            digest = corpus.sha256(path)
+        except OSError:
+            continue
+        if digest == expected_sha256:
+            return digest
+    return None
 
 
 def run_isolated_score(
@@ -195,6 +229,7 @@ def run_isolated_score(
     output_dir: Path,
     corpus_root: Path = _DEFAULT_CORPUS,
     source_root: Path = _REPO_ROOT / "src",
+    datasheet_cache: Path | None = None,
     image: str | None = None,
     lock_path: Path = _DEFAULT_LOCK,
     runner: Runner | None = None,
@@ -205,6 +240,11 @@ def run_isolated_score(
     if docker_path is None:
         raise CorpusIsolationError("Docker is unavailable")
     execute = runner or subprocess.run
+    configured_cache = datasheet_cache
+    if configured_cache is None:
+        cache_env = os.environ.get("CIRCUIT_CORPUS_CACHE")
+        if cache_env:
+            configured_cache = Path(cache_env)
 
     try:
         corpus_path = corpus_root.resolve(strict=True)
@@ -212,10 +252,22 @@ def run_isolated_score(
         candidate_path = candidate_library.resolve(strict=True)
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir.resolve(strict=True)
+        datasheet_cache_path = (
+            configured_cache.expanduser().resolve(strict=True)
+            if configured_cache is not None
+            else None
+        )
     except OSError as exc:
         raise CorpusIsolationError(f"scoring input directory is unavailable: {exc}") from exc
-    if not corpus_path.is_dir() or not source_path.is_dir() or not candidate_path.is_dir():
-        raise CorpusIsolationError("corpus, source, and candidate inputs must be directories")
+    if (
+        not corpus_path.is_dir()
+        or not source_path.is_dir()
+        or not candidate_path.is_dir()
+        or (datasheet_cache_path is not None and not datasheet_cache_path.is_dir())
+    ):
+        raise CorpusIsolationError(
+            "corpus, source, candidate, and datasheet-cache inputs must be directories"
+        )
 
     candidate_files = {
         "part_spec": _relative_candidate_file(candidate_path, part_spec),
@@ -243,15 +295,19 @@ def run_isolated_score(
     if _DIGEST.fullmatch(image_digest) is None:
         raise CorpusIsolationError("Docker did not report a valid image digest")
 
-    manifest_hash, truth_hashes = _corpus_hashes(corpus_path)
+    manifest_hash, truth_hashes, datasheet_hashes = _corpus_hashes(corpus_path)
     if entry_id not in truth_hashes:
         raise CorpusIsolationError(f"unknown corpus entry id: {entry_id}")
+    datasheet_cache_pdf_sha256 = _matching_datasheet_sha256(
+        datasheet_cache_path, datasheet_hashes[entry_id]
+    )
     argv = build_docker_argv(
         image=image_ref,
         corpus_root=corpus_path,
         source_root=source_path,
         candidate_root=candidate_path,
         output_dir=output_path,
+        datasheet_cache=datasheet_cache_path,
         entry_id=entry_id,
         part_spec=candidate_files["part_spec"],
         footprint=candidate_files["footprint"],
@@ -282,6 +338,7 @@ def run_isolated_score(
         "image_digest": image_digest,
         "manifest_sha256": manifest_hash,
         "truth_sha256_by_entry": truth_hashes,
+        "datasheet_cache_pdf_sha256": datasheet_cache_pdf_sha256,
         "score": score,
     }
     report_path = output_path / "corpus-score-report.json"
@@ -302,6 +359,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--corpus-root", type=Path, default=_DEFAULT_CORPUS)
+    cache_env = os.environ.get("CIRCUIT_CORPUS_CACHE")
+    default_cache = Path(cache_env).expanduser() if cache_env else None
+    parser.add_argument(
+        "--datasheet-cache",
+        type=Path,
+        default=default_cache,
+        help="read-only datasheet PDF cache (defaults to CIRCUIT_CORPUS_CACHE)",
+    )
     parser.add_argument("--image", default=None, help="local circuit-tools image override")
     parser.add_argument("--lock", type=Path, default=_DEFAULT_LOCK)
     args = parser.parse_args(argv)
@@ -316,6 +381,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             model=args.model,
             output_dir=args.output_dir,
             corpus_root=args.corpus_root,
+            datasheet_cache=args.datasheet_cache,
             image=args.image,
             lock_path=args.lock,
         )
