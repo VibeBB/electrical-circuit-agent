@@ -147,7 +147,7 @@ required_check_counts() {
 read_required_checks() {
   local checks_json checks_error
   : > "$REQUIRED_CHECKS_STDERR_FILE"
-  checks_json=$(gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required \
+  checks_json=$(retry gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required \
     --json name,state,bucket 2>"$REQUIRED_CHECKS_STDERR_FILE") || true
   if [ -n "$checks_json" ] &&
     jq -e 'type == "array"' >/dev/null 2>&1 <<< "$checks_json"; then
