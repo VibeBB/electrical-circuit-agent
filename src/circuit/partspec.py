@@ -234,6 +234,11 @@ class ConnectorBoardEdge(BaseModel):
 
 
 class ConnectorMatingEnvelope(BaseModel):
+    """Use KiCad's 3D frame: z=0 is board top; positive z points away from the mounted copper side.
+
+    The board occupies [-thickness, 0].
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     mating_mpn: str = Field(min_length=1)

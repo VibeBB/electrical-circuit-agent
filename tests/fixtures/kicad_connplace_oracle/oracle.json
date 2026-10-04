@@ -1,0 +1,12 @@
+{
+  "artifact_kind": "circuit_connplace_kicad_oracle",
+  "board_path": "tests/fixtures/kicad_connplace_oracle/rotation_oracle.kicad_pcb",
+  "board_saved_with": "kicad-cli pcb upgrade --force",
+  "board_sha256": "4c06afc4242c523635801e23d4642c5be95b9645c639fcc4d059b9f5d6885e37",
+  "bottom_storage_note": "The B.Cu placements are direct placements, not GUI flips. In this KiCad-saved fixture, their stored local children match the on-disk library footprint.",
+  "dxf_path": "tests/fixtures/kicad_connplace_oracle/rotation_oracle.dxf",
+  "dxf_sha256": "d0c68bdb5a49d13cfd6300efd1be874595c3e7303f73cfbd196d719bf3ef597c",
+  "footprint_path": "tests/fixtures/kicad_connplace_oracle/Asymmetric.kicad_mod",
+  "footprint_sha256": "c61b869b6e069c78d156263f7cfcaad4d34eba14a199a205d4aad74e5d7e627c",
+  "kicad_cli_version": "10.99.0"
+}

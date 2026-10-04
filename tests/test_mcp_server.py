@@ -1658,11 +1658,13 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
             konnect = annotations_by_name["circuit_konnect_call"]
             doctor = annotations_by_name["circuit_doctor"]
             erc = annotations_by_name["circuit_erc"]
+            connector_placement = annotations_by_name["circuit_connector_placement_check"]
             review_status = annotations_by_name["circuit_library_review_status"]
             review_apply = annotations_by_name["circuit_library_review_apply"]
             assert konnect is not None and konnect.destructiveHint is True
             assert doctor is not None and doctor.readOnlyHint is True
             assert erc is not None and erc.readOnlyHint is False
+            assert connector_placement is not None and connector_placement.readOnlyHint is False
             assert review_status is not None and review_status.readOnlyHint is False
             assert review_apply is not None and review_apply.readOnlyHint is False
             result = await session.call_tool("circuit_kicad_version", {})

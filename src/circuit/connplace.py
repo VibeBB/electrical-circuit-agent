@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import humanrequest, sexpr
+from . import humanrequest, occt, sexpr
 from .partspec import ConnectorMatingEnvelope, Dimension, PartSpec, load_part_spec
 
 Point = tuple[float, float]
@@ -52,6 +52,7 @@ class _BoardFootprint:
     y: float
     rotation: float
     side: Literal["F.Cu", "B.Cu"]
+    scale: Point
     courtyard: tuple[Point, ...]
     edge_lines: tuple[Segment, ...]
     properties: dict[str, str]
@@ -237,12 +238,31 @@ def _board_thickness(root: list[sexpr.SExpr]) -> float | None:
 
 
 def _parse_board_footprint(node: list[sexpr.SExpr]) -> _BoardFootprint:
-    position = _first(node, "at")
-    if position is None:
-        raise ValueError("board footprint has no placement")
-    x = _number(position[1], "footprint x")
-    y = _number(position[2], "footprint y")
-    rotation = _number(position[3], "footprint rotation") if len(position) > 3 else 0.0
+    transform = _first(node, "transform")
+    if transform is None:
+        position = _first(node, "at")
+        if position is None:
+            raise ValueError("board footprint has no placement")
+        x = _number(position[1], "footprint x")
+        y = _number(position[2], "footprint y")
+        rotation = _number(position[3], "footprint rotation") if len(position) > 3 else 0.0
+        scale = (1.0, 1.0)
+    else:
+        translation = _first(transform, "translate")
+        angle = _first(transform, "rotate")
+        scale_node = _first(transform, "scale")
+        if translation is None:
+            raise ValueError("board footprint transform has no translation")
+        x, y = _point(translation, "footprint translation")
+        rotation = _number(angle[1], "footprint rotation") if angle is not None else 0.0
+        scale = (
+            (
+                _number(scale_node[1], "footprint x scale"),
+                _number(scale_node[2], "footprint y scale"),
+            )
+            if scale_node is not None
+            else (1.0, 1.0)
+        )
     layer = _layer(node)
     side: Literal["F.Cu", "B.Cu"] = "B.Cu" if layer.startswith("B.") else "F.Cu"
     ref = ""
@@ -308,6 +328,7 @@ def _parse_board_footprint(node: list[sexpr.SExpr]) -> _BoardFootprint:
         y=y,
         rotation=rotation,
         side=side,
+        scale=scale,
         courtyard=tuple(courtyard_points),
         edge_lines=tuple(edge_lines),
         properties=properties,
@@ -316,11 +337,22 @@ def _parse_board_footprint(node: list[sexpr.SExpr]) -> _BoardFootprint:
 
 
 def _transform(point: Point, footprint: _BoardFootprint) -> Point:
-    local_x = -point[0] if footprint.side == "B.Cu" else point[0]
+    local_x = point[0] * footprint.scale[0]
+    local_y = point[1] * footprint.scale[1]
     angle = math.radians(footprint.rotation)
     return (
-        footprint.x + local_x * math.cos(angle) - point[1] * math.sin(angle),
-        footprint.y + local_x * math.sin(angle) + point[1] * math.cos(angle),
+        footprint.x + local_x * math.cos(angle) + local_y * math.sin(angle),
+        footprint.y - local_x * math.sin(angle) + local_y * math.cos(angle),
+    )
+
+
+def _transform_vector(vector: Point, footprint: _BoardFootprint) -> Point:
+    local_x = vector[0] * footprint.scale[0]
+    local_y = vector[1] * footprint.scale[1]
+    angle = math.radians(footprint.rotation)
+    return (
+        local_x * math.cos(angle) + local_y * math.sin(angle),
+        -local_x * math.sin(angle) + local_y * math.cos(angle),
     )
 
 
@@ -427,20 +459,23 @@ def _neighbor_height(
     spec: PartSpec | None,
     board_path: Path,
 ) -> float | None:
+    verified_heights: list[float] = []
+    property_height: float | None = None
     property_value = footprint.properties.get("circuit_height_mm")
     if property_value is not None:
         try:
             height = float(property_value)
         except ValueError:
             height = math.nan
-        if math.isfinite(height) and height >= 0:
-            return height
+        if math.isfinite(height) and height > 0:
+            property_height = height
     if spec is not None:
         try:
-            return _maximum_dimension_value(spec.package.height)
+            height = _maximum_dimension_value(spec.package.height)
         except ValueError:
-            pass
-    from . import occt
+            height = math.nan
+        if math.isfinite(height) and height > 0:
+            verified_heights.append(height)
 
     for model in footprint.models:
         model_path = model.replace("${KIPRJMOD}", str(board_path.parent))
@@ -455,8 +490,14 @@ def _neighbor_height(
             continue
         bounds = [solid.bbox for solid in facts.solids]
         if facts.valid and bounds:
-            return max(bbox.z_max for bbox in bounds) - min(bbox.z_min for bbox in bounds)
-    return None
+            height = max(bbox.z_max for bbox in bounds) - min(bbox.z_min for bbox in bounds)
+            if math.isfinite(height) and height > 0:
+                verified_heights.append(height)
+    if not verified_heights:
+        return None
+    if property_height is not None:
+        verified_heights.append(property_height)
+    return max(verified_heights)
 
 
 def _envelope_box(
@@ -482,14 +523,7 @@ def _envelope_box(
         "+y": (0.0, 1.0),
         "-y": (0.0, -1.0),
     }
-    dx, dy = vectors[connector.mating_axis]
-    if footprint.side == "B.Cu":
-        dx = -dx
-    angle = math.radians(footprint.rotation)
-    axis = (
-        dx * math.cos(angle) - dy * math.sin(angle),
-        dx * math.sin(angle) + dy * math.cos(angle),
-    )
+    axis = _transform_vector(vectors[connector.mating_axis], footprint)
     swept = [*transformed, *((x + axis[0] * travel, y + axis[1] * travel) for x, y in transformed)]
     return _bbox(swept) or (0.0, 0.0, 0.0, 0.0)
 
@@ -668,7 +702,7 @@ def check_connector_placement(
         envelope_box = _envelope_box(envelope, footprint, spec)
         axis = connector.mating_axis
         thickness = _board_thickness(parsed)
-        overlaps_board_z = thickness is None or envelope.z_min <= thickness
+        overlaps_board_z = thickness is None or envelope.z_min < -1e-6
         if (
             axis != "+z"
             and polygon
