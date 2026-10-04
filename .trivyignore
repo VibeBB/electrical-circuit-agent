@@ -117,3 +117,13 @@ CVE-2026-56854 exp:2027-01-03
 # hadolint + `docker build --check`. Re-evaluate on the openhands-sdk bump —
 # same deferral as the .venv findings.
 DS-0029 exp:2027-01-03
+#
+# --- CIS baseline: build/CI tool images ---------------------------------
+# DS-0002 (runs as root) and DS-0026 (no HEALTHCHECK): these images are CI
+# build/tool containers, not deployed services. Non-root would change
+# ownership of mounted workspace artifacts for no exploitable gain, and a
+# HEALTHCHECK is meaningless for batch tooling (the publish and audit
+# gates are the health checks). See docs/operations.md
+# "Container hardening -> CIS baseline".
+AVD-DS-0002 exp:2027-01-04
+AVD-DS-0026 exp:2027-01-04
