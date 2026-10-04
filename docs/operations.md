@@ -326,8 +326,19 @@ scans do not produce a second red "Path does not exist" step.
 
 `release.yml` accepts a `dry_run` input that computes the version, runs the
 verify and install-smoke jobs, and builds the release zip while skipping
-every write (push, version-bump PR, merge, tag, `gh release create`). Use
-it to rehearse the release flow end-to-end before the first real release.
+every write (push, version-bump PR, merge, tag, `gh release create`). The
+bump-version job's state machine lives in `scripts/release_bump.sh`, covered
+by `tests/test_release_bump.py` (stubbed `gh`/`git` rehearse the dry-run,
+direct-push, and PR-fallback flows). Use it to rehearse the release flow
+end-to-end before the first real release.
+
+`publish-circuit-images.yml` accepts a `dry_run` dispatch input that rehearses
+the whole pipeline: the images build into the local daemon (`--load`, never
+pushed) and the Trivy SARIF/JSON gates, the SPDX SBOM chain, measurements, and
+the tools smoke still run, while the irreversible steps are skipped — no
+immutable-tag pushes, no `:latest` promotion, no provenance or SBOM
+attestations, no SARIF uploads to code scanning, and no digest-lock PR or
+post-merge dispatches. The run's step summary lists the skipped steps.
 
 The publisher creates a GitHub build-provenance attestation for the
 `circuit-tools` and `circuit-server` images and stores each URL in the
@@ -1478,4 +1489,6 @@ here so audits do not re-flag them:
   evaluate pull requests.
 - `release.yml` is dispatch-only; run it once with `dry_run=true` before
   the first real release to rehearse bump, verify, and install-smoke
-  without creating a GitHub release.
+  without creating a GitHub release. `publish-circuit-images.yml` likewise
+  accepts a `dry_run=true` dispatch that rehearses the pipeline without
+  pushing or locking images.

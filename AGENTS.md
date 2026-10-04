@@ -121,8 +121,15 @@ existing post-merge main workflows. If required checks are still pending at
 the deadline, the publisher arms squash auto-merge with branch deletion and
 exits successfully.
 
-SPDX SBOM generation prefers registry pulls, uses runner temporary storage,
-and disables file metadata. The attested SBOM is package-level SPDX 2.3;
-file entries and relationships involving files are omitted to stay below
-16 MiB. The full Syft SBOM is attached to the workflow run as a 90-day
-artifact.
+SPDX SBOM generation prefers registry pulls (the daemon in publish
+`dry_run` rehearsals), uses runner temporary storage, and disables file
+metadata. The attested SBOM is package-level SPDX 2.3; file entries and
+relationships involving files are omitted to stay below 16 MiB. The full
+Syft SBOM is attached to the workflow run as a 90-day artifact.
+
+The release bump-version state machine lives in `scripts/release_bump.sh`
+and is covered by `tests/test_release_bump.py` (stubbed `gh`/`git`).
+`release.yml` and `publish-circuit-images.yml` each accept a `dry_run`
+dispatch input that rehearses the flow while skipping every irreversible
+step (pushes, merges, tag/release creation, `:latest` promotion,
+attestations, SARIF uploads, and the digest-lock PR).

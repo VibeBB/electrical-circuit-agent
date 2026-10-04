@@ -269,7 +269,10 @@ def test_publish_workflow_uses_pin_helper_and_sbom_guard() -> None:
     assert "REQUIRED_WAIT_ATTEMPTS=" in helper and ":-60}" in helper
     assert "REQUIRED_WAIT_SECONDS=" in helper and ":-15}" in helper
     assert 'gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required' in helper
-    assert "SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: registry" in workflow
+    assert (
+        "SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: "
+        "${{ inputs.dry_run == true && 'docker' || 'registry' }}" in workflow
+    )
     assert "TMPDIR: ${{ runner.temp }}" in workflow
     assert "SYFT_FILE_METADATA_SELECTION: none" in workflow
     assert "Guard tools SPDX SBOM size" in workflow

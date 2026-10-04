@@ -37,9 +37,9 @@ jobs:
       contents: write # push the version bump to main or a bot branch
       pull-requests: write # open and merge the version-bump PR fallback
     outputs:
-      version: ${{ steps.bump.outputs.version || steps.bump_live.outputs.version }}
-      tag: ${{ steps.bump.outputs.tag || steps.bump_live.outputs.tag }}
-      sha: ${{ steps.bump.outputs.sha || steps.bump_live.outputs.sha }}
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+      sha: ${{ steps.bump.outputs.sha }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -54,188 +54,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: Bump version files (dry run)
-        id: bump
-        if: inputs.dry_run == true
-        env:
-          BUMP: ${{ inputs.bump }}
-          SET_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          SET_VERSION="${SET_VERSION#v}"
-          CURRENT=$(python3 -c 'import tomllib,sys;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
-          if [ -n "$SET_VERSION" ]; then
-            if [ "$SET_VERSION" = "$CURRENT" ]; then
-              VERSION="$CURRENT"
-            else
-              VERSION=$(python3 scripts/bump_version.py --set "$SET_VERSION" --dry-run)
-            fi
-          else
-            VERSION=$(python3 scripts/bump_version.py --bump "$BUMP" --dry-run)
-          fi
-          {
-            echo "sha=$(git rev-parse HEAD)"
-            echo "version=$VERSION"
-            echo "tag=v$VERSION"
-          } >> "$GITHUB_OUTPUT"
-          echo "dry run: would release v$VERSION at $(git rev-parse HEAD); no push, PR, tag, or release was created" >> "$GITHUB_STEP_SUMMARY"
       - name: Bump version files
-        id: bump_live
-        if: inputs.dry_run != true
+        id: bump
         env:
-          GH_TOKEN: ${{ github.token }}
           BUMP: ${{ inputs.bump }}
           SET_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          retry() {
-            # Transient GitHub API/server errors (HTTP 5xx, TLS resets,
-            # truncated responses) should not hard-fail the release: retry
-            # gh/git calls with backoff before giving up.
-            local attempt
-            for attempt in 1 2 3 4 5; do
-              "$@" && return 0
-              sleep $((attempt * 10))
-            done
-            return 1
-          }
-          SET_VERSION="${SET_VERSION#v}"
-          CURRENT=$(python3 -c 'import tomllib,sys;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
-          SKIP_COMMIT=false
-          if [ -n "$SET_VERSION" ]; then
-            if [ "$SET_VERSION" = "$CURRENT" ]; then
-              VERSION="$CURRENT"
-              python3 scripts/bump_version.py --dry-run --bump patch >/dev/null
-              SKIP_COMMIT=true
-            else
-              VERSION=$(python3 scripts/bump_version.py --set "$SET_VERSION")
-            fi
-          else
-            VERSION=$(python3 scripts/bump_version.py --bump "$BUMP")
-          fi
-          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}"; then
-            echo "::error::tag v${VERSION} already exists" >&2
-            exit 1
-          fi
-          if [ "$SKIP_COMMIT" = true ]; then
-            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add plugins/circuit/.plugin/plugin.json pyproject.toml \
-              plugins/circuit/skills/*/SKILL.md uv.lock
-            git commit -m "Release v${VERSION}: update version files"
-            if retry git push origin HEAD:main; then
-              echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-            else
-              # No bypass actor is configured, so the pull_request rule
-              # rejects a direct push. Route the bump commit through a pull
-              # request instead — same self-approve + dispatched checks +
-              # auto-merge flow as bard-agent.
-              echo "::warning::direct push to main rejected; routing the version bump through a pull request"
-              branch="bot/release-bump-v${VERSION}-${GITHUB_RUN_ID}"
-              retry git push origin "HEAD:refs/heads/${branch}"
-              body=$(printf '%s\n' \
-                "Automated version bump for the Release workflow." \
-                "" \
-                "version: v${VERSION}" \
-                "workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")
-              pr_url=$(retry gh pr create \
-                --repo "$GITHUB_REPOSITORY" \
-                --base main \
-                --head "$branch" \
-                --title "Release v${VERSION}: update version files" \
-                --body "$body")
-              echo "version-bump PR: $pr_url" >> "$GITHUB_STEP_SUMMARY"
-              # Pull_request runs on the bot branch queue as
-              # approval-gated action_required runs; poll and approve. A
-              # rejected approval is non-fatal: the dispatched run below
-              # still satisfies required checks.
-              gated_seen=0
-              empty_streak=0
-              for _ in $(seq 1 10); do
-                batch=$(retry gh run list --repo "$GITHUB_REPOSITORY" --branch "$branch" \
-                  --event pull_request --status action_required --json databaseId --jq '.[].databaseId' || true)
-                if [ -z "$batch" ]; then
-                  empty_streak=$((empty_streak + 1))
-                  if { [ "$gated_seen" -eq 0 ] && [ "$empty_streak" -ge 3 ]; } || \
-                     { [ "$gated_seen" -eq 1 ] && [ "$empty_streak" -ge 2 ]; }; then
-                    break
-                  fi
-                  sleep 30
-                  continue
-                fi
-                empty_streak=0
-                gated_seen=1
-                for gated in $batch; do
-                  retry gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$gated/approve" || true
-                done
-                sleep 10
-              done
-              started=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-              retry gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
-              retry gh workflow run workflow-lint.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
-              failed=0
-              for wf in ci.yml workflow-lint.yml; do
-                run_id=""
-                for _ in $(seq 1 30); do
-                  sleep 10
-                  run_id=$(retry gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --branch "$branch" \
-                    --event workflow_dispatch --created ">=$started" --json databaseId --jq '.[0].databaseId // empty' || true)
-                  [ -n "$run_id" ] && break
-                done
-                if [ -z "$run_id" ]; then
-                  echo "$wf workflow_dispatch for $branch was not observed; the version-bump PR was left open" >> "$GITHUB_STEP_SUMMARY"
-                  exit 1
-                fi
-                echo "$wf run for $branch: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-                gh run watch --repo "$GITHUB_REPOSITORY" "$run_id" --interval 30 || true
-                # An empty conclusion is a transient API failure, not a run
-                # verdict: re-query until the API reports the conclusion.
-                conclusion=""
-                for _ in $(seq 1 6); do
-                  conclusion=$(retry gh run view --repo "$GITHUB_REPOSITORY" "$run_id" \
-                    --json conclusion --jq '.conclusion // empty' || true)
-                  [ -n "$conclusion" ] && break
-                  sleep 10
-                done
-                conclusion="${conclusion:-unknown}"
-                echo "$wf conclusion for $branch: $conclusion"
-                if [ "$conclusion" != "success" ]; then
-                  failed=1
-                fi
-              done
-              if [ "$failed" -ne 0 ]; then
-                echo "version-bump PR checks failed; the PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
-                exit 1
-              fi
-              # Arm auto-merge on the version-bump PR. Checks are already
-              # green here so the merge lands immediately; arming failure
-              # leaves the PR open for manual merge.
-              retry gh pr merge --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch "$pr_url" || {
-                echo "version-bump PR auto-merge could not be armed; the PR was left open for manual review" >> "$GITHUB_STEP_SUMMARY"
-                echo "::error::version-bump PR $pr_url was not auto-merged; merge it, then re-run Release with version=${VERSION}."
-                exit 1
-              }
-              # Wait for the merge to land on main so the release SHA is the
-              # real main tip, not the branch head.
-              merged=false
-              for _ in $(seq 1 40); do
-                merged_at=$(retry gh api "repos/$GITHUB_REPOSITORY/pulls/${pr_url##*/}" --jq '.merged_at // empty' || true)
-                [ -n "$merged_at" ] && { merged=true; break; }
-                sleep 30
-              done
-              if [ "$merged" != true ]; then
-                echo "version-bump PR did not merge within the wait; it was left open" >> "$GITHUB_STEP_SUMMARY"
-                echo "::error::merge $pr_url, then re-run Release with version=${VERSION}."
-                exit 1
-              fi
-              git fetch -q origin main
-              echo "sha=$(git rev-parse origin/main)" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          DRY_RUN: ${{ inputs.dry_run }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/release_bump.sh
 
   verify:
     needs: bump-version

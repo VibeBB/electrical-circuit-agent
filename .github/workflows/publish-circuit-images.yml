@@ -31,6 +31,11 @@ on:
         required: false
         default: false
         type: boolean
+      dry_run:
+        description: "Rehearse the pipeline: build locally and run the scan/SBOM gates without pushing tags, promoting :latest, attesting, uploading SARIF, or opening the digest-lock PR"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: publish-circuit-images
@@ -131,9 +136,12 @@ jobs:
           build-args: |
             IMAGE_REVISION=${{ github.sha }}
             CERN_COMMIT=${{ steps.source.outputs.cern_commit }}
-          push: true
           # Push only the immutable sha tag: :latest is promoted after the
-          # Trivy gate passes so a failing image never serves it.
+          # Trivy gate passes so a failing image never serves it. Dry runs
+          # load the image into the local daemon for the scans instead of
+          # pushing.
+          push: ${{ inputs.dry_run != true }}
+          load: ${{ inputs.dry_run }}
           tags: |
             ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
           cache-from: type=gha
@@ -144,9 +152,11 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          # Scan the exact pushed digest — the content the SBOM and
-          # provenance attestations bind to.
-          scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools@${{ steps.tools.outputs.digest }}
+          # Scan the sha tag the build pushed — it resolves to the pushed
+          # digest remotely on real runs and to the daemon-loaded image in
+          # dry runs; either way it is the content the SBOM and provenance
+          # attestations bind to.
+          scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
           version: v0.75.0
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
@@ -156,7 +166,7 @@ jobs:
           output: trivy-circuit-tools.sarif
           limit-severities-for-sarif: true
       - name: Promote tools :latest
-        if: inputs.skip_tools != true
+        if: inputs.skip_tools != true && inputs.dry_run != true
         env:
           TOOLS_DIGEST: ${{ steps.tools.outputs.digest }}
         run: |
@@ -173,7 +183,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools@${{ steps.tools.outputs.digest }}
+          scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
           version: v0.75.0
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
@@ -190,7 +200,8 @@ jobs:
           python3 scripts/trivy_report_utils.py blocking-cves \
             trivy-circuit-tools.json circuit-tools >> "$GITHUB_STEP_SUMMARY"
       - name: Upload tools Trivy SARIF
-        if: ${{ always() && inputs.skip_tools != true && hashFiles('trivy-circuit-tools.sarif') != '' }}
+        # A rehearsal must not file code-scanning alerts.
+        if: ${{ always() && inputs.skip_tools != true && inputs.dry_run != true && hashFiles('trivy-circuit-tools.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: trivy-circuit-tools.sarif
@@ -204,7 +215,7 @@ jobs:
           retention-days: 90
       - name: Attest tools image provenance
         id: attest
-        if: inputs.skip_tools != true
+        if: inputs.skip_tools != true && inputs.dry_run != true
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/vibebb/circuit-tools
@@ -213,23 +224,35 @@ jobs:
       - name: Resolve tools digest
         env:
           BUILT_DIGEST: ${{ steps.tools.outputs.digest }}
+          SKIP_TOOLS: ${{ inputs.skip_tools }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          if [ "${{ inputs.skip_tools }}" = true ]; then
+          if [ "$SKIP_TOOLS" = true ]; then
             TOOLS_REF=$(uv run python scripts/print_locked_image.py --entry circuit_tools)
             uv run python scripts/pull_locked_image.py --entry circuit_tools --record "$RUNNER_TEMP/pull-tools.json"
             TOOLS_TAG=$(python3 -c 'import json; print(json.load(open("docker/image-digests.json", encoding="utf-8"))["circuit_tools"]["tag"])')
+            TOOLS_DIGEST="${TOOLS_REF##*@}"
           else
             case "$BUILT_DIGEST" in sha256:*) ;; *) echo "invalid tools digest: $BUILT_DIGEST" >&2; exit 1 ;; esac
-            TOOLS_REF="ghcr.io/${IMAGE_OWNER}/circuit-tools@${BUILT_DIGEST}"
+            if [ "$DRY_RUN" = true ]; then
+              # The build is loaded into the local daemon only, so local
+              # consumers resolve the sha tag, not a pushed digest.
+              TOOLS_REF="ghcr.io/${IMAGE_OWNER}/circuit-tools:${SOURCE_SHA}-tools"
+            else
+              TOOLS_REF="ghcr.io/${IMAGE_OWNER}/circuit-tools@${BUILT_DIGEST}"
+            fi
             TOOLS_TAG="${SOURCE_SHA}-tools"
+            TOOLS_DIGEST="${BUILT_DIGEST}"
           fi
-          printf 'TOOLS_REF=%s\nTOOLS_DIGEST=%s\nTOOLS_TAG=%s\n' "$TOOLS_REF" "${TOOLS_REF##*@}" "$TOOLS_TAG" >> "$GITHUB_ENV"
+          printf 'TOOLS_REF=%s\nTOOLS_DIGEST=%s\nTOOLS_TAG=%s\n' "$TOOLS_REF" "$TOOLS_DIGEST" "$TOOLS_TAG" >> "$GITHUB_ENV"
       - name: Generate tools SPDX SBOM
         if: inputs.skip_tools != true
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         env:
-          SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: registry
+          # Dry runs read the daemon-loaded image; real runs pull the
+          # pushed digest from the registry.
+          SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: ${{ inputs.dry_run == true && 'docker' || 'registry' }}
           TMPDIR: ${{ runner.temp }}
           SYFT_FILE_METADATA_SELECTION: none
         with:
@@ -271,7 +294,7 @@ jobs:
               raise SystemExit("tools SBOM must use SPDX-2.3")
           PY
       - name: Attest tools SBOM
-        if: inputs.skip_tools != true
+        if: inputs.skip_tools != true && inputs.dry_run != true
         id: attest_sbom
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -294,9 +317,15 @@ jobs:
       - name: Verify published tools smoke
         env:
           TOOLS_REF: ${{ env.TOOLS_REF }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          docker pull "$TOOLS_REF"
+          # Dry-run images are already in the local daemon (built with
+          # --load, or pulled by pull_locked_image.py when tools are
+          # skipped); the sha tag does not exist in the registry.
+          if [ "$DRY_RUN" != true ]; then
+            docker pull "$TOOLS_REF"
+          fi
           docker run --rm --user circuit -v "$PWD/fixtures/smoke-board:/work:ro" "$TOOLS_REF" python3 /opt/circuit/bin/smoke_kicad11_konnect.py
       - name: Clone OpenHands SDK
         run: git clone --depth 1 --branch "v${SDK_VERSION}" https://github.com/OpenHands/software-agent-sdk "$RUNNER_TEMP/sdk"
@@ -337,39 +366,64 @@ jobs:
           # cache-from buildcache-*-main ref 404s on every publish and each
           # server build runs cold.
           OPENHANDS_BUILDKIT_CACHE_MODE: max
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
+          publish_flag="--push"
+          if [ "$DRY_RUN" = true ]; then
+            # Rehearsal: load the server image into the local daemon
+            # instead of pushing.
+            publish_flag="--load"
+          fi
           uv run --project "$RUNNER_TEMP/sdk" python \
             "$RUNNER_TEMP/sdk/openhands-agent-server/openhands/agent_server/docker/build.py" \
             --base-image "$TOOLS_REF" --image "ghcr.io/${IMAGE_OWNER}/circuit-server" \
-            --target source --platforms linux/amd64 --push --sdk-project-root "$RUNNER_TEMP/sdk"
+            --target source --platforms linux/amd64 "$publish_flag" --sdk-project-root "$RUNNER_TEMP/sdk"
       - name: Strip pip payload from server image
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           # Repackage the just-pushed tag: drop the unused pip payload (module,
           # dist-info, console scripts, ensurepip bundle) and the dead uv
           # cache, then resolve the digest below against the stripped image.
+          publish_flag="--push"
+          if [ "$DRY_RUN" = true ]; then
+            publish_flag="--load"
+          fi
           docker buildx build \
             --build-arg "BASE_IMAGE=ghcr.io/${IMAGE_OWNER}/circuit-server:${SOURCE_SHA}-latest-source" \
             --tag "ghcr.io/${IMAGE_OWNER}/circuit-server:${SOURCE_SHA}-latest-source" \
-            --platform linux/amd64 --push --provenance=false \
+            --platform linux/amd64 "$publish_flag" --provenance=false \
             -f docker/circuit-server-strip.Dockerfile .
       - name: Resolve server digest
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           SERVER_TAG="${SOURCE_SHA}-latest-source"
-          SERVER_DIGEST=$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' \
-            "ghcr.io/${IMAGE_OWNER}/circuit-server:${SERVER_TAG}" | tr -d '"')
+          if [ "$DRY_RUN" = true ]; then
+            # The image exists only in the local daemon: the image ID stands
+            # in for the manifest digest — the digest-bound steps
+            # (promote/attest/digest lock) are skipped in a dry run.
+            SERVER_DIGEST=$(docker image inspect --format '{{.Id}}' \
+              "ghcr.io/${IMAGE_OWNER}/circuit-server:${SERVER_TAG}")
+            SERVER_REF="ghcr.io/${IMAGE_OWNER}/circuit-server:${SERVER_TAG}"
+          else
+            SERVER_DIGEST=$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' \
+              "ghcr.io/${IMAGE_OWNER}/circuit-server:${SERVER_TAG}" | tr -d '"')
+            SERVER_REF="ghcr.io/${IMAGE_OWNER}/circuit-server@${SERVER_DIGEST}"
+          fi
           case "$SERVER_DIGEST" in sha256:*) ;; *) echo "invalid server digest: $SERVER_DIGEST" >&2; exit 1 ;; esac
-          printf 'SERVER_TAG=%s\nSERVER_DIGEST=%s\n' "$SERVER_TAG" "$SERVER_DIGEST" >> "$GITHUB_ENV"
+          printf 'SERVER_TAG=%s\nSERVER_DIGEST=%s\nSERVER_REF=%s\n' "$SERVER_TAG" "$SERVER_DIGEST" "$SERVER_REF" >> "$GITHUB_ENV"
       - name: Scan server image (Trivy SARIF)
         id: trivy-scan-server
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          # Scan the exact pushed digest — the content attestations and the
-          # digest lock bind to.
-          scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-server@${{ env.SERVER_DIGEST }}
+          # Scan the pushed digest on real runs; SERVER_REF carries the
+          # daemon-local tag under dry runs.
+          scan-ref: ${{ env.SERVER_REF }}
           version: v0.75.0
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
@@ -379,6 +433,7 @@ jobs:
           output: trivy-circuit-server.sarif
           limit-severities-for-sarif: true
       - name: Promote server :latest
+        if: inputs.dry_run != true
         run: |
           docker buildx imagetools create \
             --tag "ghcr.io/${IMAGE_OWNER}/circuit-server:latest" \
@@ -391,7 +446,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-server@${{ env.SERVER_DIGEST }}
+          scan-ref: ${{ env.SERVER_REF }}
           version: v0.75.0
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
@@ -406,7 +461,8 @@ jobs:
           python3 scripts/trivy_report_utils.py blocking-cves \
             trivy-circuit-server.json circuit-server >> "$GITHUB_STEP_SUMMARY"
       - name: Upload server Trivy SARIF
-        if: ${{ always() && hashFiles('trivy-circuit-server.sarif') != '' }}
+        # A rehearsal must not file code-scanning alerts.
+        if: ${{ always() && inputs.dry_run != true && hashFiles('trivy-circuit-server.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: trivy-circuit-server.sarif
@@ -420,6 +476,7 @@ jobs:
           retention-days: 90
       - name: Attest server image provenance
         id: attest_server
+        if: inputs.dry_run != true
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/vibebb/circuit-server
@@ -428,11 +485,13 @@ jobs:
       - name: Generate server SPDX SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         env:
-          SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: registry
+          # Dry runs read the daemon-loaded image; real runs pull the
+          # pushed digest from the registry.
+          SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: ${{ inputs.dry_run == true && 'docker' || 'registry' }}
           TMPDIR: ${{ runner.temp }}
           SYFT_FILE_METADATA_SELECTION: none
         with:
-          image: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-server@${{ env.SERVER_DIGEST }}
+          image: ${{ env.SERVER_REF }}
           format: spdx-json
           output-file: ${{ runner.temp }}/circuit-server.full.spdx.json
           upload-artifact: false
@@ -466,6 +525,7 @@ jobs:
           PY
       - name: Attest server SBOM
         id: attest_server_sbom
+        if: inputs.dry_run != true
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/vibebb/circuit-server
@@ -483,7 +543,7 @@ jobs:
         run: |
           set -euo pipefail
           uv run python scripts/measure_image_tools.py \
-            --image-ref "ghcr.io/${IMAGE_OWNER}/circuit-server@${SERVER_DIGEST}" \
+            --image-ref "$SERVER_REF" \
             --out "$RUNNER_TEMP/circuit-server.json"
       - name: Record published image summary
         env:
@@ -504,6 +564,7 @@ jobs:
             echo "- **workflow run**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Update digest lock and merge PR
+        if: inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
           SKIP_TOOLS: ${{ inputs.skip_tools }}
@@ -597,6 +658,25 @@ jobs:
             --title "Update circuit image digest lock" --body "$body")
           echo "pin PR: $pr_url" >> "$GITHUB_STEP_SUMMARY"
           bash scripts/publish_image_pin_pr.sh "$pr_url" "$branch" "${base_sha:-}" "ci.yml locked-image-check.yml workflow-lint.yml"
+      - name: Report dry run
+        if: inputs.dry_run == true
+        run: |
+          {
+            echo "## Publish dry run"
+            echo
+            echo "Rehearsal for ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+            echo
+            echo "Ran end-to-end: tools/server builds (loaded into the local daemon),"
+            echo "the Trivy SARIF/JSON gates, the SPDX SBOM chain, measurements, and the"
+            echo "tools smoke test."
+            echo
+            echo "Skipped (irreversible):"
+            echo "- pushing the immutable \`<sha>-tools\` and \`<sha>-latest-source\` tags"
+            echo "- promoting \`:latest\` on circuit-tools and circuit-server"
+            echo "- build-provenance and SBOM attestations"
+            echo "- Trivy SARIF uploads to code scanning"
+            echo "- the digest-lock PR and its post-merge dispatches"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Render publish phase timings
         # Runs on failure too — the step list up to the failing step is
         # exactly where a duration regression would hide.

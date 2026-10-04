@@ -10,7 +10,9 @@ import subprocess
 from pathlib import Path
 
 _IMAGE_REF = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}\Z")
-_LOCAL_IMAGE_REF = re.compile(r"[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9_.-]*\Z")
+# Local tags include registry-prefixed names (e.g. the publish dry-run's
+# daemon-loaded ghcr.io/...:<sha>-tools ref), so the name part allows '/'.
+_LOCAL_IMAGE_REF = re.compile(r"[a-z0-9][a-z0-9_./-]*:[a-z0-9][a-z0-9_.-]*\Z")
 _PROBE_TIMEOUT_S = 600.0
 
 

@@ -105,6 +105,11 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--bump", choices=["patch", "minor", "major"])
     group.add_argument("--set", dest="set_version", metavar="X.Y.Z")
+    group.add_argument(
+        "--list-files",
+        action="store_true",
+        help="print the versioned file list the writer touches, one per line",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--github-output", metavar="PATH")
     parser.add_argument(
@@ -115,6 +120,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = Path(args.root)
+    if args.list_files:
+        # The release workflow stages exactly this list; VERSION_FILES plus
+        # uv.lock is the complete set _apply may write.
+        print("\n".join([*VERSION_FILES, UV_LOCK]))
+        return 0
     try:
         current = _check_consistent(_read_versions(root))
         if args.set_version:
