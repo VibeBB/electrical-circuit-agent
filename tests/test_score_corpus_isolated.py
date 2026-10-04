@@ -94,7 +94,9 @@ def test_isolated_score_uses_read_only_truth_and_network_free_container(
     assert report["image_digest"] == f"sha256:{'a' * 64}"
     assert report["datasheet_cache_pdf_sha256"] is None
     assert report["manifest_sha256"] == corpus.sha256(CORPUS_ROOT / "corpus.json")
-    assert len(report["truth_sha256_by_entry"]) == 40
+    assert set(report["truth_sha256_by_entry"]) == {
+        entry.id for entry in corpus.load_manifest(CORPUS_ROOT / "corpus.json").entries
+    }
     assert set(report["truth_sha256_by_entry"]) == {
         entry.id for entry in corpus.load_manifest(CORPUS_ROOT / "corpus.json").entries
     }
