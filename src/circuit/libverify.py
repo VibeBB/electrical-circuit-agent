@@ -10,11 +10,12 @@ import re
 import shutil
 import tempfile
 from collections import Counter
+from collections.abc import Sequence
 from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import authoring, kicad_cli, occt, visionread
 from . import pinout as pinout_oracle
@@ -64,7 +65,9 @@ from .partspec import (
 )
 from .pinout import PinoutGeometry
 from .pinsource import (
+    PinSource,
     PinSourceComparison,
+    PinSourceInput,
     compare_pin_sources,
     parse_pin_source,
     source_from_part_spec,
@@ -164,6 +167,14 @@ class ModelCrossCheckReport(BaseModel):
     findings: list[ModelCrossCheckFinding]
 
 
+def _empty_pin_source_inputs() -> list[PinSourceInput]:
+    return []
+
+
+def _empty_pin_source_hashes() -> list[str | None]:
+    return []
+
+
 class VerificationInputs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -178,6 +189,8 @@ class VerificationInputs(BaseModel):
     test_board: bool = True
     pin_source_path: Path | None = None
     pin_source_sha256: str | None = None
+    pin_sources: list[PinSourceInput] = Field(default_factory=_empty_pin_source_inputs)
+    pin_source_sha256s: list[str | None] = Field(default_factory=_empty_pin_source_hashes)
 
 
 class LibraryVerification(BaseModel):
@@ -2863,6 +2876,7 @@ def verify_library_part(
     klc: bool = False,
     test_board: bool = True,
     pin_source_path: Path | None = None,
+    pin_sources: Sequence[PinSourceInput | Path] | None = None,
     output_path: Path | None = None,
 ) -> LibraryVerification:
     """Verify a library part against its current PartSpec and generated land pattern."""
@@ -2873,8 +2887,61 @@ def verify_library_part(
     findings: list[VerifyFinding] = []
     spec_hash = part_spec_sha256(spec_path) if spec_path.is_file() else ""
     pin_source_comparison: PinSourceComparison | None = None
-    pin_source_sha256: str | None = None
-    if pin_source_path is None:
+    descriptor_inputs: list[PinSourceInput] = []
+    if pin_sources is not None:
+        for source in pin_sources:
+            source_input = (
+                source if isinstance(source, PinSourceInput) else PinSourceInput(path=source)
+            )
+            duplicate_index = next(
+                (
+                    index
+                    for index, existing in enumerate(descriptor_inputs)
+                    if existing.path.resolve() == source_input.path.resolve()
+                ),
+                None,
+            )
+            if duplicate_index is None:
+                descriptor_inputs.append(source_input)
+            else:
+                descriptor_inputs[duplicate_index] = source_input
+    source_inputs: list[PinSourceInput] = []
+    if pin_source_path is not None:
+        source_inputs.append(PinSourceInput(path=pin_source_path))
+    for source_input in descriptor_inputs:
+        duplicate_index = next(
+            (
+                index
+                for index, existing in enumerate(source_inputs)
+                if existing.path.resolve() == source_input.path.resolve()
+            ),
+            None,
+        )
+        if duplicate_index is None:
+            source_inputs.append(source_input)
+        else:
+            source_inputs[duplicate_index] = source_input
+    source_hashes: list[str | None] = [_sha256(item.path) for item in source_inputs]
+    parsed_sources: list[PinSource] = []
+    for source_input in source_inputs:
+        try:
+            parsed_sources.append(
+                parse_pin_source(
+                    source_input.path,
+                    kind=source_input.kind,
+                    pinout_name=source_input.pinout_name,
+                    derived_from=source_input.derived_from,
+                )
+            )
+        except (OSError, ValueError) as exc:
+            _finding(
+                findings,
+                "pin_source_invalid",
+                "error",
+                str(source_input.path),
+                f"Pin source could not be parsed: {exc}",
+            )
+    if not parsed_sources:
         _finding(
             findings,
             "pin_source_single",
@@ -2883,33 +2950,27 @@ def verify_library_part(
             "only the PartSpec cell-bound pin source is available",
         )
     else:
-        try:
-            class_a = source_from_part_spec(
-                spec,
-                spec_sha256=spec_hash,
-                spec_path=spec_path,
-            )
-            class_b = parse_pin_source(pin_source_path)
-        except (OSError, ValueError) as exc:
-            pin_source_sha256 = _sha256(pin_source_path)
+        class_a = source_from_part_spec(
+            spec,
+            spec_sha256=spec_hash,
+            spec_path=spec_path,
+        )
+        pin_source_comparison = compare_pin_sources(class_a, parsed_sources)
+        if len(pin_source_comparison.independent_lineages) < 2:
             _finding(
                 findings,
-                "pin_source_invalid",
-                "error",
-                str(pin_source_path),
-                f"Class B pin source could not be parsed: {exc}",
+                "pin_source_single",
+                "warning",
+                "pin_sources",
+                "fewer than two independent pin-source lineages are available",
             )
-        else:
-            pin_source_sha256 = class_b.sha256
-            pin_source_comparison = compare_pin_sources(class_a, class_b)
-            for item in pin_source_comparison.findings:
-                _finding(
-                    findings,
-                    item.code,
-                    "error",
-                    f"pin {item.number}",
-                    item.message,
-                )
+        for item in pin_source_comparison.findings:
+            subject = (
+                "pin_sources.identity"
+                if item.code == "pin_source_identity_mismatch"
+                else f"pin {item.number}"
+            )
+            _finding(findings, item.code, "error", subject, item.message)
     check: PartSpecReport | None = None
     check_matches_spec = False
     try:
@@ -3222,6 +3283,19 @@ def verify_library_part(
                     findings=findings,
                 )
 
+    source_root = (library_dir or footprint_path.parent.parent).resolve()
+    pin_source_sha256 = _sha256(pin_source_path) if pin_source_path is not None else None
+    relative_pin_source_path = (
+        Path(os.path.relpath(pin_source_path.resolve(), source_root))
+        if pin_source_path is not None
+        else None
+    )
+    relative_pin_sources = [
+        source_input.model_copy(
+            update={"path": Path(os.path.relpath(source_input.path.resolve(), source_root))}
+        )
+        for source_input in descriptor_inputs
+    ]
     report = LibraryVerification(
         artifact_kind="circuit_library_verification",
         verdict="fail" if any(finding.severity == "error" for finding in findings) else "pass",
@@ -3251,17 +3325,10 @@ def verify_library_part(
             model_required=model_required,
             klc=klc,
             test_board=test_board,
-            pin_source_path=(
-                Path(
-                    os.path.relpath(
-                        pin_source_path.resolve(),
-                        (library_dir or footprint_path.parent.parent).resolve(),
-                    )
-                )
-                if pin_source_path is not None
-                else None
-            ),
+            pin_source_path=relative_pin_source_path,
             pin_source_sha256=pin_source_sha256,
+            pin_sources=relative_pin_sources,
+            pin_source_sha256s=source_hashes,
         ),
         symbol=VerifiedSymbol(
             lib_path=symbol_lib,

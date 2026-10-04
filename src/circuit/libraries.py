@@ -185,6 +185,10 @@ def _project_verification_matches(
             part_spec_path = input_path(inputs.part_spec_path)
             input_symbol_path = input_path(inputs.symbol_lib)
             input_footprint_path = input_path(inputs.footprint_path)
+            input_pin_sources = [
+                item.model_copy(update={"path": input_path(item.path)})
+                for item in inputs.pin_sources
+            ]
             input_pin_source_path = (
                 input_path(inputs.pin_source_path) if inputs.pin_source_path is not None else None
             )
@@ -207,6 +211,7 @@ def _project_verification_matches(
                     tolerance_mm=inputs.tolerance_mm,
                     model_required=inputs.model_required,
                     pin_source_path=input_pin_source_path,
+                    pin_sources=input_pin_sources or None,
                     output_path=Path(temporary) / "fresh.verification.json",
                 )
         except Exception:
@@ -219,6 +224,7 @@ def _project_verification_matches(
                         "symbol_lib": input_symbol_path,
                         "footprint_path": input_footprint_path,
                         "pin_source_path": input_pin_source_path,
+                        "pin_sources": input_pin_sources,
                     }
                 )
             }
@@ -380,6 +386,8 @@ def check_libraries(
                 density=fresh.inputs.density,
                 tolerance_mm=fresh.inputs.tolerance_mm,
                 model_required=fresh.inputs.model_required,
+                pin_source_path=fresh.inputs.pin_source_path,
+                pin_sources=fresh.inputs.pin_sources or None,
             )
             status = review_status(
                 project_library,

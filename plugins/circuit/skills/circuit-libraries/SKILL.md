@@ -19,6 +19,14 @@ For new project-owned parts, use the ordered
 and its `circuit-library` orchestrator. It requires independent PartSpec lanes,
 fresh verification, and hash-bound human approval.
 
+For pin mapping, prioritize official manufacturer databases such as ST
+STM32 Open Pin Data, AMD/Xilinx package files, and Microchip ATDF, followed by
+official IBIS or BSDL sources. Confirm that each source names the exact device
+and package. Identity matching ignores punctuation and accepts exact matches,
+or prefix/base-name matches when the shorter identity has at least six
+alphanumeric characters. Derived artifacts do not count as independent
+lineages.
+
 The image provides official KiCad libraries through the KiCad packages and the
 pinned CERN library at `/opt/circuit/libraries/cern-kicad-libs`. Preserve each
 library's license and provenance. Never edit files under `libraries/` or either

@@ -1,7 +1,7 @@
 import hashlib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 
@@ -29,6 +29,7 @@ from circuit.partspec import (
     Reading,
     part_spec_sha256,
 )
+from circuit.pinsource import PinSourceInput
 from pinout_fixtures import pinout_drawing
 
 SYMBOLS = """\
@@ -156,9 +157,10 @@ def _fake_project_verifier(
     tolerance_mm: float = 0.02,
     model_required: bool = True,
     pin_source_path: Path | None = None,
+    pin_sources: Sequence[PinSourceInput | Path] | None = None,
     output_path: Path | None = None,
 ) -> LibraryVerification:
-    del spec, spec_check_path, library_dir, reference, pin_source_path
+    del spec, spec_check_path, library_dir, reference
     footprint = parse_footprint(footprint_path)
     text = footprint_path.read_text(encoding="utf-8")
     verdict = "fail" if "(at 0.1 0)" in text else "pass"
@@ -174,6 +176,11 @@ def _fake_project_verifier(
             density="nominal",
             tolerance_mm=tolerance_mm,
             model_required=model_required,
+            pin_source_path=pin_source_path,
+            pin_sources=[
+                source if isinstance(source, PinSourceInput) else PinSourceInput(path=source)
+                for source in pin_sources or []
+            ],
         ),
         symbol=VerifiedSymbol(
             lib_path=symbol_lib,
@@ -204,9 +211,11 @@ def _packet_id_stub(packet: str) -> Callable[..., str]:
         density: Literal["most", "nominal", "least"],
         tolerance_mm: float,
         model_required: bool,
+        pin_source_path: Path | None = None,
+        pin_sources: Sequence[PinSourceInput] | None = None,
     ) -> str:
         del symbol_lib, symbol_name, footprint_path, library_dir
-        del density, tolerance_mm, model_required
+        del density, tolerance_mm, model_required, pin_source_path, pin_sources
         return packet
 
     return fake_current_packet_id
@@ -351,6 +360,8 @@ def _write_project_verification(
     footprint_path: Path,
     *,
     verdict: Literal["pass", "fail"] = "pass",
+    pin_source_path: Path | None = None,
+    pin_sources: list[PinSourceInput] | None = None,
 ) -> None:
     verification_dir = library / "verification"
     verification_dir.mkdir(exist_ok=True)
@@ -366,6 +377,8 @@ def _write_project_verification(
             density="nominal",
             tolerance_mm=0.02,
             model_required=True,
+            pin_source_path=pin_source_path,
+            pin_sources=pin_sources or [],
         ),
         symbol=VerifiedSymbol(
             lib_path=symbol_path,
@@ -428,6 +441,80 @@ def test_project_library_precedes_default_roots_and_requires_verification(
     assert verified.verdict == "pass"
     assert verified.symbols["Device:R"].library_path == symbol_path
     assert verified.footprints["Device:X"] == footprint_paths["X"]
+
+
+def test_project_review_identity_preserves_pin_source_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        libraries_module,
+        "verify_library_part",
+        _fake_project_verifier,
+    )
+    roots = _empty_roots(tmp_path / "defaults")
+    symbol_path, footprint_paths = _write_project_library(tmp_path)
+    brief_path = tmp_path / "brief.json"
+    brief_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "part.pdf").write_bytes(b"fixture PDF")
+    source_dir = tmp_path / "library" / "sources"
+    source_dir.mkdir()
+    first_source = PinSourceInput(
+        path=Path("sources/device.atdf"),
+        kind="microchip_atdf",
+        pinout_name="QFN32",
+        derived_from=["part_spec"],
+    )
+    second_source = PinSourceInput(
+        path=Path("sources/amd.txt"),
+        kind="amd_package_file",
+        derived_from=["stm32_open_pin_data"],
+    )
+    (source_dir / "device.atdf").write_text("<device />", encoding="utf-8")
+    (source_dir / "amd.txt").write_text("synthetic pin data", encoding="utf-8")
+    _write_project_verification(
+        tmp_path / "library",
+        symbol_path,
+        "R",
+        footprint_paths["X"],
+        pin_source_path=first_source.path,
+        pin_sources=[first_source, second_source],
+    )
+    _write_project_verification(
+        tmp_path / "library",
+        symbol_path,
+        "LED",
+        footprint_paths["Y"],
+    )
+    packet_inputs: list[tuple[Path | None, list[PinSourceInput] | None]] = []
+
+    def current_packet_id(_spec_path: Path, **kwargs: object) -> str:
+        pin_source_path = kwargs.get("pin_source_path")
+        pin_sources = kwargs.get("pin_sources")
+        packet_inputs.append(
+            (
+                pin_source_path if isinstance(pin_source_path, Path) else None,
+                cast(list[PinSourceInput], pin_sources) if isinstance(pin_sources, list) else None,
+            )
+        )
+        return "a" * 16
+
+    monkeypatch.setattr(libraries_module, "current_packet_id", current_packet_id)
+    monkeypatch.setattr(
+        libraries_module,
+        "review_status",
+        _review_status_stub("a" * 16, "approved"),
+    )
+
+    result = check_libraries(_brief(), brief_path=brief_path, roots=roots)
+
+    assert result.verdict == "pass"
+    source_root = (tmp_path / "library").resolve()
+    expected_sources = [
+        first_source.model_copy(update={"path": source_root / first_source.path}),
+        second_source.model_copy(update={"path": source_root / second_source.path}),
+    ]
+    assert (source_root / first_source.path, expected_sources) in packet_inputs
 
 
 def test_project_nickname_conflicts_and_stale_verification_fail(

@@ -200,9 +200,10 @@ def packet_id(
     rule_chain_sha256: str | None = None,
     pin_source_sha256: str | None = None,
     pin_source_kind: str | None = None,
+    pin_source_inputs: Iterable[dict[str, Any]] = (),
     request_sha256: str | None = None,
 ) -> str:
-    value = {
+    value: dict[str, Any] = {
         "format": 1,
         "pdf_sha256": pdf_sha256,
         "part_spec_sha256": part_spec_sha256,
@@ -222,6 +223,12 @@ def packet_id(
     if pin_source_sha256 is not None:
         value["pin_source_sha256"] = pin_source_sha256
         value["pin_source_kind"] = pin_source_kind
+    source_inputs = list(pin_source_inputs)
+    if source_inputs:
+        value["pin_source_inputs"] = sorted(
+            source_inputs,
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+        )
     if request_sha256 is not None:
         value["request_sha256"] = request_sha256
     canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -490,6 +497,7 @@ def current_packet_id(
     tolerance_mm: float,
     model_required: bool,
     pin_source_path: Path | None = None,
+    pin_sources: Sequence[pinsource.PinSourceInput] | None = None,
 ) -> str:
     spec = load_part_spec(spec_path)
     spec_dir = spec_path.resolve().parent
@@ -513,6 +521,8 @@ def current_packet_id(
         lineage,
         (library_dir / "rules") if library_dir is not None else (spec_dir / "library" / "rules"),
     )
+    pin_source_inputs = _combined_pin_source_inputs(pin_source_path, pin_sources)
+    pin_source_records = _pin_source_input_records(pin_source_inputs)
     input_hashes: dict[str, Any] = {
         "pdf_sha256": _sha256(pdf_path),
         "part_spec_sha256": part_spec_sha256(spec_path),
@@ -534,6 +544,8 @@ def current_packet_id(
             pin_source_path.suffix.casefold() if pin_source_path is not None else None
         ),
     }
+    if pin_sources:
+        input_hashes["pin_sources"] = pin_source_records
     base_packet_id = packet_id(
         pdf_sha256=_sha256(pdf_path),
         part_spec_sha256=part_spec_sha256(spec_path),
@@ -553,6 +565,7 @@ def current_packet_id(
         pin_source_kind=(
             pin_source_path.suffix.casefold() if pin_source_path is not None else None
         ),
+        pin_source_inputs=pin_source_records if pin_sources else (),
     )
     project_root = confidential.project_root_for(spec_path)
     review_library_dir = library_dir if library_dir is not None else spec_dir / "library"
@@ -588,6 +601,7 @@ def current_packet_id(
         rule_chain_sha256=rules.chain_sha256,
         pin_source_sha256=input_hashes["pin_source_sha256"],
         pin_source_kind=input_hashes["pin_source_kind"],
+        pin_source_inputs=pin_source_records if pin_sources else (),
         request_sha256=request.request_sha256,
     )
 
@@ -2974,18 +2988,30 @@ def _review_html(review: dict[str, Any]) -> str:
             if isinstance(class_b_input_value, dict)
             else {}
         )
+        source_values = record_items(source_data.get("sources"))
+        if not source_values and class_b:
+            source_values = [class_b]
+        if not source_values and class_b_input:
+            source_values = [class_b_input]
+        source_input_values = record_items(source_data.get("source_inputs"))
         class_a_pins = record_items(class_a.get("pins"))
-        class_b_pins = record_items(class_b.get("pins"))
         class_a_by_number = {
             str(item["number"]): str(item["name"])
             for item in class_a_pins
             if "number" in item and "name" in item
         }
-        class_b_by_number = {
-            str(item["number"]): str(item["name"])
-            for item in class_b_pins
-            if "number" in item and "name" in item
-        }
+        source_by_number = [
+            {
+                str(item["number"]): (
+                    f"{item['name']} (bank {item['bank']})"
+                    if isinstance(item.get("bank"), str) and item["bank"]
+                    else str(item["name"])
+                )
+                for item in record_items(source.get("pins"))
+                if "number" in item and "name" in item
+            }
+            for source in source_values
+        ]
         mismatch_numbers = {
             str(item["number"])
             for item in record_items(
@@ -3002,12 +3028,43 @@ def _review_html(review: dict[str, Any]) -> str:
                 str(data.get("path") or "path unavailable"),
                 f"SHA-256 {data.get('sha256') or 'unavailable'}",
             ]
+            identity = data.get("identity")
+            if isinstance(identity, list) and identity:
+                identity_values = cast(list[object], identity)
+                parts.append(f"identity {', '.join(str(item) for item in identity_values)}")
+            lineage = data.get("lineage")
+            if isinstance(lineage, str) and lineage:
+                parts.append(f"lineage {lineage}")
+            derived_from = data.get("derived_from")
+            if isinstance(derived_from, list) and derived_from:
+                derived_values = cast(list[object], derived_from)
+                parts.append(f"derived from {', '.join(str(item) for item in derived_values)}")
             return " — ".join(parts)
 
         class_a_header = source_description(class_a)
-        class_b_header = source_description(class_b or class_b_input)
+        parsed_by_path = {
+            str(source.get("path")): source
+            for source in source_values
+            if source.get("path") is not None
+        }
+        source_descriptions: list[str] = []
+        for source_input in source_input_values:
+            parsed_source = parsed_by_path.get(str(source_input.get("path")))
+            source_descriptions.append(
+                source_description({**source_input, **parsed_source})
+                if parsed_source is not None
+                else source_description(source_input)
+            )
+        source_headers = (
+            [source_description(source) for source in source_values]
+            if not source_input_values
+            else source_descriptions
+        )
+        source_number_set = set(class_a_by_number)
+        for source in source_by_number:
+            source_number_set.update(source)
         source_numbers = sorted(
-            class_a_by_number.keys() | class_b_by_number.keys(),
+            source_number_set,
             key=lambda item: (0, int(item), item) if item.isdigit() else (1, item.casefold(), item),
         )
 
@@ -3019,35 +3076,45 @@ def _review_html(review: dict[str, Any]) -> str:
             "<tr>"
             + pin_source_cell(number, number in mismatch_numbers)
             + pin_source_cell(class_a_by_number.get(number, "—"), number in mismatch_numbers)
-            + pin_source_cell(class_b_by_number.get(number, "—"), number in mismatch_numbers)
+            + "".join(
+                pin_source_cell(source.get(number, "—"), number in mismatch_numbers)
+                for source in source_by_number
+            )
             + "</tr>"
             for number in source_numbers
         )
         single_banner = (
             '<p class="single-pin-source"><strong>Single pin source:</strong> '
-            "Class B is not available.</p>"
+            "fewer than two independent lineages are available.</p>"
             if source_data.get("single_source") is True
             else ""
         )
         source_error = source_data.get("error")
         source_error_html = (
-            f"<p><strong>Class B pin source unavailable:</strong> {escape(source_error)}</p>"
+            f"<p><strong>Pin source unavailable:</strong> {escape(source_error)}</p>"
             if source_error
             else ""
         )
+        source_headers_html = "".join(
+            f"<p><strong>{'Class B' if len(source_headers) == 1 else f'Source {index}'}:</strong> "
+            f"{escape(header)}</p>"
+            for index, header in enumerate(source_headers, start=1)
+        )
+        pin_table_headers = "".join(
+            f"<th>{'Class B' if len(source_by_number) == 1 else f'Source {index}'} name</th>"
+            for index in range(1, len(source_by_number) + 1)
+        )
+        colspan = 2 + len(source_by_number)
         pin_source_panel = (
             "<h2>Independent pin sources</h2>"
             + single_banner
             + source_error_html
             + f"<p><strong>Class A:</strong> {escape(class_a_header)}</p>"
-            + (
-                f"<p><strong>Class B:</strong> {escape(class_b_header)}</p>"
-                if class_b or class_b_input
-                else ""
-            )
+            + source_headers_html
             + "<table><thead><tr><th>Pin</th><th>Class A name</th>"
-            "<th>Class B name</th></tr></thead><tbody>"
-            + (pin_source_rows or '<tr><td colspan="3">No pin mappings.</td></tr>')
+            + pin_table_headers
+            + "</tr></thead><tbody>"
+            + (pin_source_rows or f'<tr><td colspan="{colspan}">No pin mappings.</td></tr>')
             + "</tbody></table>"
         )
     pinout_cell_keys = (
@@ -3442,43 +3509,101 @@ def _finding_from_spec(item: SpecFinding) -> ReviewFinding:
     )
 
 
+def _pin_source_input_records(
+    inputs: Sequence[pinsource.PinSourceInput],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for item in inputs:
+        suffix_kind = item.path.suffix.lstrip(".").casefold()
+        kind = item.kind or (
+            "ibis"
+            if suffix_kind in {"ibs", "ibis"}
+            else "bsdl"
+            if suffix_kind == "bsdl"
+            else "microchip_atdf"
+            if suffix_kind == "atdf"
+            else "amd_package_file"
+            if suffix_kind in {"csv", "txt", "pins", "pkg"}
+            else suffix_kind
+        )
+        records.append(
+            {
+                "path": str(item.path.resolve()),
+                "sha256": _optional_sha256(item.path),
+                "kind": kind,
+                "pinout_name": item.pinout_name,
+                "derived_from": list(item.derived_from),
+            }
+        )
+    return records
+
+
+def _combined_pin_source_inputs(
+    pin_source_path: Path | None,
+    pin_sources: Sequence[pinsource.PinSourceInput] | None,
+) -> list[pinsource.PinSourceInput]:
+    result = [pinsource.PinSourceInput(path=pin_source_path)] if pin_source_path is not None else []
+    for source in pin_sources or []:
+        duplicate_index = next(
+            (
+                index
+                for index, existing in enumerate(result)
+                if existing.path.resolve() == source.path.resolve()
+            ),
+            None,
+        )
+        if duplicate_index is None:
+            result.append(source)
+        else:
+            result[duplicate_index] = source
+    return result
+
+
 def _pin_source_review_document(
     spec: PartSpec,
     *,
     spec_path: Path,
     pin_source_path: Path | None,
     pin_source_sha256: str | None,
+    pin_sources: Sequence[pinsource.PinSourceInput] | None = None,
 ) -> dict[str, Any]:
     class_a = pinsource.source_from_part_spec(
         spec,
         spec_sha256=part_spec_sha256(spec_path),
         spec_path=spec_path,
     )
-    class_b: pinsource.PinSource | None = None
+    source_inputs = _combined_pin_source_inputs(pin_source_path, pin_sources)
+    source_input_records = _pin_source_input_records(source_inputs)
+    if pin_source_path is not None and source_input_records and pin_source_sha256 is not None:
+        source_input_records[0]["sha256"] = pin_source_sha256
+    parsed_sources: list[pinsource.PinSource] = []
     comparison: pinsource.PinSourceComparison | None = None
-    error: str | None = None
-    if pin_source_path is not None:
+    errors: list[str] = []
+    for source_input in source_inputs:
         try:
-            class_b = pinsource.parse_pin_source(pin_source_path)
-            comparison = pinsource.compare_pin_sources(class_a, class_b)
+            parsed_sources.append(
+                pinsource.parse_pin_source(
+                    source_input.path,
+                    kind=source_input.kind,
+                    pinout_name=source_input.pinout_name,
+                    derived_from=source_input.derived_from,
+                )
+            )
         except (OSError, ValueError) as exc:
-            error = str(exc)
+            errors.append(str(exc))
+    if parsed_sources:
+        comparison = pinsource.compare_pin_sources(class_a, parsed_sources)
+    class_b = parsed_sources[0] if parsed_sources else None
+    class_b_input = source_input_records[0] if source_input_records else None
     return {
-        "single_source": pin_source_path is None,
+        "single_source": comparison is None or len(comparison.independent_lineages) < 2,
         "class_a": class_a.model_dump(mode="json"),
         "class_b": class_b.model_dump(mode="json") if class_b is not None else None,
-        "class_b_input": (
-            {
-                "description": f"{pin_source_path.suffix.lstrip('.').upper()} pin map",
-                "kind": pin_source_path.suffix.lstrip(".").casefold(),
-                "path": str(pin_source_path.resolve()),
-                "sha256": pin_source_sha256,
-            }
-            if pin_source_path is not None
-            else None
-        ),
+        "class_b_input": class_b_input,
+        "sources": [item.model_dump(mode="json") for item in parsed_sources],
+        "source_inputs": source_input_records,
         "comparison": comparison.model_dump(mode="json") if comparison is not None else None,
-        "error": error,
+        "error": "; ".join(errors) if errors else None,
     }
 
 
@@ -3493,6 +3618,7 @@ def build_review_packet(
     tolerance_mm: float = 0.02,
     model_required: bool = True,
     pin_source_path: Path | None = None,
+    pin_sources: Sequence[pinsource.PinSourceInput] | None = None,
     out_dir: Path,
 ) -> ReviewPacket:
     """Build fresh deterministic and human-review evidence for a library part."""
@@ -3503,11 +3629,14 @@ def build_review_packet(
         out_dir = confidential.ensure_confidential_store(project_root) / "library" / "reviews"
     pin_source_sha256 = _optional_sha256(pin_source_path) if pin_source_path is not None else None
     pin_source_kind = pin_source_path.suffix.casefold() if pin_source_path is not None else None
+    pin_source_inputs = _combined_pin_source_inputs(pin_source_path, pin_sources)
+    pin_source_records = _pin_source_input_records(pin_source_inputs)
     pin_source_document = _pin_source_review_document(
         spec,
         spec_path=spec_path,
         pin_source_path=pin_source_path,
         pin_source_sha256=pin_source_sha256,
+        pin_sources=pin_sources,
     )
     authoring_comparison: authoring.AuthoringComparison | None = None
     authoring_error: str | None = None
@@ -3581,6 +3710,8 @@ def build_review_packet(
         "pin_source_sha256": pin_source_sha256,
         "pin_source_kind": pin_source_kind,
     }
+    if pin_sources:
+        input_hashes["pin_sources"] = pin_source_records
     base_packet_id = packet_id(
         pdf_sha256=pdf_sha256,
         part_spec_sha256=part_spec_hash,
@@ -3598,6 +3729,7 @@ def build_review_packet(
         rule_chain_sha256=rules.chain_sha256,
         pin_source_sha256=pin_source_sha256,
         pin_source_kind=pin_source_kind,
+        pin_source_inputs=pin_source_records if pin_sources else (),
     )
     agent_request = _matching_agent_request(
         out_dir / _safe_field(spec.mpn),
@@ -3639,6 +3771,7 @@ def build_review_packet(
         rule_chain_sha256=rules.chain_sha256,
         pin_source_sha256=pin_source_sha256,
         pin_source_kind=pin_source_kind,
+        pin_source_inputs=pin_source_records if pin_sources else (),
         request_sha256=agent_request.request_sha256,
     )
     packet_dir = out_dir / _safe_field(spec.mpn) / current_id
@@ -3730,6 +3863,7 @@ def build_review_packet(
             model_required=model_required,
             rules=rules,
             pin_source_path=pin_source_path,
+            pin_sources=pin_sources,
             output_path=packet_dir / "verification.json",
         )
         findings.extend(_finding_from_verify(item) for item in verification.findings)
