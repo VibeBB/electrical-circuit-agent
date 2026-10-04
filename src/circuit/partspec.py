@@ -295,6 +295,11 @@ class PartSpec(BaseModel):
 
     _source_file_path: Path | None = PrivateAttr(default=None)
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PartSpec):
+            return NotImplemented
+        return self.model_dump(mode="python") == other.model_dump(mode="python")
+
     artifact_kind: Literal["circuit_part_spec"]
     mpn: str
     manufacturer: str

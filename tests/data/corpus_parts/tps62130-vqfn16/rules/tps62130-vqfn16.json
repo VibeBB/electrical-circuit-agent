@@ -1,0 +1,21 @@
+{
+  "artifact_kind": "circuit_rule_profile",
+  "profile_id": "tps62130-vqfn16",
+  "layer": "manufacturer",
+  "parent": "builtin:ipc7351b",
+  "parent_sha256": "75032566f70553b078a2cd17894812a2c03dfd9b198721cf6658bff028ddb0d1",
+  "paste": {
+    "coverage_min": 0.5,
+    "coverage_max": 1.0,
+    "ep_coverage_min": 0.8,
+    "ep_coverage_max": 0.9
+  },
+  "rationale": "TPS62130 datasheet revision F, page 42, recommends one 1.55 mm square paste aperture on the 1.68 mm exposed pad (approximately 85% coverage).",
+  "evidence": [
+    {
+      "kind": "datasheet",
+      "path": "datasheets/tps62130-vqfn16.pdf",
+      "sha256": "f9b1af285622c0cf1a5991f9641a6e64c5e6d899e52cc0b1632808742019579f"
+    }
+  ]
+}
