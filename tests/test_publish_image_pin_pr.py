@@ -237,7 +237,7 @@ def test_publish_workflow_uses_pin_helper_and_sbom_guard() -> None:
 
     assert "scripts/publish_image_pin_pr.sh" in workflow
     assert "timeout-minutes: 120" in workflow
-    assert "REQUIRED_WAIT_ATTEMPTS=" in helper and ":-40}" in helper
+    assert "REQUIRED_WAIT_ATTEMPTS=" in helper and ":-60}" in helper
     assert "REQUIRED_WAIT_SECONDS=" in helper and ":-15}" in helper
     assert 'gh pr checks "$PR_URL" --repo "$GITHUB_REPOSITORY" --required' in helper
     assert "SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: registry" in workflow
