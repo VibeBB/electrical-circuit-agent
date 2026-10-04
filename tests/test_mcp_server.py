@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -69,6 +70,7 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_rasterize",
         "circuit_datasheet_extract",
         "circuit_datasheet_check_received",
+        "circuit_datasheet_revision_check",
         "circuit_vision_read",
         "circuit_vision_compare",
         "circuit_model_generate",
@@ -109,6 +111,12 @@ def test_mcp_server_lists_expected_tools() -> None:
     assert verification_schema["properties"]["rule_profile"]["type"] == "string"
     assert verification_schema["properties"]["pin_source_path"]["type"] == "string"
     assert verification_schema["properties"]["pin_sources"]["type"] == "array"
+    revision_schema = next(
+        schema
+        for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
+        if name == "circuit_datasheet_revision_check"
+    )
+    assert revision_schema["required"] == ["part_spec_path"]
     footprint_schema = next(
         schema
         for name, _, schema in mcp_server._TOOLS  # pyright: ignore[reportPrivateUsage]
@@ -491,6 +499,46 @@ def test_datasheet_check_received_mcp_tool_returns_findings_and_fails_closed(
         )
     )
     assert failed.isError is True
+
+
+def test_datasheet_revision_check_mcp_tool_uses_injected_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _vqfn_spec()
+    source_url = "https://manufacturer.example/current.pdf"
+    spec = spec.model_copy(
+        update={"datasheet": spec.datasheet.model_copy(update={"source_url": source_url})}
+    )
+    spec_path = tmp_path / "part.spec.json"
+    spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
+    output_path = tmp_path / "revision-check.json"
+    snapshot = mcp_server.revwatch.DatasheetRevisionSnapshot(
+        revision=spec.datasheet.revision,
+        pdf_sha256=spec.datasheet.sha256,
+        source_url=source_url,
+        retrieved_at=datetime.now(UTC),
+    )
+    fetched: list[str] = []
+
+    def fetcher(url: str) -> mcp_server.revwatch.DatasheetRevisionSnapshot:
+        fetched.append(url)
+        return snapshot
+
+    monkeypatch.setattr(mcp_server.revwatch, "fetch_current_revision", fetcher)
+    result = asyncio.run(
+        mcp_server.call_tool(
+            "circuit_datasheet_revision_check",
+            {"part_spec_path": str(spec_path), "output_path": str(output_path)},
+        )
+    )
+
+    assert result.isError is False
+    assert fetched == [source_url]
+    assert output_path.is_file()
+    payload = json.loads(cast(TextContent, result.content[0]).text)
+    assert payload["artifact_kind"] == "circuit_datasheet_revision_check"
+    assert payload["changed"] is False
 
 
 @pytest.mark.parametrize("confidential", [False, True])
@@ -1649,7 +1697,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 53
+            assert len(tools.tools) == 54
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title
@@ -1659,12 +1707,14 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
             doctor = annotations_by_name["circuit_doctor"]
             erc = annotations_by_name["circuit_erc"]
             connector_placement = annotations_by_name["circuit_connector_placement_check"]
+            revision_check = annotations_by_name["circuit_datasheet_revision_check"]
             review_status = annotations_by_name["circuit_library_review_status"]
             review_apply = annotations_by_name["circuit_library_review_apply"]
             assert konnect is not None and konnect.destructiveHint is True
             assert doctor is not None and doctor.readOnlyHint is True
             assert erc is not None and erc.readOnlyHint is False
             assert connector_placement is not None and connector_placement.readOnlyHint is False
+            assert revision_check is not None and revision_check.readOnlyHint is False
             assert review_status is not None and review_status.readOnlyHint is False
             assert review_apply is not None and review_apply.readOnlyHint is False
             result = await session.call_tool("circuit_kicad_version", {})

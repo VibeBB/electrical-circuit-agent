@@ -31,6 +31,7 @@ from . import (
     kicad_cli,
     mutation,
     pinsource,
+    revwatch,
     visionread,
 )
 from . import pinout as pinout_oracle
@@ -1579,6 +1580,9 @@ def review_status(
         trial_question_ids = {question.question_id for question in trial_state.questions}
     if trial_state_error is not None:
         integrity_reasons.append(trial_state_error)
+    revision_blocker = revwatch.approval_blocker(library_dir, spec)
+    if revision_blocker is not None:
+        integrity_reasons.append(revision_blocker)
     for decision in decisions:
         if not decision.integrity_valid:
             integrity_reasons.extend(decision.reasons)

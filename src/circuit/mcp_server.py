@@ -54,6 +54,7 @@ from . import (
     partspec,
     raster,
     report,
+    revwatch,
     ruleprofile,
     sch_lint,
     stackup,
@@ -497,6 +498,18 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "request_path": {"type": "string"},
             },
             "required": ["pdf_path", "request_path"],
+        },
+    ),
+    (
+        "circuit_datasheet_revision_check",
+        "Compare a PartSpec datasheet binding with the current manufacturer source",
+        {
+            "type": "object",
+            "properties": {
+                "part_spec_path": {"type": "string"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["part_spec_path"],
         },
     ),
     (
@@ -1121,6 +1134,7 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_rasterize": _anno("Rasterize", write=True),
     "circuit_datasheet_extract": _anno("Datasheet extraction", write=True),
     "circuit_datasheet_check_received": _anno("Check received datasheet", write=True),
+    "circuit_datasheet_revision_check": _anno("Datasheet revision check", write=True),
     "circuit_vision_read": _anno("Create datasheet vision reads", write=True),
     "circuit_vision_compare": _anno("Compare library art with datasheet", write=True),
     "circuit_model_generate": _anno("Generate deterministic STEP model", write=True),
@@ -1357,6 +1371,7 @@ def _authoring_tool(name: str, args: dict[str, Any]) -> tuple[Any, list[Path]] |
 _PART_BUILD_TOOL_NAMES = {
     "circuit_datasheet_check_received",
     "circuit_datasheet_extract",
+    "circuit_datasheet_revision_check",
     "circuit_part_spec_check",
     "circuit_land_pattern",
     "circuit_connector_placement_check",
@@ -1458,6 +1473,21 @@ def _record_writer_output(
 
 
 def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
+    if name == "circuit_datasheet_revision_check":
+        spec_path = Path(str(args["part_spec_path"]))
+        spec = partspec.load_part_spec(spec_path)
+        result = revwatch.check_revision(
+            spec,
+            revwatch.fetch_current_revision,
+            spec_path=spec_path,
+        )
+        output = _output_path(
+            spec_path,
+            _optional_string(args.get("output_path")),
+            "datasheet-revision-check",
+        )
+        output.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        return result
     if name == "circuit_datasheet_check_received":
         pdf_path = Path(str(args["pdf_path"]))
         request = humanrequest.load_request(Path(str(args["request_path"])))

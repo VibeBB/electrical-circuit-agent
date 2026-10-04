@@ -3,6 +3,7 @@ import json
 import math
 import os
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 from xml.etree import ElementTree as ET
@@ -10,7 +11,7 @@ from xml.etree import ElementTree as ET
 import pytest
 from PIL import Image
 
-from circuit import libreview
+from circuit import libreview, revwatch
 from circuit.datasheet import DatasheetExtraction, PageExtraction
 from circuit.landpattern import Density, LandPatternResult
 from circuit.libitems import FootprintDef, PadDef, SymbolDef, SymPin
@@ -1080,6 +1081,47 @@ def test_review_status_approves_normalized_answers_and_rejects_corrections(
 
     assert status.state == "approved"
     assert status.reasons == []
+
+
+def test_datasheet_revision_change_blocks_review_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    spec = spec.model_copy(
+        update={
+            "datasheet": spec.datasheet.model_copy(
+                update={"source_url": "https://manufacturer.example/current.pdf"}
+            )
+        }
+    )
+    monkeypatch.setenv(libreview.EVENTS_DIR_ENV, str(tmp_path / "events"))
+    library = tmp_path / "library"
+    packet = "9" * 16
+    _write_event(
+        tmp_path,
+        library,
+        packet,
+        _message(packet, answers=_expected_answers(spec, packet)),
+    )
+    assert libreview.review_status(library, spec, packet).state == "approved"
+
+    snapshot = revwatch.DatasheetRevisionSnapshot(
+        revision="B",
+        pdf_sha256=hashlib.sha256(b"new datasheet").hexdigest(),
+        source_url="https://manufacturer.example/current.pdf",
+        retrieved_at=datetime.now(UTC),
+    )
+    result = revwatch.check_revision(
+        spec,
+        lambda _url: snapshot,
+        project_path=tmp_path,
+    )
+
+    assert result.approval_invalidated is True
+    status = libreview.review_status(library, spec, packet)
+    assert status.state == "invalid"
+    assert "datasheet_revision_changed" in status.reasons
 
 
 @pytest.mark.parametrize(

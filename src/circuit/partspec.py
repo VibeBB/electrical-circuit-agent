@@ -655,6 +655,27 @@ class PinTable(BaseModel):
     vision_read: str | None = None
 
 
+class DatasheetErratum(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    revision: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    affects: list[str] = Field(default_factory=list)
+
+    @field_validator("affects")
+    @classmethod
+    def require_nonempty_affected_fields(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value):
+            raise ValueError("erratum affected fields must be non-empty")
+        return value
+
+
+def _empty_datasheet_errata() -> list[DatasheetErratum]:
+    return []
+
+
 class DatasheetRef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -663,8 +684,18 @@ class DatasheetRef(BaseModel):
     revision: str = Field(min_length=1)
     extraction_path: str
     url: str | None = None
+    source_url: str | None = None
+    retrieved_at: datetime | None = None
+    errata: list[DatasheetErratum] = Field(default_factory=_empty_datasheet_errata)
     confidential: bool = False
     origin: Literal["web", "user_provided"] = "web"
+
+    @field_validator("retrieved_at")
+    @classmethod
+    def require_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("datasheet retrieval time must include a timezone")
+        return value.astimezone(UTC) if value is not None else None
 
 
 class SubstitutionRef(BaseModel):
