@@ -31,6 +31,23 @@ uv run python scripts/verify_all.py --stage fast
 python3 -m circuit.doctor
 ```
 
+`verify_all.py --list` dumps each stage's commands as JSON; `--group`
+(`lint`, `unit`, `docker`), `--match <substr>`, and `--shard K/N` select a
+subset of a stage for a faster local check — CI uses the same flags for its
+matrix legs, so a local partial run reproduces a failing check exactly. Run
+the full `fast` stage before submitting.
+
+Local `circuit-tools` builds can reuse the CI-warmed registry buildcache; it
+is a public `buildcache` tag, so no GHCR login is needed:
+
+```bash
+docker buildx build --load \
+  -f docker/circuit-tools.Dockerfile -t circuit-tools:local \
+  --build-arg "CERN_COMMIT=$(git -C libraries/cern-kicad-libs rev-parse HEAD)" \
+  --cache-from type=registry,ref=ghcr.io/vibebb/circuit-tools:buildcache \
+  .
+```
+
 `pdfplumber==0.11.10` supplies the datasheet lane's word geometry, table
 extraction, and vector-object counts. Poppler remains an independent text lane
 for deterministic comparison. `pillow==12.3.0` is pinned for checking that
