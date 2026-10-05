@@ -94,7 +94,9 @@ def test_isolated_score_uses_read_only_truth_and_network_free_container(
     assert report["image_digest"] == f"sha256:{'a' * 64}"
     assert report["datasheet_cache_pdf_sha256"] is None
     assert report["manifest_sha256"] == corpus.sha256(CORPUS_ROOT / "corpus.json")
-    assert len(report["truth_sha256_by_entry"]) == 40
+    assert set(report["truth_sha256_by_entry"]) == {
+        entry.id for entry in corpus.load_manifest(CORPUS_ROOT / "corpus.json").entries
+    }
     assert set(report["truth_sha256_by_entry"]) == {
         entry.id for entry in corpus.load_manifest(CORPUS_ROOT / "corpus.json").entries
     }
@@ -181,6 +183,77 @@ def test_isolated_score_mounts_datasheet_cache_and_records_matching_pdf_hash(
     assert any(f"source={cache.resolve()},target=/datasheets,readonly" in mount for mount in mounts)
     assert "--env" in docker_argv
     assert docker_argv[docker_argv.index("CIRCUIT_CORPUS_CACHE=/datasheets") - 1] == "--env"
+
+
+def test_isolated_score_allows_missing_footprint_and_model_for_human_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(score_corpus_isolated.shutil, "which", _docker_path)
+    candidate = tmp_path / "candidate"
+    _candidate_library(candidate)
+    (candidate / "footprint.kicad_mod").unlink()
+    (candidate / "model.step").unlink()
+    corpus_root = tmp_path / "corpus"
+    shutil.copytree(CORPUS_ROOT, corpus_root)
+    manifest = json.loads((corpus_root / "corpus.json").read_text(encoding="utf-8"))
+    entry = next(item for item in manifest["entries"] if item["id"] == "lm317-to220")
+    truth_path = corpus_root / entry["truth_path"]
+    truth = corpus.CorpusTruth.model_validate_json(truth_path.read_bytes())
+    truth = truth.model_copy(
+        update={
+            "expected_outcome": "human_request",
+            "expected_pads": [],
+            "dimensions": corpus.CorpusDimensions(),
+        }
+    )
+    truth_path.write_text(truth.model_dump_json(by_alias=True), encoding="utf-8")
+
+    calls: list[list[str]] = []
+
+    def runner(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(arguments)
+        if arguments[1:3] == ["image", "inspect"]:
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                stdout=f"sha256:{'a' * 64}\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            arguments,
+            0,
+            stdout='{"verdict":"not_available"}',
+            stderr="",
+        )
+
+    report = _run_score(
+        candidate,
+        tmp_path / "output",
+        runner,
+        corpus_root=corpus_root,
+    )
+    docker_argv = calls[-1]
+
+    assert report["score"]["verdict"] == "not_available"
+    assert docker_argv[-6:] == [
+        "lm317-to220",
+        "part.spec.json",
+        "footprint.kicad_mod",
+        "symbols.kicad_sym",
+        "LM317",
+        "model.step",
+    ]
+    assert "footprint.kicad_mod" in docker_argv
+    assert "model.step" in docker_argv
+    with pytest.raises(
+        score_corpus_isolated.CorpusIsolationError,
+        match="candidate artifact is unavailable",
+    ):
+        score_corpus_isolated._relative_candidate_file(  # pyright: ignore[reportPrivateUsage]
+            candidate.resolve(),
+            "footprint.kicad_mod",
+        )
 
 
 @pytest.mark.parametrize("explicit", [False, True])

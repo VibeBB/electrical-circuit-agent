@@ -1,0 +1,37 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "we-wr-sma-60312002114503",
+  "package_family": "connector",
+  "pins": {},
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": null,
+    "body_width": null,
+    "height": null,
+    "pitch": null,
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [],
+  "connector": {
+    "mount": "tht",
+    "orientation": "vertical",
+    "gender": "female",
+    "mating_axis": "+z",
+    "board_edge_side": null,
+    "board_edge_offset": null,
+    "mating_mirror": false,
+    "manufacturer_to_kicad": null
+  },
+  "expected_outcome": "human_request",
+  "notes": "Straight through-hole WR-SMA PCB jack: center contact hole d1.27 with four ground posts on a 5.08 mm square pattern, 7 mm square flange, 1/4-36UNS-2A coaxial thread on +z. The datasheet does not number the center and shield contacts; numbering must not be invented.",
+  "expected_mechanical": [],
+  "drawing_id": null,
+  "ambiguous_drawing_ids": [],
+  "canary": "CIRCUIT-CORPUS-CANARY-62780a2f-78b0-41e8-bca1-f3f55d2a45c4"
+}

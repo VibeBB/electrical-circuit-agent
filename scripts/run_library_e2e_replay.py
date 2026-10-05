@@ -699,6 +699,27 @@ def _run_step(
     if step_type == "patch_json":
         result = _patch_json(project, step, results)
         return step_id, result, []
+    if step_type == "fetch_response":
+        resolved = cast(dict[str, Any], _reference(dict(step), results))
+        path_value = resolved.get("path")
+        content_type = resolved.get("content_type")
+        body = resolved.get("body")
+        if not all(isinstance(value, str) for value in (path_value, content_type, body)):
+            raise ReplayError("fetch_response requires path, content_type, and body strings")
+        target = _project_file(project, cast(str, path_value))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(cast(str, body).encode("utf-8"))
+        return (
+            step_id,
+            {
+                "path": str(target),
+                "url": resolved.get("url"),
+                "content_type": content_type,
+                "body_prefix": cast(str, body)[:32],
+                "sha256": _sha256(target),
+            },
+            [],
+        )
     if step_type == "copy_file":
         resolved = cast(dict[str, Any], _reference(dict(step), results))
         source_value = resolved.get("source")

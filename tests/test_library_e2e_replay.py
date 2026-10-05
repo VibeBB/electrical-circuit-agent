@@ -35,7 +35,7 @@ def _steps(name: str) -> list[dict[str, object]]:
     return records[1:]
 
 
-def test_three_synthetic_scenarios_cover_required_dispatch_flows() -> None:
+def test_synthetic_scenarios_cover_required_dispatch_flows() -> None:
     happy = _steps("tps62130-happy.jsonl")
     happy_sequence = [cast(str, step["tool"]) for step in happy if step.get("type") == "tool"]
     happy_tools = set(happy_sequence)
@@ -87,6 +87,46 @@ def test_three_synthetic_scenarios_cover_required_dispatch_flows() -> None:
     }
     decisions = [step.get("decision") for step in substitute if step.get("type") == "human_event"]
     assert decisions == ["deny", "grant"]
+
+
+def test_connector_download_blocked_replay_fails_closed() -> None:
+    replay = cast(Any, _replay_module())
+    transcript_path = TRANSCRIPT_ROOT / "connector-download-blocked.jsonl"
+    steps = _steps(transcript_path.name)
+    fetch = next(step for step in steps if step.get("type") == "fetch_response")
+    request_step = next(step for step in steps if step.get("id") == "request")
+    request = cast(dict[str, object], cast(dict[str, object], request_step["arguments"])["request"])
+    required_fields = {
+        "reason",
+        "evidence",
+        "known",
+        "unknown",
+        "agent_assessment",
+        "recommendation",
+        "recommendation_rationale",
+        "alternatives",
+    }
+    assert required_fields <= request.keys()
+    assert all(
+        isinstance(alternative, dict) and "risks" in cast(dict[str, object], alternative)
+        for alternative in cast(list[object], request["alternatives"])
+    )
+    assert fetch["content_type"] == "text/html"
+    assert cast(str, fetch["body"]).startswith("<!DOCTYPE html>")
+    tool_names = {cast(str, step["tool"]) for step in steps if step.get("type") == "tool"}
+    assert tool_names == {
+        "circuit_human_request_create",
+        "circuit_datasheet_check_received",
+    }
+
+    result = replay.run_scenario(transcript_path, ROOT)
+    results = cast(dict[str, object], result["results"])
+    assert result["label"] == "synthetic"
+    assert cast(dict[str, object], results["download"])["content_type"] == "text/html"
+    intake = cast(list[dict[str, object]], results["intake"])
+    assert intake[0]["code"] == "datasheet_extraction_failed"
+    assert intake[0]["severity"] == "error"
+    assert cast(dict[str, object], results["request"])["request_id"]
 
 
 def test_live_mode_requires_explicit_environment_opt_in() -> None:

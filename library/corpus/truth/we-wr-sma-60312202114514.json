@@ -1,0 +1,37 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "we-wr-sma-60312202114514",
+  "package_family": "connector",
+  "pins": {},
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": null,
+    "body_width": null,
+    "height": null,
+    "pitch": null,
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [],
+  "connector": {
+    "mount": "smd",
+    "orientation": "edge_mount",
+    "gender": "female",
+    "mating_axis": "+y",
+    "board_edge_side": "+y",
+    "board_edge_offset": null,
+    "mating_mirror": false,
+    "manufacturer_to_kicad": null
+  },
+  "expected_outcome": "human_request",
+  "notes": "End-launch WR-SMA jack with flat tabs for a 1.6 mm PCB. The recommended land pattern separates the center conductor land from the top and bottom ground tabs and references the board edge (9.9, 7.1, 5.0, 1.97 and 0.61 mm features). Center, shield, board edge and mating axis must be represented independently.",
+  "expected_mechanical": [],
+  "drawing_id": null,
+  "ambiguous_drawing_ids": [],
+  "canary": "CIRCUIT-CORPUS-CANARY-c40a2e0d-19b9-4dbe-9ac8-06cc5a5699a5"
+}

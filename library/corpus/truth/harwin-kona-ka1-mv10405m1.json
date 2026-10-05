@@ -1,0 +1,125 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "harwin-kona-ka1-mv10405m1",
+  "package_family": "connector",
+  "pins": {
+    "1": "1",
+    "2": "2",
+    "3": "3",
+    "4": "4"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": null,
+      "nom": 50.0,
+      "max": null
+    },
+    "body_width": {
+      "min": null,
+      "nom": 13.7,
+      "max": null
+    },
+    "height": {
+      "min": null,
+      "nom": 14.0,
+      "max": null
+    },
+    "pitch": {
+      "min": null,
+      "nom": 8.5,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -12.75,
+        0.0
+      ],
+      "drill": 4.0,
+      "shape": "circle",
+      "pad_type": "thru_hole"
+    },
+    {
+      "number": "2",
+      "center": [
+        -4.25,
+        0.0
+      ],
+      "drill": 4.0,
+      "shape": "circle",
+      "pad_type": "thru_hole"
+    },
+    {
+      "number": "3",
+      "center": [
+        4.25,
+        0.0
+      ],
+      "drill": 4.0,
+      "shape": "circle",
+      "pad_type": "thru_hole"
+    },
+    {
+      "number": "4",
+      "center": [
+        12.75,
+        0.0
+      ],
+      "drill": 4.0,
+      "shape": "circle",
+      "pad_type": "thru_hole"
+    }
+  ],
+  "expected_mechanical": [
+    {
+      "kind": "mounting",
+      "center": [
+        -21.0,
+        0.0
+      ],
+      "drill": 3.2,
+      "size": null,
+      "plated": null
+    },
+    {
+      "kind": "mounting",
+      "center": [
+        21.0,
+        0.0
+      ],
+      "drill": 3.2,
+      "size": null,
+      "plated": null
+    }
+  ],
+  "connector": {
+    "mount": "tht",
+    "orientation": "vertical",
+    "gender": "male",
+    "mating_axis": "+z",
+    "board_edge_side": null,
+    "board_edge_offset": null,
+    "mating_mirror": true,
+    "manufacturer_to_kicad": {
+      "1": "1",
+      "2": "2",
+      "3": "3",
+      "4": "4"
+    }
+  },
+  "expected_outcome": "human_request",
+  "notes": "Recommended PCB layout (tolerance 0.05), KiCad top view, origin at the connector center. Table 1 row KA1-MV10405M1: DIM A 50.0, DIM B 42.00 (mounting-hole span), DIM C 25.50 (contact span = 3 x 8.50); the drawing illustrates the 3-contact part (note 2), so 4-contact geometry comes from the table row only. Contacts are d4.00 at 8.50; contact 1 is at the left in the top view. Mounting holes d3.20 (2 POS) take M3 board-mount nuts ordered separately; plating is not stated and must not be guessed. Male numbering runs 1..4 left to right and the female mate is mirrored (catalog pin-numbering page).",
+  "drawing_id": null,
+  "ambiguous_drawing_ids": [],
+  "canary": "CIRCUIT-CORPUS-CANARY-3fceb3c3-21b6-4a64-8a03-5144f5422ff5"
+}

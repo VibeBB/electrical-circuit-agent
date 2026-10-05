@@ -2,7 +2,7 @@
   "schema": "circuit_corpus_truth",
   "version": 1,
   "id": "lm1117-dpak",
-  "package_family": "gullwing_tab",
+  "package_family": "tabbed_dpak",
   "pins": {
     "1": "ADJ/GND",
     "3": "VIN",

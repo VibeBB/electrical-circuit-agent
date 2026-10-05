@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from collections import Counter
@@ -15,8 +16,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import libitems, libreview, occt, partspec
-from .libitems import FootprintDef, SymbolDef
-from .partspec import Dimension, PartSpec
+from .libitems import FootprintDef, PadDef, SymbolDef
+from .partspec import Dimension, PackageFamily, PartSpec
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CANARY_PREFIX = "CIRCUIT-CORPUS-CANARY-"
@@ -55,7 +56,7 @@ class CorpusEntry(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
     manufacturer: str = Field(min_length=1)
     mpn: str = Field(min_length=1)
-    package_family: str = Field(min_length=1)
+    package_family: PackageFamily
     datasheet: CorpusDatasheet
     truth_path: str = Field(min_length=1)
     truth_status: Literal["human_confirmed", "unconfirmed"]
@@ -113,9 +114,54 @@ class CorpusPad(BaseModel):
 
     number: str
     center: tuple[float, float]
-    size: tuple[float, float]
+    size: tuple[float, float] | None = None
     drill: float | None = Field(default=None, gt=0)
     shape: Literal["rect", "roundrect", "oval", "circle", "polygon"] | None = None
+    rotation: float = 0.0
+    polygon: list[tuple[float, float]] | None = Field(default=None, min_length=3)
+    pad_type: Literal["smd", "thru_hole", "np_thru_hole"] | None = None
+    side: Literal["top", "bottom"] = "top"
+
+    @model_validator(mode="after")
+    def validate_geometry(self) -> CorpusPad:
+        if self.size is None and self.polygon is None and self.drill is None:
+            raise ValueError("pads without a stated size or polygon require a drill")
+        return self
+
+
+class CorpusMechanicalHole(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["mounting", "shield", "retention", "locating"]
+    center: tuple[float, float]
+    drill: float | None = Field(default=None, gt=0)
+    size: tuple[float, float] | None = None
+    plated: bool | None
+
+    @model_validator(mode="after")
+    def validate_drill_and_plating(self) -> CorpusMechanicalHole:
+        if self.drill is None and (self.size is None or self.plated is not None):
+            raise ValueError(
+                "mechanical features without a drill require a copper size and unknown plating"
+            )
+        return self
+
+
+def _empty_mechanical_holes() -> list[CorpusMechanicalHole]:
+    return []
+
+
+class CorpusConnector(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mount: Literal["smd", "tht", "mixed"]
+    orientation: Literal["vertical", "right_angle", "edge_mount"]
+    gender: Literal["male", "female", "none"]
+    mating_axis: Literal["+x", "-x", "+y", "-y", "+z"]
+    board_edge_side: Literal["+x", "-x", "+y", "-y"] | None = None
+    board_edge_offset: CorpusDimension | None = None
+    mating_mirror: bool = False
+    manufacturer_to_kicad: dict[str, str] | None = None
 
 
 class CorpusTruth(BaseModel):
@@ -124,12 +170,17 @@ class CorpusTruth(BaseModel):
     schema_name: Literal["circuit_corpus_truth"] = Field(alias="schema")
     version: Literal[1]
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
-    package_family: str
+    package_family: PackageFamily
     pins: dict[str, str]
     pin1_corner: Literal["top_left", "top_right", "bottom_left", "bottom_right"]
     drawing_view: Literal["top", "bottom"]
     dimensions: CorpusDimensions
     expected_pads: list[CorpusPad]
+    expected_mechanical: list[CorpusMechanicalHole] = Field(default_factory=_empty_mechanical_holes)
+    connector: CorpusConnector | None = None
+    drawing_id: str | None = None
+    ambiguous_drawing_ids: list[str] = Field(default_factory=list)
+    expected_outcome: Literal["artifacts", "human_request"] = "artifacts"
     canary: str
     notes: str
 
@@ -143,6 +194,16 @@ class CorpusTruth(BaseModel):
             raise ValueError("canary must contain a canonical UUID4")
         if len(self.pins) != len(set(self.pins)):
             raise ValueError("truth pin numbers must be unique")
+        if not self.pins and self.expected_outcome != "human_request":
+            raise ValueError("empty pin truth is allowed only for a human request")
+        if (self.package_family == "connector") != (self.connector is not None):
+            raise ValueError("connector truth must be present only for connector packages")
+        if self.ambiguous_drawing_ids and (
+            self.expected_outcome != "human_request" or self.drawing_id is not None
+        ):
+            raise ValueError(
+                "ambiguous drawing ids require a human request and no selected drawing id"
+            )
         return self
 
 
@@ -223,6 +284,8 @@ def load_truth(corpus_root: Path, entry: CorpusEntry) -> tuple[CorpusTruth, str]
         raise CorpusError(f"corpus truth is unavailable or invalid: {exc}") from exc
     if truth.id != entry.id:
         raise CorpusError("truth id does not match its manifest entry")
+    if truth.package_family != entry.package_family:
+        raise CorpusError("truth package family does not match its manifest entry")
     return truth, hashlib.sha256(raw).hexdigest()
 
 
@@ -312,19 +375,25 @@ def _truth_dimension_values(dimension: CorpusDimension | None) -> dict[str, floa
 
 
 def _missing_truth_requirements(truth: CorpusTruth) -> list[str]:
-    required = ["body_length", "body_width", "height", "pitch"]
-    if truth.package_family.startswith("gullwing"):
-        required.extend(("lead_span", "lead_length", "lead_width"))
+    required: list[str] = []
+    if truth.expected_outcome != "human_request":
+        required = ["body_length", "body_width", "height"]
+        if truth.package_family != "connector":
+            required.append("pitch")
+        if truth.package_family.startswith("gullwing"):
+            required.extend(("lead_span", "lead_length", "lead_width"))
     missing = [
         field
         for field in required
         if (dimension := getattr(truth.dimensions, field)) is None
         or all(value is None for value in (dimension.min, dimension.nom, dimension.max))
     ]
-    if not truth.expected_pads:
+    if not truth.expected_pads and truth.expected_outcome != "human_request":
         missing.append("expected_pads")
-    if not truth.pins:
+    if not truth.pins and truth.expected_outcome != "human_request":
         missing.append("pins")
+    if truth.package_family == "connector" and truth.connector is None:
+        missing.append("connector")
     return missing
 
 
@@ -351,6 +420,12 @@ def _canonical_symbol_pins(symbol: SymbolDef) -> dict[str, set[str]]:
     return pins
 
 
+def _pad_side_matches(side: Literal["top", "bottom"], layers: list[str]) -> bool:
+    if "*.Cu" in layers:
+        return True
+    return ("F.Cu" if side == "top" else "B.Cu") in layers
+
+
 def _check_footprint_pads(
     truth: CorpusTruth,
     footprint: FootprintDef,
@@ -360,12 +435,13 @@ def _check_footprint_pads(
 ) -> None:
     expected = truth.expected_pads
     if not expected:
-        add_finding(
-            "corpus_expected_pads_unavailable",
-            "warning",
-            "expected_pads",
-            "truth does not contain a verified footprint pad set",
-        )
+        if truth.expected_outcome != "human_request":
+            add_finding(
+                "corpus_expected_pads_unavailable",
+                "warning",
+                "expected_pads",
+                "truth does not contain a verified footprint pad set",
+            )
         return
     actual_pads = [pad for pad in footprint.pads if pad.number]
     expected_numbers = Counter(pad.number for pad in expected)
@@ -380,23 +456,119 @@ def _check_footprint_pads(
             dict(actual_numbers),
         )
         return
-    actual_by_number = {pad.number: pad for pad in actual_pads}
+    actual_by_number: dict[str, list[tuple[int, PadDef]]] = {}
+    expected_by_number: dict[str, list[CorpusPad]] = {}
+    for actual_index, pad in enumerate(actual_pads):
+        actual_by_number.setdefault(pad.number, []).append((actual_index, pad))
     for pad in expected:
-        actual = actual_by_number[pad.number]
-        expected_geometry = (*pad.center, *pad.size)
-        actual_geometry = (actual.x, actual.y, actual.width, actual.height)
-        if any(
-            abs(expected_value - actual_value) > tolerance_mm
-            for expected_value, actual_value in zip(expected_geometry, actual_geometry, strict=True)
-        ):
-            add_finding(
-                "corpus_pad_geometry_mismatch",
-                "error",
-                f"footprint.pad.{pad.number}",
-                "pad center or size differs from corpus truth",
-                expected_geometry,
-                actual_geometry,
+        expected_by_number.setdefault(pad.number, []).append(pad)
+    matched: dict[int, PadDef] = {}
+    for number, expected_group in expected_by_number.items():
+        actual_group = actual_by_number[number]
+        pairs = sorted(
+            (
+                not _pad_side_matches(expected_pad.side, actual_pad.layers),
+                math.dist(expected_pad.center, (actual_pad.x, actual_pad.y)),
+                expected_index,
+                actual_index,
             )
+            for expected_index, expected_pad in enumerate(expected)
+            if expected_pad.number == number
+            for actual_index, actual_pad in actual_group
+        )
+        used_expected: set[int] = set()
+        used_actual: set[int] = set()
+        for _side_mismatch, _distance, expected_index, actual_index in pairs:
+            if expected_index in used_expected or actual_index in used_actual:
+                continue
+            matched[expected_index] = actual_pads[actual_index]
+            used_expected.add(expected_index)
+            used_actual.add(actual_index)
+            if len(used_expected) == len(expected_group):
+                break
+
+    for expected_index, pad in enumerate(expected):
+        actual = matched[expected_index]
+        if pad.polygon is None:
+            expected_geometry = (*pad.center, *pad.size) if pad.size is not None else pad.center
+            actual_geometry = (
+                (actual.x, actual.y, actual.width, actual.height)
+                if pad.size is not None
+                else (actual.x, actual.y)
+            )
+            if any(
+                abs(expected_value - actual_value) > tolerance_mm
+                for expected_value, actual_value in zip(
+                    expected_geometry,
+                    actual_geometry,
+                    strict=True,
+                )
+            ):
+                add_finding(
+                    "corpus_pad_geometry_mismatch",
+                    "error",
+                    f"footprint.pad.{pad.number}",
+                    "pad center or size differs from corpus truth",
+                    expected_geometry,
+                    actual_geometry,
+                )
+            if (
+                (pad.rotation != 0 or actual.rotation != 0)
+                and pad.shape != "circle"
+                and actual.shape != "circle"
+            ):
+                period = (
+                    180.0
+                    if pad.shape in {"rect", "roundrect", "oval"}
+                    or actual.shape in {"rect", "roundrect", "oval"}
+                    else 360.0
+                )
+                rotation_delta = abs(
+                    (pad.rotation - actual.rotation + period / 2) % period - period / 2
+                )
+                if rotation_delta > 0.5:
+                    add_finding(
+                        "corpus_pad_rotation_mismatch",
+                        "error",
+                        f"footprint.pad.{pad.number}.rotation",
+                        "pad rotation differs from corpus truth by more than 0.5 degrees",
+                        pad.rotation,
+                        actual.rotation,
+                    )
+        else:
+            expected_outline = [
+                _pad_frame_point(point, pad.center, pad.rotation) for point in pad.polygon
+            ]
+            actual_outline: list[tuple[float, float]] | None = None
+            if actual.shape == "custom" and actual.polygon is not None:
+                actual_outline = [
+                    _pad_frame_point(point, (actual.x, actual.y), actual.rotation)
+                    for point in actual.polygon
+                ]
+            elif actual.shape in {"rect", "roundrect"}:
+                corners = [
+                    (-actual.width / 2, -actual.height / 2),
+                    (-actual.width / 2, actual.height / 2),
+                    (actual.width / 2, actual.height / 2),
+                    (actual.width / 2, -actual.height / 2),
+                ]
+                actual_outline = [
+                    _pad_frame_point(point, (actual.x, actual.y), actual.rotation)
+                    for point in corners
+                ]
+            if actual_outline is None or not _outlines_match(
+                expected_outline,
+                actual_outline,
+                tolerance_mm=0.02,
+            ):
+                add_finding(
+                    "corpus_pad_outline_mismatch",
+                    "error",
+                    f"footprint.pad.{pad.number}.polygon",
+                    "pad outline differs from corpus truth",
+                    expected_outline,
+                    actual_outline,
+                )
         if pad.drill is not None and (actual.drill is None or abs(pad.drill - actual.drill) > 0.01):
             add_finding(
                 "corpus_pad_drill_mismatch",
@@ -407,7 +579,7 @@ def _check_footprint_pads(
                 actual.drill,
             )
         actual_shape = "polygon" if actual.shape == "custom" else actual.shape
-        if pad.shape is not None and actual_shape != pad.shape:
+        if pad.shape is not None and pad.polygon is None and actual_shape != pad.shape:
             add_finding(
                 "corpus_pad_shape_mismatch",
                 "error",
@@ -415,6 +587,255 @@ def _check_footprint_pads(
                 "pad shape differs from corpus truth",
                 pad.shape,
                 actual_shape,
+            )
+        if pad.pad_type is not None and actual.type != pad.pad_type:
+            add_finding(
+                "corpus_pad_type_mismatch",
+                "error",
+                f"footprint.pad.{pad.number}.type",
+                "pad type differs from corpus truth",
+                pad.pad_type,
+                actual.type,
+            )
+        if not _pad_side_matches(pad.side, actual.layers):
+            add_finding(
+                "corpus_pad_side_mismatch",
+                "error",
+                f"footprint.pad.{pad.number}.side",
+                "pad copper side differs from corpus truth",
+                pad.side,
+                actual.layers,
+            )
+
+
+def _pad_frame_point(
+    point: tuple[float, float],
+    center: tuple[float, float],
+    rotation: float,
+) -> tuple[float, float]:
+    angle = math.radians(rotation)
+    cosine, sine = math.cos(angle), math.sin(angle)
+    return (
+        center[0] + point[0] * cosine + point[1] * sine,
+        center[1] - point[0] * sine + point[1] * cosine,
+    )
+
+
+def _outline_area(points: list[tuple[float, float]]) -> float:
+    return (
+        abs(
+            sum(
+                first[0] * second[1] - second[0] * first[1]
+                for first, second in zip(points, [*points[1:], points[0]], strict=True)
+            )
+        )
+        / 2
+    )
+
+
+def _outlines_match(
+    expected: list[tuple[float, float]],
+    actual: list[tuple[float, float]],
+    *,
+    tolerance_mm: float,
+) -> bool:
+    if len(expected) < 3 or len(actual) < 3:
+        return False
+    if any(
+        not any(math.dist(point, candidate) <= tolerance_mm for candidate in actual)
+        for point in expected
+    ) or any(
+        not any(math.dist(point, candidate) <= tolerance_mm for candidate in expected)
+        for point in actual
+    ):
+        return False
+    expected_area = _outline_area(expected)
+    actual_area = _outline_area(actual)
+    return expected_area > 0 and abs(expected_area - actual_area) / expected_area <= 0.02
+
+
+def _dimension_nominal_or_midpoint(dimension: Dimension) -> float:
+    if dimension.nom is not None:
+        return dimension.nom
+    if dimension.min is not None and dimension.max is not None:
+        return (dimension.min + dimension.max) / 2
+    if dimension.min is not None:
+        return dimension.min
+    if dimension.max is not None:
+        return dimension.max
+    raise ValueError("dimension has no usable value")
+
+
+def _check_mechanical_holes(
+    truth: CorpusTruth,
+    partspec: PartSpec,
+    footprint: FootprintDef | None,
+    add_finding: Any,
+) -> None:
+    if footprint is None:
+        return
+    unnumbered = [(index, pad) for index, pad in enumerate(footprint.pads) if not pad.number]
+    matched_indices: set[int] = set()
+    for hole_index, hole in enumerate(truth.expected_mechanical):
+        candidates = [
+            (math.dist(hole.center, (pad.x, pad.y)), index, pad)
+            for index, pad in unnumbered
+            if index not in matched_indices
+        ]
+        match = min(candidates, default=None, key=lambda item: item[0])
+        if match is None or match[0] > 0.02:
+            add_finding(
+                "corpus_mechanical_missing",
+                "error",
+                f"footprint.mechanical.{hole_index}",
+                "mechanical feature has no unnumbered footprint pad within 0.02 mm",
+                hole.center,
+                None,
+            )
+        else:
+            _, actual_index, actual = match
+            matched_indices.add(actual_index)
+            field = f"footprint.mechanical.{hole_index}"
+            drill_mismatch = (
+                actual.drill is not None
+                if hole.drill is None
+                else actual.drill is None or abs(hole.drill - actual.drill) > 0.01
+            )
+            if drill_mismatch:
+                add_finding(
+                    "corpus_mechanical_drill_mismatch",
+                    "error",
+                    f"{field}.drill",
+                    "mechanical pad drill differs from corpus truth by more than 0.01 mm",
+                    hole.drill,
+                    actual.drill,
+                )
+            expected_type = (
+                (
+                    "thru_hole"
+                    if hole.plated is True
+                    else "np_thru_hole"
+                    if hole.plated is False
+                    else None
+                )
+                if hole.drill is not None
+                else None
+            )
+            if expected_type is not None and actual.type != expected_type:
+                add_finding(
+                    "corpus_mechanical_plating_mismatch",
+                    "error",
+                    f"{field}.type",
+                    "mechanical pad type does not match corpus plating truth",
+                    expected_type,
+                    actual.type,
+                )
+            if hole.size is not None and any(
+                abs(expected_size - actual_size) > 0.02
+                for expected_size, actual_size in zip(
+                    hole.size,
+                    (actual.width, actual.height),
+                    strict=True,
+                )
+            ):
+                add_finding(
+                    "corpus_mechanical_size_mismatch",
+                    "error",
+                    f"{field}.size",
+                    "mechanical pad copper size differs from corpus truth by more than 0.02 mm",
+                    hole.size,
+                    (actual.width, actual.height),
+                )
+        if hole.plated is None and hole.drill is not None:
+            for pad_index, pad in enumerate(footprint.pads):
+                if math.dist(hole.center, (pad.x, pad.y)) <= 0.02:
+                    add_finding(
+                        "corpus_plating_guessed",
+                        "error",
+                        f"footprint.pad.{pad.number or pad_index}.type",
+                        "footprint pad type guesses plating that corpus truth leaves unknown",
+                        None,
+                        pad.type,
+                    )
+            if partspec.connector is not None:
+                for feature_index, feature in enumerate(partspec.connector.mechanical):
+                    feature_center = (
+                        _dimension_nominal_or_midpoint(feature.x),
+                        _dimension_nominal_or_midpoint(feature.y),
+                    )
+                    if (
+                        feature.plated is not None
+                        and math.dist(hole.center, feature_center) <= 0.02
+                    ):
+                        add_finding(
+                            "corpus_plating_guessed",
+                            "error",
+                            f"partspec.connector.mechanical[{feature_index}].plated",
+                            "PartSpec connector feature guesses plating that corpus truth "
+                            "leaves unknown",
+                            None,
+                            feature.plated,
+                        )
+    if truth.expected_mechanical or truth.package_family == "connector":
+        for index, pad in unnumbered:
+            if index not in matched_indices:
+                add_finding(
+                    "corpus_mechanical_unexpected",
+                    "error",
+                    f"footprint.pad.{index}",
+                    "unnumbered footprint pad has no matching corpus mechanical feature",
+                    None,
+                    (pad.x, pad.y),
+                )
+
+
+def _check_connector_truth(
+    truth: CorpusTruth,
+    partspec: PartSpec,
+    add_finding: Any,
+) -> None:
+    expected = truth.connector
+    if expected is None:
+        return
+    actual = partspec.connector
+    if actual is None:
+        add_finding(
+            "corpus_connector_missing",
+            "error",
+            "partspec.connector",
+            "PartSpec is missing connector truth required by the corpus",
+        )
+        return
+
+    comparisons: dict[str, tuple[Any, Any]] = {
+        "mount": (expected.mount, actual.mount),
+        "orientation": (expected.orientation, actual.orientation),
+        "gender": (expected.gender, actual.gender),
+        "mating_axis": (expected.mating_axis, actual.mating_axis),
+        "board_edge_side": (
+            expected.board_edge_side,
+            actual.board_edge.side if actual.board_edge is not None else None,
+        ),
+        "board_edge_offset": (
+            _truth_dimension_values(expected.board_edge_offset),
+            _dimension_values(actual.board_edge.offset) if actual.board_edge is not None else None,
+        ),
+        "mating_mirror": (expected.mating_mirror, actual.numbering.mating_mirror),
+    }
+    if expected.manufacturer_to_kicad is not None:
+        comparisons["manufacturer_to_kicad"] = (
+            expected.manufacturer_to_kicad,
+            actual.numbering.manufacturer_to_kicad,
+        )
+    for name, (expected_value, actual_value) in comparisons.items():
+        if expected_value != actual_value:
+            add_finding(
+                "corpus_connector_mismatch",
+                "error",
+                f"partspec.connector.{name}",
+                f"PartSpec connector {name} differs from corpus truth",
+                expected_value,
+                actual_value,
             )
 
 
@@ -446,9 +867,9 @@ def _dimension_bounds(
 def score_part(
     truth: CorpusTruth,
     partspec: PartSpec,
-    footprint: FootprintDef,
+    footprint: FootprintDef | None,
     symbol: SymbolDef,
-    model: occt.Shape,
+    model: occt.Shape | None,
 ) -> CorpusScore:
     """Compare parsed artifact values with truth without reading or writing files."""
     findings: list[CorpusFinding] = []
@@ -482,11 +903,9 @@ def score_part(
             missing_truth,
         )
 
-    artifact_values = (
-        partspec.model_dump_json(),
-        footprint.model_dump_json(),
-        symbol.model_dump_json(),
-    )
+    artifact_values = [partspec.model_dump_json(), symbol.model_dump_json()]
+    if footprint is not None:
+        artifact_values.append(footprint.model_dump_json())
     if any(_CANARY_RE.search(value) or _CANARY_PREFIX in value for value in artifact_values):
         add_finding(
             "corpus_canary_leak",
@@ -495,16 +914,17 @@ def score_part(
             "an authored artifact contains a corpus canary",
         )
 
-    actual_pins = {pin.number: pin.name for pin in partspec.pins}
-    if actual_pins != truth.pins:
-        add_finding(
-            "corpus_pin_map_mismatch",
-            "error",
-            "partspec.pins",
-            "PartSpec pin number/name map differs from corpus truth",
-            truth.pins,
-            actual_pins,
-        )
+    if truth.pins:
+        actual_pins = {pin.number: pin.name for pin in partspec.pins}
+        if actual_pins != truth.pins:
+            add_finding(
+                "corpus_pin_map_mismatch",
+                "error",
+                "partspec.pins",
+                "PartSpec pin number/name map differs from corpus truth",
+                truth.pins,
+                actual_pins,
+            )
     if partspec.package.pin1_corner != truth.pin1_corner:
         add_finding(
             "corpus_pin1_corner_mismatch",
@@ -532,6 +952,28 @@ def score_part(
             truth.package_family,
             partspec.package.family,
         )
+    if truth.drawing_id is not None and (
+        partspec.package.drawing_id.casefold() != truth.drawing_id.casefold()
+    ):
+        add_finding(
+            "corpus_drawing_id_mismatch",
+            "error",
+            "partspec.package.drawing_id",
+            "PartSpec drawing identifier differs from corpus truth",
+            truth.drawing_id,
+            partspec.package.drawing_id,
+        )
+    if partspec.package.drawing_id.casefold() in {
+        drawing_id.casefold() for drawing_id in truth.ambiguous_drawing_ids
+    }:
+        add_finding(
+            "corpus_drawing_guessed",
+            "error",
+            "partspec.package.drawing_id",
+            "PartSpec selected a drawing identifier that corpus truth marks ambiguous",
+            truth.ambiguous_drawing_ids,
+            partspec.package.drawing_id,
+        )
     for field_name in _DIMENSION_FIELDS:
         expected = getattr(truth.dimensions, field_name)
         expected_values = _truth_dimension_values(expected)
@@ -548,15 +990,18 @@ def score_part(
                 actual_values,
             )
 
-    _check_footprint_pads(
-        truth,
-        footprint,
-        add_finding,
-        tolerance_mm=0.02,
-    )
+    if footprint is not None:
+        _check_footprint_pads(
+            truth,
+            footprint,
+            add_finding,
+            tolerance_mm=0.02,
+        )
+        _check_mechanical_holes(truth, partspec, footprint, add_finding)
+    _check_connector_truth(truth, partspec, add_finding)
     actual_symbol_pins = _canonical_symbol_pins(symbol)
     expected_symbol_pins = {number: {name} for number, name in truth.pins.items()}
-    if actual_symbol_pins != expected_symbol_pins:
+    if truth.pins and actual_symbol_pins != expected_symbol_pins:
         add_finding(
             "corpus_symbol_pin_map_mismatch",
             "error",
@@ -566,48 +1011,49 @@ def score_part(
             {key: sorted(value) for key, value in actual_symbol_pins.items()},
         )
 
-    try:
-        actual_model_dimensions, model_error = _model_dimensions(model)
-        if model_error is not None:
-            add_finding("model_geometry_mismatch", "error", "model", model_error)
-        else:
-            height = truth.dimensions.height
-            model_expected_dimensions: dict[str, CorpusDimension | None] = {}
-            if truth.package_family in {"no_lead_quad", "no_lead_dual"}:
-                model_expected_dimensions = {
-                    "x": truth.dimensions.body_width,
-                    "y": truth.dimensions.body_length,
-                }
-            elif truth.package_family == "gullwing_dual":
-                model_expected_dimensions = {
-                    "x": truth.dimensions.lead_span,
-                    "y": truth.dimensions.body_length,
-                }
-            elif truth.package_family == "gullwing_quad":
-                model_expected_dimensions = {
-                    "x": truth.dimensions.lead_span,
-                    "y": truth.dimensions.lead_span,
-                }
-            model_expected_dimensions["z"] = height
-            for axis, expected_dimension in model_expected_dimensions.items():
-                bounds = _dimension_bounds(expected_dimension)
-                if bounds is None:
-                    continue
-                lower, upper = bounds
-                actual = actual_model_dimensions[axis]
-                below_minimum = lower is not None and actual < lower - 0.02
-                above_maximum = upper is not None and actual > upper + 0.02
-                if below_minimum or above_maximum:
-                    add_finding(
-                        "model_geometry_mismatch",
-                        "error",
-                        f"model.{axis}",
-                        f"overall STEP {axis.upper()} extent is outside corpus truth bounds",
-                        {"min": lower, "max": upper},
-                        actual,
-                    )
-    except Exception as exc:
-        add_finding("model_geometry_mismatch", "error", "model", str(exc))
+    if model is not None:
+        try:
+            actual_model_dimensions, model_error = _model_dimensions(model)
+            if model_error is not None:
+                add_finding("model_geometry_mismatch", "error", "model", model_error)
+            else:
+                height = truth.dimensions.height
+                model_expected_dimensions: dict[str, CorpusDimension | None] = {}
+                if truth.package_family in {"no_lead_quad", "no_lead_dual"}:
+                    model_expected_dimensions = {
+                        "x": truth.dimensions.body_width,
+                        "y": truth.dimensions.body_length,
+                    }
+                elif truth.package_family == "gullwing_dual":
+                    model_expected_dimensions = {
+                        "x": truth.dimensions.lead_span,
+                        "y": truth.dimensions.body_length,
+                    }
+                elif truth.package_family == "gullwing_quad":
+                    model_expected_dimensions = {
+                        "x": truth.dimensions.lead_span,
+                        "y": truth.dimensions.lead_span,
+                    }
+                model_expected_dimensions["z"] = height
+                for axis, expected_dimension in model_expected_dimensions.items():
+                    bounds = _dimension_bounds(expected_dimension)
+                    if bounds is None:
+                        continue
+                    lower, upper = bounds
+                    actual = actual_model_dimensions[axis]
+                    below_minimum = lower is not None and actual < lower - 0.02
+                    above_maximum = upper is not None and actual > upper + 0.02
+                    if below_minimum or above_maximum:
+                        add_finding(
+                            "model_geometry_mismatch",
+                            "error",
+                            f"model.{axis}",
+                            f"overall STEP {axis.upper()} extent is outside corpus truth bounds",
+                            {"min": lower, "max": upper},
+                            actual,
+                        )
+        except Exception as exc:
+            add_finding("model_geometry_mismatch", "error", "model", str(exc))
 
     errors = any(finding.severity == "error" for finding in findings)
     return CorpusScore(
@@ -654,6 +1100,12 @@ def score_entry(
             artifact_hashes[name] = hashlib.sha256(raw).hexdigest()
             artifact_values.append(raw.decode("utf-8", errors="ignore"))
         except OSError as exc:
+            if (
+                truth.expected_outcome == "human_request"
+                and name in {"footprint", "model"}
+                and not path.exists()
+            ):
+                continue
             findings.append(
                 CorpusFinding(
                     code=f"{name}_unavailable",
@@ -714,25 +1166,29 @@ def score_entry(
             findings=findings,
         )
         return score
-    try:
-        footprint = libitems.parse_footprint(footprint_path)
-    except (OSError, ValueError) as exc:
-        findings.append(
-            CorpusFinding(
-                code="footprint_unavailable",
-                severity="error",
-                field="footprint",
-                message=str(exc),
+    footprint: FootprintDef | None
+    if truth.expected_outcome == "human_request" and not footprint_path.exists():
+        footprint = None
+    else:
+        try:
+            footprint = libitems.parse_footprint(footprint_path)
+        except (OSError, ValueError) as exc:
+            findings.append(
+                CorpusFinding(
+                    code="footprint_unavailable",
+                    severity="error",
+                    field="footprint",
+                    message=str(exc),
+                )
             )
-        )
-        footprint = FootprintDef(
-            name="",
-            attributes=[],
-            pads=[],
-            graphics=[],
-            models=[],
-            properties={},
-        )
+            footprint = FootprintDef(
+                name="",
+                attributes=[],
+                pads=[],
+                graphics=[],
+                models=[],
+                properties={},
+            )
     try:
         symbol = libitems.parse_symbol(symbol_path, symbol_name)
     except (OSError, ValueError) as exc:
@@ -745,18 +1201,22 @@ def score_entry(
             )
         )
         symbol = SymbolDef(name="", pins=[], properties={})
-    try:
-        model = occt.read_step(model_path)
-    except Exception as exc:
-        findings.append(
-            CorpusFinding(
-                code="model_unavailable",
-                severity="error",
-                field="model",
-                message=str(exc),
+    model: occt.Shape | None
+    if truth.expected_outcome == "human_request" and not model_path.exists():
+        model = None
+    else:
+        try:
+            model = occt.read_step(model_path)
+        except Exception as exc:
+            findings.append(
+                CorpusFinding(
+                    code="model_unavailable",
+                    severity="error",
+                    field="model",
+                    message=str(exc),
+                )
             )
-        )
-        model = occt.box(0, 0, 0, 0.001, 0.001, 0.001)
+            model = occt.box(0, 0, 0, 0.001, 0.001, 0.001)
 
     score = score_part(truth, spec, footprint, symbol, model)
     combined_findings = [*score.findings, *findings]

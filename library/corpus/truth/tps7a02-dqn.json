@@ -1,0 +1,210 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "tps7a02-dqn",
+  "package_family": "no_lead_quad",
+  "pins": {
+    "1": "OUT",
+    "2": "GND",
+    "3": "EN",
+    "4": "IN",
+    "5": "Thermal Pad"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 0.95,
+      "nom": null,
+      "max": 1.05
+    },
+    "body_width": {
+      "min": 0.95,
+      "nom": null,
+      "max": 1.05
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 0.4
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.65,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": {
+      "min": 0.38,
+      "nom": 0.48,
+      "max": 0.6
+    },
+    "exposed_pad_width": {
+      "min": 0.38,
+      "nom": 0.48,
+      "max": 0.6
+    }
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -0.43,
+        -0.325
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          -0.18,
+          -0.105
+        ],
+        [
+          0.18,
+          -0.105
+        ],
+        [
+          0.18,
+          -0.075
+        ],
+        [
+          0.0,
+          0.105
+        ],
+        [
+          -0.18,
+          0.105
+        ]
+      ],
+      "pad_type": "smd"
+    },
+    {
+      "number": "2",
+      "center": [
+        -0.43,
+        0.325
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          -0.18,
+          0.105
+        ],
+        [
+          0.18,
+          0.105
+        ],
+        [
+          0.18,
+          0.075
+        ],
+        [
+          0.0,
+          -0.105
+        ],
+        [
+          -0.18,
+          -0.105
+        ]
+      ],
+      "pad_type": "smd"
+    },
+    {
+      "number": "3",
+      "center": [
+        0.43,
+        0.325
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          0.18,
+          0.105
+        ],
+        [
+          -0.18,
+          0.105
+        ],
+        [
+          -0.18,
+          0.075
+        ],
+        [
+          -0.0,
+          -0.105
+        ],
+        [
+          0.18,
+          -0.105
+        ]
+      ],
+      "pad_type": "smd"
+    },
+    {
+      "number": "4",
+      "center": [
+        0.43,
+        -0.325
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          0.18,
+          -0.105
+        ],
+        [
+          -0.18,
+          -0.105
+        ],
+        [
+          -0.18,
+          -0.075
+        ],
+        [
+          -0.0,
+          0.105
+        ],
+        [
+          0.18,
+          0.105
+        ]
+      ],
+      "pad_type": "smd"
+    },
+    {
+      "number": "5",
+      "center": [
+        0.0,
+        0.0
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          0.0,
+          -0.3394
+        ],
+        [
+          0.3394,
+          0.0
+        ],
+        [
+          0.0,
+          0.3394
+        ],
+        [
+          -0.3394,
+          0.0
+        ]
+      ],
+      "pad_type": "smd"
+    }
+  ],
+  "drawing_id": "DQN0004A",
+  "notes": "DQN0004A example board layout, KiCad top view, origin at package center, y down. Pad centers from (0.86) column and (0.65) row spacing; 4X (0.36) x (0.21) signal lands with a 45-degree chamfer facing the exposed pad, leaving the drawing's 4X (0.18) and 4X (0.03) flats and the (0.22) exposed-metal clearance. Pad 5 is the (square 0.48) exposed pad rotated 45 degrees. Pin functions come from the DQN column of the pin table, not the DBV column. Outline dimensions are ranges; nominal values the drawing does not state stay null. Tie bars and side-lead shape may vary (notes 4-6).",
+  "expected_mechanical": [],
+  "connector": null,
+  "ambiguous_drawing_ids": [],
+  "expected_outcome": "artifacts",
+  "canary": "CIRCUIT-CORPUS-CANARY-a914631f-c229-42ad-8dae-21bd6ca7a712"
+}

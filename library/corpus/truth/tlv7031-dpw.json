@@ -1,0 +1,202 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "tlv7031-dpw",
+  "package_family": "no_lead_quad",
+  "pins": {
+    "1": "OUT",
+    "2": "V+",
+    "3": "V-",
+    "4": "IN-",
+    "5": "IN+"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 0.75,
+      "nom": null,
+      "max": 0.85
+    },
+    "body_width": {
+      "min": 0.75,
+      "nom": null,
+      "max": 0.85
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 0.4
+    },
+    "pitch": {
+      "min": null,
+      "nom": 0.48,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -0.39,
+        -0.24
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          -0.21,
+          -0.11
+        ],
+        [
+          0.21,
+          -0.11
+        ],
+        [
+          0.21,
+          -0.05
+        ],
+        [
+          0.05,
+          0.11
+        ],
+        [
+          -0.21,
+          0.11
+        ]
+      ],
+      "pad_type": "smd"
+    },
+    {
+      "number": "2",
+      "center": [
+        -0.39,
+        0.24
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          -0.21,
+          0.11
+        ],
+        [
+          0.21,
+          0.11
+        ],
+        [
+          0.21,
+          0.05
+        ],
+        [
+          0.05,
+          -0.11
+        ],
+        [
+          -0.21,
+          -0.11
+        ]
+      ],
+      "pad_type": "smd"
+    },
+    {
+      "number": "3",
+      "center": [
+        0.0,
+        0.0
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          0.0,
+          -0.1768
+        ],
+        [
+          0.1768,
+          0.0
+        ],
+        [
+          0.0,
+          0.1768
+        ],
+        [
+          -0.1768,
+          0.0
+        ]
+      ],
+      "pad_type": "smd"
+    },
+    {
+      "number": "4",
+      "center": [
+        0.39,
+        0.24
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          0.21,
+          0.11
+        ],
+        [
+          -0.21,
+          0.11
+        ],
+        [
+          -0.21,
+          0.05
+        ],
+        [
+          -0.05,
+          -0.11
+        ],
+        [
+          0.21,
+          -0.11
+        ]
+      ],
+      "pad_type": "smd"
+    },
+    {
+      "number": "5",
+      "center": [
+        0.39,
+        -0.24
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          0.21,
+          -0.11
+        ],
+        [
+          -0.21,
+          -0.11
+        ],
+        [
+          -0.21,
+          -0.05
+        ],
+        [
+          -0.05,
+          0.11
+        ],
+        [
+          0.21,
+          0.11
+        ]
+      ],
+      "pad_type": "smd"
+    }
+  ],
+  "drawing_id": "DPW0005A",
+  "notes": "DPW0005A example board layout, KiCad top view, origin at package center, y down. Pad centers from (0.78) column and (0.48) row spacing; 4X (0.42) x (0.22) lands with a 45-degree chamfer toward the center pad leaving the 4X (0.26) and 4X (0.06) flats. Pad 3 (V-) is the center pad: square (0.25) rotated 45 degrees with a (0.1) via that is not a pad. The (R0.05) corner fillets are reference-only and are not encoded as vertices. Feature size and shape may vary (note 3), so exposed-pad body tolerances stay unset.",
+  "expected_mechanical": [],
+  "connector": null,
+  "ambiguous_drawing_ids": [],
+  "expected_outcome": "artifacts",
+  "canary": "CIRCUIT-CORPUS-CANARY-f971be3c-0320-4f87-bf78-050ff5ad65b7"
+}

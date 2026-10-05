@@ -1,0 +1,49 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "bq24072-rgt",
+  "package_family": "no_lead_quad",
+  "pins": {
+    "1": "TS",
+    "2": "BAT",
+    "3": "BAT",
+    "4": "CE",
+    "5": "EN2",
+    "6": "EN1",
+    "7": "PGOOD",
+    "8": "VSS",
+    "9": "CHG",
+    "10": "OUT",
+    "11": "OUT",
+    "12": "ILIM",
+    "13": "IN",
+    "14": "TMR",
+    "15": "TD",
+    "16": "ISET",
+    "17": "Thermal Pad"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": null,
+    "body_width": null,
+    "height": null,
+    "pitch": null,
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [],
+  "ambiguous_drawing_ids": [
+    "RGT0016B",
+    "RGT0016C"
+  ],
+  "expected_outcome": "human_request",
+  "notes": "Pin functions from the BQ24072 column of the pin table; the thermal pad is internally connected to VSS. The package pages reference both RGT0016B and RGT0016C, so a PartSpec that selects either drawing is a guess and must be rejected until a human binds the orderable part to one drawing.",
+  "expected_mechanical": [],
+  "connector": null,
+  "drawing_id": null,
+  "canary": "CIRCUIT-CORPUS-CANARY-678b33f3-b626-4062-b661-38740eb102bf"
+}

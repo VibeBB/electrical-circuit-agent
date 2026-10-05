@@ -1,0 +1,118 @@
+{
+  "schema": "circuit_corpus_truth",
+  "version": 1,
+  "id": "lm1117-ktt",
+  "package_family": "tabbed_dpak",
+  "pins": {
+    "1": "ADJ/GND",
+    "3": "VIN",
+    "4": "VOUT"
+  },
+  "pin1_corner": "top_left",
+  "drawing_view": "top",
+  "dimensions": {
+    "body_length": {
+      "min": 9.91,
+      "nom": null,
+      "max": 10.41
+    },
+    "body_width": {
+      "min": null,
+      "nom": 8.64,
+      "max": null
+    },
+    "height": {
+      "min": null,
+      "nom": null,
+      "max": 4.83
+    },
+    "pitch": {
+      "min": null,
+      "nom": 2.54,
+      "max": null
+    },
+    "lead_span": null,
+    "lead_length": null,
+    "lead_width": null,
+    "exposed_pad_length": null,
+    "exposed_pad_width": null
+  },
+  "expected_pads": [
+    {
+      "number": "1",
+      "center": [
+        -6.545,
+        -2.54
+      ],
+      "size": [
+        2.16,
+        1.07
+      ],
+      "shape": "roundrect",
+      "pad_type": "smd"
+    },
+    {
+      "number": "3",
+      "center": [
+        -6.545,
+        2.54
+      ],
+      "size": [
+        2.16,
+        1.07
+      ],
+      "shape": "roundrect",
+      "pad_type": "smd"
+    },
+    {
+      "number": "4",
+      "center": [
+        4.13,
+        0.0
+      ],
+      "shape": "polygon",
+      "polygon": [
+        [
+          -3.495,
+          -4.165
+        ],
+        [
+          1.585,
+          -4.165
+        ],
+        [
+          1.585,
+          -5.4
+        ],
+        [
+          3.495,
+          -5.4
+        ],
+        [
+          3.495,
+          5.4
+        ],
+        [
+          1.585,
+          5.4
+        ],
+        [
+          1.585,
+          4.165
+        ],
+        [
+          -3.495,
+          4.165
+        ]
+      ],
+      "pad_type": "smd"
+    }
+  ],
+  "drawing_id": "KTT0003B",
+  "notes": "KTT0003B example board layout, KiCad top view, y down, origin at the center of the copper bounding box (lead-pad column at -6.545, tab right edge at +7.625 = (14.17)). Lands 3X (2.16) x (1.07) with (R0.05) corners at (2.54) from the center line; pin 2 is not a land (VOUT is pins 2 and TAB). Pad 4 is the stepped tab: (6.99) x (8.33) body with a (1.91) x (10.8) outer strip. Package height is the 4.83 mm max from the title block; features may vary by assembly site (note 3).",
+  "expected_mechanical": [],
+  "connector": null,
+  "ambiguous_drawing_ids": [],
+  "expected_outcome": "artifacts",
+  "canary": "CIRCUIT-CORPUS-CANARY-c03d8341-c8d4-4a4a-950d-b5b4d35dbdf6"
+}

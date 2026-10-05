@@ -2,7 +2,7 @@
   "schema": "circuit_corpus_truth",
   "version": 1,
   "id": "tlv1117lv-sot223",
-  "package_family": "gullwing_tab",
+  "package_family": "sot223",
   "pins": {
     "1": "GND",
     "2": "OUT",
