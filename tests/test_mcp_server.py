@@ -104,6 +104,8 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_record_impression",
         "circuit_record_vision_review",
         "circuit_records_status",
+        "circuit_ux_inbox",
+        "circuit_ux_respond",
     }
     verification_schema = next(
         schema
@@ -1472,12 +1474,12 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     unknown=[],
                     agent_assessment=(
                         "This packet presents deterministic checks and source evidence for "
-                        "review. Compare the pin map, package dimensions, and model against "
+                        "review. Compare the pin map, package and model against "
                         "the cited material. Hash agreement does not establish content "
-                        "correctness, and this assessment does not grant approval. Each bound artifact "
+                        "correctness; the assessment does not grant approval. Each artifact "
                         "would also need to be regenerated and re-reviewed if the "
                         "inputs change, since the recorded hashes stop matching the "
-                        "files on disk."
+                        "files on disk and the binding no longer holds."
                     ),
                     recommendation="Review before approval.",
                     recommendation_rationale="Only a human can approve the evidence.",
@@ -1709,7 +1711,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 58
+            assert len(tools.tools) == 60
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

@@ -151,3 +151,20 @@ not only legibility.
 | layout | top/bottom/side/isometric views, layer plots, stackup PNG after DRC |
 | review | circuit_diff PNGs (checklist `diff`) |
 | manufacturing | gerber layer plots and fab PDF pages rasterized via circuit_rasterize |
+
+## Sister Liaison Protocol (SLP v2)
+
+`liaison/*.ux-request.json` files are work orders from UX-creator. At session
+start call `circuit_ux_inbox` and answer EVERY request whose `target_agent` is
+`circuit`. State rules: `stale` means an input hash changed — re-verify before
+answering; `blocked` means a `depends_on` sibling has no valid response —
+report it to the user instead of guessing; entries in `malformed` are rejected
+files — report them, never fix them silently.
+
+Reply with `circuit_ux_respond` (or `ux respond --json`): `accepted` or
+`in_progress` immediately when you take the work, then `done`, `needs_info`,
+`rejected`, or `deferred` at the end. A `done` answer must carry the artifacts
+with their sha256, the gate verdicts from the kicad-cli ERC/DRC JSON output,
+and the `decision_refs`/`impression_refs` of the VRP records you left; it is
+refused if any gate verdict is `fail` or `unknown`. Use `questions_for_user`
+for anything only the human can decide.

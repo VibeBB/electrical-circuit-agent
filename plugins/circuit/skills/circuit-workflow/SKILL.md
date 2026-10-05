@@ -83,3 +83,13 @@ not only legibility.
 | layout | top/bottom/side/isometric views, layer plots, stackup PNG after DRC |
 | review | circuit_diff PNGs (checklist `diff`) |
 | manufacturing | gerber layer plots and fab PDF pages rasterized via circuit_rasterize |
+
+## Sister Liaison Protocol (SLP v2)
+
+UX-creator drops `*.ux-request.json` files into `liaison/`. Call
+`circuit_ux_inbox` at session start and at every stage boundary; answer every
+`circuit` request with `circuit_ux_respond` — `accepted`/`in_progress` when
+you start, `done`/`needs_info`/`rejected`/`deferred` when you finish. A `done`
+answer requires artifacts, gate verdicts, and VRP `decision_refs` +
+`impression_refs`; report `malformed`, `stale`, and `blocked` inbox entries to
+the user instead of working around them.

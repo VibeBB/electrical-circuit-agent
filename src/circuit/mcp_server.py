@@ -40,6 +40,7 @@ from . import (
     intake,
     kicad_cli,
     landpattern,
+    liaison,
     libmetrics,
     libraries,
     libraryvision,
@@ -1148,6 +1149,57 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         records.VisionReviewInput.model_json_schema(),
     ),
     (
+        "circuit_ux_inbox",
+        "List UX-creator liaison requests targeting circuit with their state "
+        "(new, answered, stale, blocked) plus malformed request/response files.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    ),
+    (
+        "circuit_ux_respond",
+        "Answer a UX-creator liaison request: writes liaison/<id>.ux-response.json "
+        "with input hashes, artifact hashes, gate verdicts and VRP record refs. "
+        "'done' is refused when a gate verdict is fail/unknown or refs are missing.",
+        {
+            "type": "object",
+            "properties": {
+                "request": {"type": "string"},
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "accepted",
+                        "in_progress",
+                        "done",
+                        "rejected",
+                        "deferred",
+                        "needs_info",
+                    ],
+                },
+                "reason": {"type": "string"},
+                "artifacts": {"type": "array", "items": {"type": "string"}},
+                "gate_verdicts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "gate": {"type": "string"},
+                            "verdict": {
+                                "type": "string",
+                                "enum": ["pass", "fail", "unknown"],
+                            },
+                        },
+                        "required": ["gate", "verdict"],
+                        "additionalProperties": False,
+                    },
+                },
+                "decision_refs": {"type": "array", "items": {"type": "string"}},
+                "impression_refs": {"type": "array", "items": {"type": "string"}},
+                "questions_for_user": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["request", "status"],
+            "additionalProperties": False,
+        },
+    ),
+    (
         "circuit_records_status",
         "Counts of decision / impression / vision-review records and the last Stop-hook "
         "verdict listing records this session still owes.",
@@ -1240,6 +1292,8 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_record_impression": _anno("Record stage impression", write=True),
     "circuit_record_vision_review": _anno("Record vision review", write=True),
     "circuit_records_status": _anno("Records status", write=False),
+    "circuit_ux_inbox": _anno("UX liaison inbox", write=False),
+    "circuit_ux_respond": _anno("UX liaison respond", write=True),
     "circuit_kicad_version": _anno("KiCad version", write=False),
 }
 
@@ -2541,6 +2595,10 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             result = records.record_vision_review(arguments or {})
         elif name == "circuit_records_status":
             result = records.records_summary()
+        elif name == "circuit_ux_inbox":
+            result = liaison.ux_inbox()
+        elif name == "circuit_ux_respond":
+            result = liaison.ux_respond(arguments or {})
         elif name == "circuit_kicad_version":
             result = kicad_cli.version()
         else:

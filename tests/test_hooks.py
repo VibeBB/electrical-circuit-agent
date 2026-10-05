@@ -374,7 +374,7 @@ def test_protect_allows_record_reads_and_request_writes() -> None:
 
 @pytest.mark.parametrize("lane", ["a", "b"])
 def test_author_lane_guard_denies_records_and_ux_access(lane: str) -> None:
-    payloads = [
+    payloads: list[dict[str, Any]] = [
         {"tool_name": "circuit_records_status", "tool_input": {}},
         {"tool_name": "circuit_record_decision", "tool_input": {"id": "x"}},
         {"tool_name": "circuit_ux_inbox", "tool_input": {}},

@@ -11,6 +11,7 @@ Subcommands:
   author       run e2e authoring from a design brief (JSON verdict)
   record       append a VibeBB Record Protocol record (decision, impression,
                vision-review) or print the records status
+  ux           Sister Liaison Protocol inbox listing or response writing
 
 All commands print a JSON verdict to stdout; the verdict is fail-closed.
 """
@@ -332,6 +333,22 @@ def cmd_record(args: argparse.Namespace) -> int:
         return _fail("record", str(exc))
 
 
+def cmd_ux(args: argparse.Namespace) -> int:
+    from pydantic import ValidationError
+
+    from .liaison import ux_inbox, ux_respond
+
+    if args.action == "inbox":
+        return _emit(ux_inbox().model_dump(mode="json"))
+    try:
+        raw: Any = json.loads(Path(args.json).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("ux response JSON must be an object")
+        return _emit(ux_respond(cast(dict[str, Any], raw)).model_dump(mode="json"))
+    except (OSError, ValueError, ValidationError, json.JSONDecodeError) as exc:
+        return _fail("ux", str(exc))
+
+
 def cmd_author(args: argparse.Namespace) -> int:
     script = _e2e_script()
     if script is None:
@@ -487,6 +504,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     record_parser.set_defaults(handler=cmd_record)
 
+    ux_parser = subparsers.add_parser("ux", help="Sister Liaison Protocol inbox/respond")
+    ux_actions = ux_parser.add_subparsers(dest="action", required=True)
+    ux_inbox_parser = ux_actions.add_parser("inbox", help="list circuit liaison requests")
+    ux_inbox_parser.set_defaults(handler=cmd_ux)
+    ux_respond_parser = ux_actions.add_parser("respond", help="write liaison/<id>.ux-response.json")
+    ux_respond_parser.add_argument("--json", required=True, help="response payload file")
+    ux_respond_parser.set_defaults(handler=cmd_ux)
+
     author_parser = subparsers.add_parser("author", help="run e2e authoring from a design brief")
     author_parser.add_argument("--brief", required=True)
     author_parser.add_argument("--workdir", required=True)
@@ -498,6 +523,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "record" and args.kind != "status" and not args.json:
         parser.error("record decision|impression|vision-review requires --json")
+    if args.command == "ux" and args.action == "respond" and not args.json:
+        parser.error("ux respond requires --json")
     handler: Any = args.handler
     result: int = handler(args)
     return result

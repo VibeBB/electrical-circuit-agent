@@ -75,6 +75,8 @@ EXPECTED_CIRCUIT_MCP_TOOLS = {
     "circuit_record_impression",
     "circuit_record_vision_review",
     "circuit_records_status",
+    "circuit_ux_inbox",
+    "circuit_ux_respond",
 }
 
 

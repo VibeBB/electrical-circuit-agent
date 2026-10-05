@@ -255,9 +255,10 @@ def _terminal_confidential_git_target(
 
 def _is_records_path(value: str) -> bool:
     normalized = value.replace("\\", "/")
-    return RECORDS_PATH.search(normalized) is not None or UX_RESPONSE_PATH.search(
-        normalized
-    ) is not None
+    return (
+        RECORDS_PATH.search(normalized) is not None
+        or UX_RESPONSE_PATH.search(normalized) is not None
+    )
 
 
 def _is_protected(value: str) -> bool:
