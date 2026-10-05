@@ -53,6 +53,7 @@ from . import (
     netlist,
     partspec,
     raster,
+    records,
     report,
     revwatch,
     ruleprofile,
@@ -1109,6 +1110,35 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
             },
         },
     ),
+    (
+        "circuit_record_decision",
+        "Record a design decision (VibeBB Record Protocol): first principles, at least "
+        "two options with pros/cons, the chosen option, a rationale of 200+ chars, "
+        "evidence paths (hashed) or references, assumptions, unknowns, risks, revisit "
+        "trigger. Record one for every non-trivial choice without being asked.",
+        records.DecisionInput.model_json_schema(),
+    ),
+    (
+        "circuit_record_impression",
+        "Record the long-form impression that closes a stage (400+ chars, 3+ sentences): "
+        "what you noticed, what works, what worries you, how a maker or user would read "
+        "it, what to do next. Binds the stage artifacts by sha256; record it after the "
+        "final regeneration.",
+        records.StageImpressionInput.model_json_schema(),
+    ),
+    (
+        "circuit_record_vision_review",
+        "Record what you thought after looking at an image (400+ char impression plus "
+        "findings). Bind it to image_path (hashed) or to the source_event_id of an "
+        "inspect_image_with_vision event. Required for every image you viewed.",
+        records.VisionReviewInput.model_json_schema(),
+    ),
+    (
+        "circuit_records_status",
+        "Counts of decision / impression / vision-review records and the last Stop-hook "
+        "verdict listing records this session still owes.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    ),
     ("circuit_kicad_version", "Get KiCad version", {"type": "object", "properties": {}}),
 ]
 
@@ -1192,6 +1222,10 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_library_metrics": _anno("Library escape-rate metrics", write=True),
     "circuit_mutation_report": _anno("Library mutation report", write=True),
     "circuit_konnect_call": _anno("Konnect call", write=True, destructive=True, idempotent=False),
+    "circuit_record_decision": _anno("Record decision", write=True),
+    "circuit_record_impression": _anno("Record stage impression", write=True),
+    "circuit_record_vision_review": _anno("Record vision review", write=True),
+    "circuit_records_status": _anno("Records status", write=False),
     "circuit_kicad_version": _anno("KiCad version", write=False),
 }
 
@@ -2482,6 +2516,14 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 rewrite_text_block_images=_rewrite_text_block_images,
                 rewrite_base64_images=_rewrite_base64_images,
             )
+        elif name == "circuit_record_decision":
+            result = records.record_decision(arguments or {})
+        elif name == "circuit_record_impression":
+            result = records.record_impression(arguments or {})
+        elif name == "circuit_record_vision_review":
+            result = records.record_vision_review(arguments or {})
+        elif name == "circuit_records_status":
+            result = records.records_summary()
         elif name == "circuit_kicad_version":
             result = kicad_cli.version()
         else:

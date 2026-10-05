@@ -22,7 +22,11 @@ def _strings(value: Any) -> list[str]:
 def _blocked(payload: dict[str, object], lane: str) -> bool:
     name = payload.get("tool_name")
     if isinstance(name, str) and (
-        "circuit_part_author_compare" in name or name == "circuit_corpus_score"
+        "circuit_part_author_compare" in name
+        or name == "circuit_corpus_score"
+        or name.startswith("circuit_record_")
+        or name == "circuit_records_status"
+        or name.startswith("circuit_ux_")
     ):
         return True
     tool_input = payload.get("tool_input")
@@ -37,6 +41,11 @@ def _blocked(payload: dict[str, object], lane: str) -> bool:
         return True
     if any(
         re.search(r"(?:^|[/\\])library[/\\]corpus(?:[/\\]|$)", value, re.IGNORECASE)
+        for value in values
+    ):
+        return True
+    if any(
+        re.search(r"(?:^|[/\\])observations[/\\]circuit(?:[/\\]|$)", value, re.IGNORECASE)
         for value in values
     ):
         return True

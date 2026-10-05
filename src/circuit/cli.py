@@ -9,6 +9,8 @@ Subcommands:
   firmware-export  emit MCU pin connectivity for firmware-agent (JSON verdict)
   firmware-check   check a firmware-agent pin map against the circuit (JSON verdict)
   author       run e2e authoring from a design brief (JSON verdict)
+  record       append a VibeBB Record Protocol record (decision, impression,
+               vision-review) or print the records status
 
 All commands print a JSON verdict to stdout; the verdict is fail-closed.
 """
@@ -279,6 +281,22 @@ def cmd_firmware_check(args: argparse.Namespace) -> int:
     return _emit(report.model_dump(mode="json"))
 
 
+def cmd_record(args: argparse.Namespace) -> int:
+    from pydantic import ValidationError
+
+    from .records import RECORDERS, records_summary
+
+    if args.kind == "status":
+        return _emit(records_summary())
+    try:
+        raw: Any = json.loads(Path(args.json).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("record JSON must be an object")
+        return _emit(RECORDERS[args.kind](cast(dict[str, Any], raw)))
+    except (OSError, ValueError, ValidationError, json.JSONDecodeError) as exc:
+        return _fail("record", str(exc))
+
+
 def cmd_author(args: argparse.Namespace) -> int:
     script = _e2e_script()
     if script is None:
@@ -425,6 +443,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     firmware_check_parser.add_argument("--out", default=None)
     firmware_check_parser.set_defaults(handler=cmd_firmware_check)
 
+    record_parser = subparsers.add_parser("record", help="append a VibeBB Record Protocol record")
+    record_parser.add_argument(
+        "kind", choices=["decision", "impression", "vision-review", "status"]
+    )
+    record_parser.add_argument(
+        "--json", default=None, help="JSON object file with the record fields"
+    )
+    record_parser.set_defaults(handler=cmd_record)
+
     author_parser = subparsers.add_parser("author", help="run e2e authoring from a design brief")
     author_parser.add_argument("--brief", required=True)
     author_parser.add_argument("--workdir", required=True)
@@ -434,6 +461,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     author_parser.set_defaults(handler=cmd_author)
 
     args = parser.parse_args(argv)
+    if args.command == "record" and args.kind != "status" and not args.json:
+        parser.error("record decision|impression|vision-review requires --json")
     handler: Any = args.handler
     result: int = handler(args)
     return result

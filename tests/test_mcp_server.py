@@ -100,6 +100,10 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_kicad_version",
         "circuit_sch_lint",
         "circuit_fit_sheet",
+        "circuit_record_decision",
+        "circuit_record_impression",
+        "circuit_record_vision_review",
+        "circuit_records_status",
     }
     verification_schema = next(
         schema
@@ -1698,7 +1702,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 54
+            assert len(tools.tools) == 58
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

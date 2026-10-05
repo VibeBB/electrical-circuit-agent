@@ -315,6 +315,67 @@ def test_author_lane_guard_denies_corpus_truth_and_scoring(lane: str) -> None:
         assert "blind authoring lane context is isolated" in result.stderr
 
 
+def test_protect_denies_record_log_writes() -> None:
+    for path in (
+        "observations/circuit/decisions.jsonl",
+        "observations/circuit/impressions.jsonl",
+        "observations/circuit/vision-reviews.jsonl",
+        "observations/circuit/vision-tool-events.jsonl",
+        "observations/circuit/image-observations.jsonl",
+        "observations/circuit/records-status.json",
+        "observations/circuit/.sessions/s1.json",
+        "liaison/fix-board.ux-response.json",
+    ):
+        for payload in (
+            {
+                "tool_name": "file_editor",
+                "tool_input": {"command": "create", "file_path": path},
+            },
+            {
+                "tool_name": "terminal",
+                "tool_input": {"command": f"echo x >> {path}"},
+            },
+        ):
+            result = _run_protect_hook(payload)
+            assert result.returncode == 2, (path, payload)
+
+
+def test_protect_allows_record_reads_and_request_writes() -> None:
+    for payload in (
+        {
+            "tool_name": "file_editor",
+            "tool_input": {"command": "view", "path": "observations/circuit/decisions.jsonl"},
+        },
+        {
+            "tool_name": "terminal",
+            "tool_input": {"command": "cat observations/circuit/impressions.jsonl"},
+        },
+        {
+            "tool_name": "file_editor",
+            "tool_input": {"command": "create", "file_path": "liaison/fix-board.ux-request.json"},
+        },
+    ):
+        assert _run_protect_hook(payload).returncode == 0
+
+
+@pytest.mark.parametrize("lane", ["a", "b"])
+def test_author_lane_guard_denies_records_and_ux_access(lane: str) -> None:
+    payloads = [
+        {"tool_name": "circuit_records_status", "tool_input": {}},
+        {"tool_name": "circuit_record_decision", "tool_input": {"id": "x"}},
+        {"tool_name": "circuit_ux_inbox", "tool_input": {}},
+        {"tool_name": "circuit_ux_respond", "tool_input": {"request": "x"}},
+        {
+            "tool_name": "file_editor",
+            "tool_input": {"command": "view", "path": "observations/circuit/decisions.jsonl"},
+        },
+    ]
+    for payload in payloads:
+        result = _run_author_lane_guard(payload, lane)
+        assert result.returncode == 2, (lane, payload)
+        assert "blind authoring lane context is isolated" in result.stderr
+
+
 def test_part_author_profiles_use_first_distinct_model(tmp_path: Path) -> None:
     profile_dir = tmp_path / ".openhands" / "profiles"
     profile_dir.mkdir(parents=True)

@@ -30,6 +30,14 @@ BLOCKED_PATHS = (
     ".openhands/agent-canvas",
 )
 CORPUS_PATH = re.compile(r"(?:^|/)library/corpus(?:/|$)", re.IGNORECASE)
+RECORDS_PATH = re.compile(
+    r"(?:^|/)observations/circuit/(?:"
+    r"decisions\.jsonl|impressions\.jsonl|vision-reviews\.jsonl|"
+    r"vision-tool-events\.jsonl|image-observations\.jsonl|"
+    r"records-status\.json|\.sessions(?:/|$))",
+    re.IGNORECASE,
+)
+UX_RESPONSE_PATH = re.compile(r"(?:^|/)liaison/[^/]+\.ux-response\.json$", re.IGNORECASE)
 WRITE_TOOLS = {"file_editor", "apply_patch"}
 VIEW_ACTIONS = {"view", "read", "undo_edit"}
 WRITE_ACTIONS = {"create", "str_replace", "insert", "edit", "write"}
@@ -245,10 +253,19 @@ def _terminal_confidential_git_target(
     return None
 
 
+def _is_records_path(value: str) -> bool:
+    normalized = value.replace("\\", "/")
+    return RECORDS_PATH.search(normalized) is not None or UX_RESPONSE_PATH.search(
+        normalized
+    ) is not None
+
+
 def _is_protected(value: str) -> bool:
     normalized = value.replace("\\", "/")
-    return any(suffix in normalized for suffix in DESIGN_SUFFIXES) or any(
-        path in normalized for path in BLOCKED_PATHS
+    return (
+        any(suffix in normalized for suffix in DESIGN_SUFFIXES)
+        or any(path in normalized for path in BLOCKED_PATHS)
+        or _is_records_path(normalized)
     )
 
 
@@ -281,6 +298,22 @@ def _is_design_write(payload: dict[str, Any]) -> bool:
         if action in WRITE_ACTIONS:
             return True
     return any(key in tool_input for key in ("file_text", "new_str", "content", "insert_text"))
+
+
+def _is_records_write(payload: dict[str, Any]) -> bool:
+    tool_name = payload.get("tool_name")
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return False
+    tool_input = cast(dict[str, Any], tool_input)
+    if tool_name == "apply_patch":
+        return any(_is_records_path(value) for value in _strings(tool_input))
+    if tool_name != "file_editor":
+        return False
+    if not any(_is_records_path(value) for value in _path_values(tool_input)):
+        return False
+    action = tool_input.get("command") or tool_input.get("action")
+    return not (isinstance(action, str) and action in VIEW_ACTIONS)
 
 
 def _is_library_write(payload: dict[str, Any]) -> bool:
@@ -436,6 +469,13 @@ def main() -> int:
         return 2
     if _is_library_write(payload):
         print("library writes are prohibited", file=sys.stderr)
+        return 2
+    if _is_records_write(payload):
+        print(
+            "record logs and liaison responses are append-only through the"
+            " circuit_record_* / circuit_ux_respond tools",
+            file=sys.stderr,
+        )
         return 2
     target = _is_terminal_write(payload)
     if target is not None:
