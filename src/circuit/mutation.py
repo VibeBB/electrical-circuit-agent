@@ -2216,8 +2216,21 @@ MUTATION_OPERATORS: tuple[MutationOperator, ...] = (
 )
 
 
-def run_mutations(fixture: MutationFixture) -> MutationReport:
-    """Run every seeded mutation against the fixture's complete verification stack."""
+def run_mutations(
+    fixture: MutationFixture,
+    *,
+    shard_index: int = 0,
+    num_shards: int = 1,
+) -> MutationReport:
+    """Run seeded mutations against the fixture's complete verification stack.
+
+    ``shard_index``/``num_shards`` restrict the run to a deterministic slice of
+    the applicable operators so CI can fan the matrix across runner jobs; the
+    per-shard ``passed`` verdict composes (all shards pass iff the full matrix
+    passes the detected/single-oracle criteria).
+    """
+    if not 0 <= shard_index < num_shards:
+        raise MutationError(f"invalid mutation shard: index {shard_index} of {num_shards}")
     if (
         not fixture.artifacts.model_path.is_file()
         or fixture.artifacts.model_path.suffix.casefold()
@@ -2250,9 +2263,16 @@ def run_mutations(fixture: MutationFixture) -> MutationReport:
     single_oracle: list[str] = []
     undetected: list[str] = []
 
-    for operator in (
+    applicable = [
         candidate for candidate in MUTATION_OPERATORS if candidate.applies(fixture.artifacts)
-    ):
+    ]
+    if num_shards > 1:
+        applicable = [
+            operator
+            for position, operator in enumerate(applicable)
+            if position % num_shards == shard_index
+        ]
+    for operator in applicable:
         mutated, record = operator.apply(fixture.artifacts, fixture.seed)
         if record.target == "model" or mutated.model is not fixture.artifacts.model:
             with tempfile.TemporaryDirectory(prefix="circuit-mutation-") as directory:

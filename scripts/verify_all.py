@@ -2,7 +2,10 @@
 
 Commands declared `barrier=True` always run alone in declaration order;
 consecutive non-barrier commands run in parallel up to `--jobs` workers.
-The parallelism degree never changes the artifacts produced by the commands.
+`--group`, `--match`, and `--shard K/N` select subsets so CI can spread one
+stage across runner jobs without duplicating the command list; a shard that
+selects no commands exits successfully. The parallelism degree never changes
+the artifacts produced by the commands.
 """
 
 from __future__ import annotations
@@ -15,44 +18,106 @@ import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+GROUPS = ("lint", "unit", "docker")
 
 
 @dataclass(frozen=True)
 class Command:
     argv: tuple[str, ...]
     barrier: bool = False
+    group: str | None = None
+
+
+def _docker_integration_commands() -> tuple[Command, ...]:
+    integration_dir = Path(ROOT) / "tests" / "integration"
+    return tuple(
+        Command(
+            ("uv", "run", "pytest", path, "-m", "docker", "-n", "0"),
+            group="docker",
+        )
+        for path in sorted(
+            str(candidate.relative_to(ROOT)) for candidate in integration_dir.glob("test_*.py")
+        )
+    )
 
 
 STAGES: dict[str, tuple[Command, ...]] = {
     "docs": (
-        Command(("uv", "run", "python", "scripts/verify_docs.py")),
-        Command(("uv", "run", "python", "scripts/render_konnect_tools.py", "--check")),
-        Command(("git", "diff", "--check")),
+        Command(("uv", "run", "python", "scripts/verify_docs.py"), group="lint"),
+        Command(
+            ("uv", "run", "python", "scripts/render_konnect_tools.py", "--check"),
+            group="lint",
+        ),
+        Command(("git", "diff", "--check"), group="lint"),
     ),
     "fast": (
         Command(("uv", "sync", "--locked"), barrier=True),
-        Command(("uv", "run", "ruff", "check")),
-        Command(("uv", "run", "ruff", "format", "--check")),
-        Command(("uv", "run", "pyright")),
-        Command(("uv", "run", "pytest", "--cov", "--cov-report=term-missing:skip-covered")),
-        Command(("uv", "run", "python", "scripts/check_shared_hooks.py")),
-        Command(("uv", "run", "python", "scripts/check_shared_workflows.py")),
-        Command(("uv", "run", "python", "scripts/verify_docs.py")),
-        Command(("git", "diff", "--check")),
+        Command(("uv", "run", "ruff", "check"), group="lint"),
+        Command(("uv", "run", "ruff", "format", "--check"), group="lint"),
+        Command(("uv", "run", "pyright"), group="lint"),
+        Command(
+            ("uv", "run", "pytest", "--cov", "--cov-report=term-missing:skip-covered"),
+            group="unit",
+        ),
+        Command(("uv", "run", "python", "scripts/check_shared_hooks.py"), group="lint"),
+        Command(("uv", "run", "python", "scripts/check_shared_workflows.py"), group="lint"),
+        Command(("uv", "run", "python", "scripts/verify_docs.py"), group="lint"),
+        Command(("git", "diff", "--check"), group="lint"),
     ),
     "standard": (
         Command(("uv", "sync", "--locked"), barrier=True),
-        Command(("uv", "run", "ruff", "check")),
-        Command(("uv", "run", "ruff", "format", "--check")),
-        Command(("uv", "run", "pyright")),
-        Command(("uv", "run", "pytest", "--cov", "--cov-report=term-missing:skip-covered")),
-        Command(("uv", "run", "pytest", "tests/integration", "-m", "docker", "-n", "0")),
-        Command(("uv", "run", "python", "scripts/verify_docs.py")),
-        Command(("git", "diff", "--check")),
+        Command(("uv", "run", "ruff", "check"), group="lint"),
+        Command(("uv", "run", "ruff", "format", "--check"), group="lint"),
+        Command(("uv", "run", "pyright"), group="lint"),
+        Command(
+            ("uv", "run", "pytest", "--cov", "--cov-report=term-missing:skip-covered"),
+            group="unit",
+        ),
+        *_docker_integration_commands(),
+        Command(("uv", "run", "python", "scripts/verify_docs.py"), group="lint"),
+        Command(("git", "diff", "--check"), group="lint"),
     ),
 }
+
+
+def _select(
+    commands: tuple[Command, ...],
+    group: str | None,
+    match: str | None,
+    shard: str | None,
+) -> tuple[Command, ...]:
+    if group is None and match is None and shard is None:
+        return commands
+    selected = [
+        command
+        for command in commands
+        if command.barrier
+        or (
+            (group is None or command.group == group)
+            and (match is None or match in " ".join(command.argv))
+        )
+    ]
+    if shard is not None:
+        shard_index_text, _, shard_count_text = shard.partition("/")
+        shard_index = int(shard_index_text)
+        shard_count = int(shard_count_text)
+        if not 0 <= shard_index < shard_count:
+            raise ValueError("--shard requires 0 <= K < N")
+        non_barrier_positions = {
+            id(command)
+            for index, command in enumerate(c for c in selected if not c.barrier)
+            if index % shard_count == shard_index
+        }
+        selected = [
+            command
+            for command in selected
+            if command.barrier or id(command) in non_barrier_positions
+        ]
+    return tuple(selected)
 
 
 def _run_one(command: Command) -> tuple[Command, int, str]:
@@ -72,14 +137,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--stage", choices=tuple(STAGES), default="fast")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 4))
+    parser.add_argument("--group", choices=GROUPS, default=None)
+    parser.add_argument(
+        "--match",
+        default=None,
+        help="run only commands whose argv contains this substring",
+    )
+    parser.add_argument(
+        "--shard",
+        default=None,
+        metavar="K/N",
+        help="run the K-th slice (0-based) of the selected commands across N shards",
+    )
     args = parser.parse_args(argv)
-    commands = STAGES[args.stage]
     if args.list:
         print(
             json.dumps(
                 {
                     stage: [
-                        {"command": list(command.argv), "barrier": command.barrier}
+                        {
+                            "command": list(command.argv),
+                            "barrier": command.barrier,
+                            "group": command.group,
+                        }
                         for command in stage_commands
                     ]
                     for stage, stage_commands in STAGES.items()
@@ -88,8 +168,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0
-    if args.stage == "standard" and not os.environ.get("CIRCUIT_TOOLS_IMAGE"):
-        print("CIRCUIT_TOOLS_IMAGE is required for the standard stage")
+    try:
+        commands = _select(STAGES[args.stage], args.group, args.match, args.shard)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    if not any(not command.barrier for command in commands):
+        print("no commands matched the selection")
+        return 0
+    docker_selected = any(command.group == "docker" for command in commands)
+    if docker_selected and not os.environ.get("CIRCUIT_TOOLS_IMAGE"):
+        print("CIRCUIT_TOOLS_IMAGE is required for the docker command group")
         return 2
     if args.jobs <= 1:
         for command in commands:

@@ -32,6 +32,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--export-oracle", action="store_true")
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="0-based shard index when the mutation matrix is split across jobs",
+    )
+    parser.add_argument(
+        "--num-shards",
+        type=int,
+        default=1,
+        help="total shard count; each shard runs mutations whose index mods to --shard-index",
+    )
     return parser
 
 
@@ -157,6 +169,8 @@ def _build_matrix(
     out_path: Path,
     *,
     export_oracle: bool,
+    shard_index: int = 0,
+    num_shards: int = 1,
 ) -> bool:
     entry = _entry(entry_id)
     pdf_path = cache_dir.resolve() / f"{entry_id}.pdf"
@@ -209,12 +223,13 @@ def _build_matrix(
             rules_dir=rules_dir,
             unexercised_codes=frozenset({"authoring_missing", "vision_compare_missing"}),
         )
-        matrix = run_mutations(fixture)
+        matrix = run_mutations(fixture, shard_index=shard_index, num_shards=num_shards)
         out_path.write_text(
             json.dumps(
                 {
                     "artifact_kind": "circuit_real_mutation_matrix",
                     "entry": entry.id,
+                    "shard": {"index": shard_index, "count": num_shards},
                     "pdf_sha256": entry.datasheet.sha256,
                     "synthetic_evidence": ["vision_reads", "advisory_reviews"],
                     "synthetic_evidence_counted": False,
@@ -238,6 +253,8 @@ def main() -> int:
             args.cache,
             args.out,
             export_oracle=args.export_oracle,
+            shard_index=args.shard_index,
+            num_shards=args.num_shards,
         )
     except Exception as error:
         args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -223,11 +223,13 @@ jobs:
           print(f"attestation={attestation}")
           print(f"sbom_attestation={sbom_attestation}")
           PY
-  check:
+  # The locked-image verification is split into parallel legs; the check
+  # aggregator at the end keeps the required check name stable.
+  check-attest:
     needs: check-lock
     if: needs.check-lock.outputs.present == 'true'
     runs-on: ubuntu-26.04
-    timeout-minutes: 60
+    timeout-minutes: 15
     permissions:
       contents: read
       attestations: read
@@ -238,17 +240,7 @@ jobs:
           disable-telemetry: true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          submodules: true
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          python-version: "3.14"
-          cache-suffix: locked-image-check
-      - name: Install host rasterizer tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y poppler-utils librsvg2-bin
-      - run: uv sync --locked
       - name: Fail when tools image has no attestation metadata
         # Publish always emits attestations now; a lock without them means
         # the attestation stage silently regressed — fail closed rather
@@ -314,6 +306,27 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
             --predicate-type https://spdx.dev/Document/v2.3
+  check-smoke:
+    needs: check-lock
+    if: needs.check-lock.outputs.present == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.14"
+          cache-suffix: locked-check-smoke
+      - run: uv sync --locked
       - run: uv run python scripts/pull_locked_image.py --entry circuit_tools
       - id: image
         run: echo "ref=$(uv run python scripts/print_locked_image.py --entry circuit_tools)" >> "$GITHUB_OUTPUT"
@@ -393,6 +406,84 @@ jobs:
           path: ${{ github.workspace }}/circuit-smoke-out/
           if-no-files-found: ignore
           retention-days: 14
+
+  check-lint:
+    needs: check-lock
+    if: needs.check-lock.outputs.present == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.14"
+          cache-suffix: locked-check-lint
+      - run: uv run python scripts/verify_all.py --stage standard --group lint
+
+  check-unit:
+    needs: check-lock
+    if: needs.check-lock.outputs.present == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install host rasterizer tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.14"
+          cache-suffix: locked-check-unit
+      - run: uv run python scripts/verify_all.py --stage standard --group unit
+
+  check-docker:
+    needs: check-lock
+    if: needs.check-lock.outputs.present == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: Install host rasterizer tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils librsvg2-bin
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.14"
+          cache-suffix: locked-check-docker-${{ matrix.shard }}
+      - run: uv sync --locked
       - name: Preflight host rasterizer tools
         # verify_all --stage standard rasterizes via poppler/rsvg on the
         # host; surface a missing tool as a setup error, not a deep
@@ -400,6 +491,49 @@ jobs:
         run: |
           command -v pdftoppm
           command -v rsvg-convert
-      - run: uv run python scripts/verify_all.py --stage standard
+      - run: uv run python scripts/pull_locked_image.py --entry circuit_tools
+      - id: image
+        run: echo "ref=$(uv run python scripts/print_locked_image.py --entry circuit_tools)" >> "$GITHUB_OUTPUT"
+      - run: >-
+          uv run python scripts/verify_all.py --stage standard
+          --group docker --shard ${{ matrix.shard }}/4
         env:
           CIRCUIT_TOOLS_IMAGE: ${{ steps.image.outputs.ref }}
+
+  check:
+    needs: [check-lock, check-attest, check-lint, check-unit, check-docker, check-smoke]
+    if: always()
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - name: Aggregate locked-image check results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS"])
+          lock = needs["check-lock"]
+          if lock["result"] != "success":
+              print(f"::error::check-lock did not succeed: {lock['result']}")
+              sys.exit(1)
+          legs = ("check-attest", "check-lint", "check-unit", "check-docker", "check-smoke")
+          results = {name: needs[name]["result"] for name in legs}
+          # With no locked image the legs are skipped by design; with a lock
+          # every leg must succeed.
+          expected = "success" if lock["outputs"].get("present") == "true" else "skipped"
+          bad = {k: v for k, v in results.items() if v != expected}
+          for name in legs:
+              print(f"{name}: {results[name]}")
+          if bad:
+              print(f"::error::locked-image legs not {expected}: {bad}")
+              sys.exit(1)
+          PY
