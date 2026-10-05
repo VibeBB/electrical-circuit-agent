@@ -18,6 +18,7 @@ of `kicad-cli` JSON.
 ```text
 user
   -> orchestrating agent
+  -> circuit-brief / circuit-library (+ part-author lanes a/b)
   -> circuit-schematic / circuit-layout / circuit-review
   -> Konnect MCP or kicad-cli
   -> .kicad_pro / .kicad_pcb / JSON
@@ -28,9 +29,38 @@ and routing, and `circuit-review` owns checking the deterministic ERC/DRC
 output. Sub-agents are delegated via the SDK's `TaskToolSet` and
 `AgentDefinition`.
 
+## Records layer (VRP v1)
+
+Design reasoning is append-only JSONL under `observations/circuit/`:
+`decisions.jsonl`, `impressions.jsonl`, `vision-reviews.jsonl`,
+`vision-tool-events.jsonl`, `image-observations.jsonl`, plus
+`records-status.json` and `.sessions/` for hook state. Writers are
+`src/circuit/records.py` (MCP tools `circuit_record_*`, `circuit_records_status`
+and the `record` CLI subcommand); enforcement lives in the shared hooks
+`require_records.py` (session-start hint + Stop gate) and `_records.py`
+(mirror of the typed writers, stdlib-only, canonical across the family and
+verified by AST hash in `scripts/check_shared_hooks.py`). `records-policy.json`
+declares the artifact globs an impression must bind. Records are advisory —
+they never change an ERC/DRC/kicad-cli verdict and never gate request inputs.
+Blind authoring lanes (`CIRCUIT_AUTHORING_LANE=a|b`) are denied all records
+paths and tools by `guard_author_lane.py`.
+
+## Liaison layer (SLP v2)
+
+`src/circuit/liaison.py` is a local, strict pydantic mirror of the UX-creator
+contract — no import of sister code. `liaison/<id>.ux-request.json` files are
+work orders; `circuit_ux_inbox` lists them with states new/answered/stale/
+blocked plus a `malformed` list that never raises; `circuit_ux_respond` writes
+`liaison/<id>.ux-response.json` hash-bound to current inputs and artifacts.
+A `done` response is refused unless it carries at least one gate verdict (all
+pass), one artifact, one decision_ref, and one impression_ref — each checked
+separately — and when the request inputs are stale or missing. Missing inputs
+are omitted from `input_hashes` for non-done statuses so a refusal can say
+"input missing" without writing an empty digest.
+
 ## Advisory layer
 
-All 234 Konnect tools are classified by role, stage, and IPC requirement in the
+All Konnect tools are classified by role, stage, and IPC requirement in the
 coverage matrix. Konnect observations, reviews, visual comparisons, and
 manufacturing exports made during authoring are recorded as `AdvisoryResult`,
 but advisory success or failure is never promoted to a verdict. Connectivity,

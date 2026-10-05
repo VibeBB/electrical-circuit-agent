@@ -187,7 +187,9 @@ def test_granted_alternative_evidence_can_bind_an_errata_pdf(
             "The errata file is the cited source for the corrected package length. "
             "A grant only binds this field to the supplied document and does not establish "
             "that the resulting library footprint is correct. The approval gate continues "
-            "to require independent verification of the authored geometry."
+            "to require independent verification of the authored geometry. A reviewer "
+            "should treat every other dimension as unchanged but still unverified "
+            "until the library checks are rerun against the corrected value."
         ),
         recommendation="Grant the package-length evidence binding.",
         recommendation_rationale="The reviewer can inspect the errata PDF directly.",

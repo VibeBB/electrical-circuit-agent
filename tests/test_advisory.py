@@ -19,7 +19,10 @@ LONG_IMPRESSION = (
     "The top view reads like an assembly guide: silkscreen references sit "
     "clear of courtyards, the return path through the ground pour is legible "
     "at a glance, and mounting holes carry their keep-outs. What remains unsaid "
-    "is the connector keying, which only the mating drawing can confirm."
+    "is the connector keying, which only the mating drawing can confirm. "
+    "A fabricator could populate the board from this view alone, although the "
+    "pin-one marks deserve a second look under denser silkscreen. Next I would "
+    "re-render the bottom side to confirm the mirrored labels read correctly."
 )
 
 

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "plugin": "circuit",
+  "records_dir": "observations/circuit",
+  "artifact_globs": [
+    "**/*.brief.json",
+    "**/*.intake.json",
+    "**/*.kicad_sch",
+    "**/*.kicad_pcb",
+    "**/*.kicad_pro",
+    "**/*.kicad_sym",
+    "**/*.kicad_mod",
+    "**/part.spec.json",
+    "**/*.design-report.json",
+    "**/*.connectivity.json",
+    "**/*.firmware.json",
+    "**/*-stackup.json",
+    "**/gerbers/**",
+    "**/*-gerbers/**"
+  ],
+  "ignore_globs": [
+    "examples/**",
+    "tests/**",
+    ".devin/**",
+    "library/corpus/**",
+    "libraries/**",
+    "observations/**"
+  ],
+  "max_stop_denials": 2,
+  "record_hint": "Use the MCP tools circuit_record_decision, circuit_record_impression and circuit_record_vision_review (or `python3 plugins/circuit/scripts/circuit_launcher.py record decision|impression|vision-review --json <file>`). Impressions need at least 400 characters and 3 sentences: what you noticed, what works, what worries you, how a maker or user would read it, and what to do next."
+}

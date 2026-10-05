@@ -27,8 +27,11 @@ _FALLBACK_COLOR = "#9e9e9e"
 _BAND_PX_PER_MM = 110.0
 _MIN_BAND_PX = 7.0
 _LABEL_X = 340.0
+_LABEL_MIN_GAP = 14.0
+_LABEL_FONT_SIZE = 12
 _WIDTH = 860.0
 _MARGIN = 14.0
+_DIELECTRIC_KIND = {"BSDT_CORE": "core", "BSDT_PREPREG": "prepreg"}
 
 
 def _thickness_mm(layer: dict[str, Any]) -> float:
@@ -71,8 +74,18 @@ def _dielectric_detail(layer: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
-def _layer_label(layer: dict[str, Any]) -> str:
-    name = layer.get("userName") or layer.get("layer") or "layer"
+def _layer_label(layer: dict[str, Any], dielectric_index: int = 0) -> str:
+    name = layer.get("userName")
+    if (
+        isinstance(layer.get("dielectric"), dict)
+        and dielectric_index
+        and (not name or str(layer.get("layer") or "") == "BL_UNDEFINED")
+    ):
+        dtype = cast(dict[str, Any], layer["dielectric"]).get("type")
+        kind = _DIELECTRIC_KIND.get(str(dtype), str(dtype or "dielectric").lower())
+        name = f"Dielectric {dielectric_index} ({kind})"
+    if not name:
+        name = layer.get("layer") or "layer"
     material = layer.get("materialName")
     mm = _thickness_mm(layer)
     parts = [str(name)]
@@ -105,6 +118,19 @@ def stackup_svg(data: dict[str, object]) -> str:
         raise KicadCliError("stackup report has no enabled layers")
     total = sum(height for _, height in bands)
     height = total + 2 * _MARGIN
+    labels: list[tuple[float, float, str]] = []
+    dielectrics = 0
+    y = _MARGIN + 6.0
+    for layer, band in bands:
+        if isinstance(layer.get("dielectric"), dict):
+            dielectrics += 1
+        centre = y + band / 2
+        text = _layer_label(layer, dielectrics)
+        desired = centre + 4
+        label_y = desired if not labels else max(desired, labels[-1][0] + _LABEL_MIN_GAP)
+        labels.append((label_y, centre, text))
+        y += band
+    height = max(total + 2 * _MARGIN, labels[-1][0] + 6.0 + _MARGIN)
     out = [
         '<svg xmlns="http://www.w3.org/2000/svg" '
         f'width="{_WIDTH:.0f}" height="{height:.0f}" '
@@ -116,16 +142,23 @@ def stackup_svg(data: dict[str, object]) -> str:
     y = _MARGIN + 6.0
     for layer, band in bands:
         color = _TYPE_COLORS.get(str(layer.get("type")), _FALLBACK_COLOR)
-        text_y = y + band / 2 + 4
         out.append(
             f'<rect x="{_MARGIN:.0f}" y="{y:.2f}" width="{_LABEL_X - 2 * _MARGIN:.0f}" '
             f'height="{band:.2f}" fill="{color}" stroke="#222222" stroke-width="0.5"/>'
         )
-        out.append(
-            f'<text x="{_LABEL_X:.0f}" y="{text_y:.2f}" font-family="monospace" '
-            f'font-size="12" fill="#111111">{escape(_layer_label(layer))}</text>'
-        )
         y += band
+    band_edge = _LABEL_X - 2 * _MARGIN
+    for label_y, centre, text in labels:
+        if label_y - 4 != centre:
+            out.append(
+                f'<line x1="{band_edge:.0f}" y1="{centre:.2f}" '
+                f'x2="{_LABEL_X - 8:.0f}" y2="{label_y - 5:.2f}" '
+                'stroke="#888888" stroke-width="0.5"/>'
+            )
+        out.append(
+            f'<text x="{_LABEL_X:.0f}" y="{label_y:.2f}" font-family="monospace" '
+            f'font-size="{_LABEL_FONT_SIZE}" fill="#111111">{escape(text)}</text>'
+        )
     out.append("</svg>")
     return "".join(out) + "\n"
 

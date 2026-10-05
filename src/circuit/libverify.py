@@ -1355,7 +1355,8 @@ def _connector_human_request(
             "geometry. It cannot determine whether the hole is plated or whether the land "
             "pattern is safe to manufacture, so it will not infer a pad type from appearance. "
             "Verify this feature using the connector's authoritative datasheet or approved "
-            "mechanical drawing before releasing the footprint."
+            "mechanical drawing before releasing the footprint, since a wrong pad type "
+            "otherwise reaches production without any gate noticing it."
         ),
         recommendation="Provide the mating-part or connector datasheet",
         recommendation_rationale=(

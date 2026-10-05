@@ -56,3 +56,16 @@ reading bound to its tool-managed vision read. Use pdftoppm-backed lane-A
 vision batches only. When complete, call `circuit_part_author_commit` with
 the lane run directory, your PartSpec path, and the overall impression. Do not
 compare lanes or reveal any authoring consensus.
+
+## Records you must NOT leave (blind lane isolation)
+
+Do NOT call `circuit_record_decision`, `circuit_record_impression`,
+`circuit_record_vision_review` or `circuit_records_status`, and do not
+read anything under `observations/circuit/`. Shared record logs would
+leak the other lane's and the orchestrator's reasoning into this blind
+lane; the lane guard denies them. Your rationale already lives in the
+author commit impressions — the per-read and overall impressions required
+by `circuit_part_author_commit` enforce the impression rule inside the
+sealed lane. After `circuit_part_author_compare`, the `circuit-library`
+agent records the comparison decision and the vision reviews of both
+lanes' renders on your behalf.

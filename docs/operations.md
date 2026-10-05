@@ -336,8 +336,8 @@ determinism, so published digests are locked.
 | `check-dependency-updates.yml` | Weekly PPA/PyPI/GitHub/CERN/action update report |
 | `workflow-lint.yml` | actionlint workflow validation and zizmor static analysis, uploaded to code scanning |
 
-The only required secret is `GITHUB_TOKEN`. Require `fast`, `docker-smoke`,
-`plugin-load`, and `zizmor` in branch protection. The publish workflow publishes
+The only required secret is `GITHUB_TOKEN`. Require `fast`, `fast (3.13)`,
+`docker-smoke`, `plugin-load`, and `zizmor` in branch protection. The publish workflow publishes
 `ghcr.io/vibebb/circuit-tools` and `ghcr.io/vibebb/circuit-server`, and creates
 `docker/image-digests.json` for the first time via a bot PR. Filling a missing
 lock with placeholders is forbidden. Because GITHUB_TOKEN events do not start

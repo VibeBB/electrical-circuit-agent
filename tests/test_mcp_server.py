@@ -100,6 +100,12 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_kicad_version",
         "circuit_sch_lint",
         "circuit_fit_sheet",
+        "circuit_record_decision",
+        "circuit_record_impression",
+        "circuit_record_vision_review",
+        "circuit_records_status",
+        "circuit_ux_inbox",
+        "circuit_ux_respond",
     }
     verification_schema = next(
         schema
@@ -436,7 +442,9 @@ def test_datasheet_check_received_mcp_tool_returns_findings_and_fails_closed(
             "the received file matches the manufacturer part number and requested revision, "
             "then compare its pin and package evidence with the intended library content. A "
             "successful text check does not authorize release or substitute for review of the "
-            "underlying PDF."
+            "underlying PDF. The next step is to compare the printed revision and "
+            "package drawing once the document arrives, and the request stays open "
+            "until that evidence is recorded."
         ),
         recommendation="Provide the requested datasheet.",
         recommendation_rationale="Package and pin claims require source evidence.",
@@ -567,7 +575,9 @@ def test_human_request_mcp_create_and_status(
             "Compare each package and pin claim with the cited material before deciding. "
             "Hash agreement does not prove that the underlying library content is correct. "
             "Every unresolved field remains explicit, and approval requires independent "
-            "human review of the evidence."
+            "human review of the evidence. A reader should also note that the "
+            "packet binds current artifact hashes, so any later regeneration "
+            "invalidates this assessment until it is recorded again."
         ),
         "recommendation": "Approve only after review.",
         "recommendation_rationale": "Approval remains an independent human decision.",
@@ -1464,9 +1474,12 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                     unknown=[],
                     agent_assessment=(
                         "This packet presents deterministic checks and source evidence for "
-                        "review. Compare the pin map, package dimensions, and model against "
+                        "review. Compare the pin map, package and model against "
                         "the cited material. Hash agreement does not establish content "
-                        "correctness, and this assessment does not grant approval."
+                        "correctness; the assessment does not grant approval. Each artifact "
+                        "would also need to be regenerated and re-reviewed if the "
+                        "inputs change, since the recorded hashes stop matching the "
+                        "files on disk and the binding no longer holds."
                     ),
                     recommendation="Review before approval.",
                     recommendation_rationale="Only a human can approve the evidence.",
@@ -1698,7 +1711,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 54
+            assert len(tools.tools) == 60
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title
@@ -2548,6 +2561,13 @@ def test_stackup_writes_json_and_svg(tmp_path: Path, monkeypatch: pytest.MonkeyP
         return {"layers": [{"type": "BSLT_COPPER", "enabled": True}]}
 
     monkeypatch.setattr(mcp_server.kicad_cli, "export_stackup", fake_stackup)
+    png = tmp_path / "stackup.png"
+    png.write_bytes(b"\x89PNG stackup\n")
+
+    def fake_rasterize(source: Path, out_dir: Path, *, dpi: int = 150) -> list[Path]:
+        return [png]
+
+    monkeypatch.setattr(mcp_server.raster, "rasterize", fake_rasterize)
 
     async def exercise() -> None:
         result = cast(
@@ -2562,6 +2582,8 @@ def test_stackup_writes_json_and_svg(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert Path(payload["json_path"]).is_file()
         svg = Path(payload["svg_path"])
         assert svg.is_file() and svg.read_text(encoding="utf-8").startswith("<svg")
+        assert Path(payload["png_path"]).is_file()
+        assert any(isinstance(block, ImageContent) for block in result.content[1:])
 
     asyncio.run(exercise())
 
@@ -2834,6 +2856,21 @@ def test_render_valid_literal_args_pass_through(tmp_path: Path, monkeypatch: Any
     assert captured["side"] == "bottom"
     assert captured["background"] is None
     assert captured["quality"] == "high"
+
+
+def test_image_observation_hook_covers_all_image_tools() -> None:
+    hooks = json.loads(
+        (Path(__file__).parents[1] / "plugins" / "circuit" / "hooks" / "hooks.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    matcher = next(
+        group["matcher"]
+        for group in hooks["post_tool_use"]
+        for hook in group["hooks"]
+        if hook.get("name") == "record-image-observation"
+    )
+    assert set(matcher.split("|")) >= mcp_server.IMAGE_TOOLS
 
 
 def test_tool_schema_enums_match_kicad_cli_literals() -> None:

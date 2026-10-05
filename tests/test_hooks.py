@@ -315,6 +315,81 @@ def test_author_lane_guard_denies_corpus_truth_and_scoring(lane: str) -> None:
         assert "blind authoring lane context is isolated" in result.stderr
 
 
+def test_record_image_observation_watches_every_image_tool() -> None:
+    from circuit import mcp_server
+
+    sys.path.insert(0, str(PROTECT_SCRIPT.parent))
+    spec = importlib.util.spec_from_file_location(
+        "record_image_observation", PROTECT_SCRIPT.parent / "record_image_observation.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.OBSERVED_TOOLS >= mcp_server.IMAGE_TOOLS
+    assert "file_editor" in module.OBSERVED_TOOLS
+
+
+def test_protect_denies_record_log_writes() -> None:
+    for path in (
+        "observations/circuit/decisions.jsonl",
+        "observations/circuit/impressions.jsonl",
+        "observations/circuit/vision-reviews.jsonl",
+        "observations/circuit/vision-tool-events.jsonl",
+        "observations/circuit/image-observations.jsonl",
+        "observations/circuit/records-status.json",
+        "observations/circuit/.sessions/s1.json",
+        "liaison/fix-board.ux-response.json",
+    ):
+        for payload in (
+            {
+                "tool_name": "file_editor",
+                "tool_input": {"command": "create", "file_path": path},
+            },
+            {
+                "tool_name": "terminal",
+                "tool_input": {"command": f"echo x >> {path}"},
+            },
+        ):
+            result = _run_protect_hook(payload)
+            assert result.returncode == 2, (path, payload)
+
+
+def test_protect_allows_record_reads_and_request_writes() -> None:
+    for payload in (
+        {
+            "tool_name": "file_editor",
+            "tool_input": {"command": "view", "path": "observations/circuit/decisions.jsonl"},
+        },
+        {
+            "tool_name": "terminal",
+            "tool_input": {"command": "cat observations/circuit/impressions.jsonl"},
+        },
+        {
+            "tool_name": "file_editor",
+            "tool_input": {"command": "create", "file_path": "liaison/fix-board.ux-request.json"},
+        },
+    ):
+        assert _run_protect_hook(payload).returncode == 0
+
+
+@pytest.mark.parametrize("lane", ["a", "b"])
+def test_author_lane_guard_denies_records_and_ux_access(lane: str) -> None:
+    payloads: list[dict[str, Any]] = [
+        {"tool_name": "circuit_records_status", "tool_input": {}},
+        {"tool_name": "circuit_record_decision", "tool_input": {"id": "x"}},
+        {"tool_name": "circuit_ux_inbox", "tool_input": {}},
+        {"tool_name": "circuit_ux_respond", "tool_input": {"request": "x"}},
+        {
+            "tool_name": "file_editor",
+            "tool_input": {"command": "view", "path": "observations/circuit/decisions.jsonl"},
+        },
+    ]
+    for payload in payloads:
+        result = _run_author_lane_guard(payload, lane)
+        assert result.returncode == 2, (lane, payload)
+        assert "blind authoring lane context is isolated" in result.stderr
+
+
 def test_part_author_profiles_use_first_distinct_model(tmp_path: Path) -> None:
     profile_dir = tmp_path / ".openhands" / "profiles"
     profile_dir.mkdir(parents=True)
@@ -1218,7 +1293,9 @@ def _human_request_for_hook() -> HumanRequest:
             "Compare each package and pin claim with the cited material before deciding. "
             "Hash agreement does not prove that the underlying library content is correct. "
             "Every unresolved field remains explicit, and approval requires independent "
-            "human review of the evidence."
+            "human review of the evidence. A reader should also note that the "
+            "packet binds current artifact hashes, so any later regeneration "
+            "invalidates this assessment until it is recorded again."
         ),
         recommendation="Approve only after review.",
         recommendation_rationale="Approval remains an independent human decision.",
@@ -1255,7 +1332,9 @@ def _datasheet_request_for_hook() -> HumanRequest:
             "The library cannot proceed without a datasheet matching the requested part and "
             "revision. Package, pin, orderable, and mechanical claims remain unsupported until "
             "the source PDF is checked. Keep the request open until an official matching "
-            "document is received and its evidence is reviewed."
+            "document is received and its evidence is reviewed. Until then every "
+            "dimension and pin claim must be treated as unverified, and the next "
+            "step is to confirm the revision printed on the received document."
         ),
         recommendation="Provide the requested datasheet.",
         recommendation_rationale="Package and pin claims require source evidence.",

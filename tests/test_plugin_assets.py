@@ -40,7 +40,7 @@ def test_plugin_loads_all_assets() -> None:
 
     protect_command = plugin.hooks.pre_tool_use[0].hooks[0].command
     assert plugin.hooks.pre_tool_use[0].matcher == "*"
-    assert plugin.hooks.stop[0].hooks[0].name == "report-design-status"
+    assert plugin.hooks.stop[0].hooks[0].name == "require-records"
     assert all(agent.max_budget_per_run == 3.0 for agent in plugin.agents)
     assert all(len(agent.when_to_use_examples) >= 2 for agent in plugin.agents)
     for agent in plugin.agents:

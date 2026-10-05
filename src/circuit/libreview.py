@@ -387,7 +387,9 @@ def _build_agent_request(
         "and deterministic verification results for human review. These artifacts may still "
         "contain authored mistakes even when hashes and seals agree. Compare each "
         "evidence-backed pin and package claim with the source; this assessment is advisory "
-        "and grants no authority by itself."
+        "and grants no authority by itself. A reviewer should treat the packet as a "
+        "starting point, verify the rendered symbol and footprint against the datasheet "
+        "figures, and re-request evidence for anything that remains ambiguous."
     )
     return humanrequest.build_request(
         kind="library_review",

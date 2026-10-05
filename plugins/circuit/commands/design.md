@@ -86,3 +86,8 @@ The design report collects exports, renders, diffs, the jobset record, and the
 advisory Konnect section from these conventional paths. Treat that section as
 supplemental evidence only: the verdict continues to come exclusively from
 kicad-cli connectivity, ERC, and DRC JSON.
+
+Sister Liaison: run `circuit_ux_inbox` first and after each stage; answer every
+`circuit` request via `circuit_ux_respond` (done answers need artifacts, gate
+verdicts, decision_refs, and impression_refs). Report malformed, stale, or
+blocked requests to the user.

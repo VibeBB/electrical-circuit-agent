@@ -46,7 +46,11 @@ _IMPRESSION = (
     "The dimensional marks remain legible across the package drawing. "
     "The pin table and outline agree on the package identity and orientation. "
     "This review records only directly visible datasheet evidence, not inferred "
-    "manufacturing recommendations or assumptions about a footprint."
+    "manufacturing recommendations or assumptions about a footprint. "
+    "What worries me is whether every tolerance band survives rendering at this "
+    "scale, since a builder would rely on the printed values alone. Next I would "
+    "cross-check the pin table against the package outline once more before "
+    "treating the spec as ready for footprint generation."
 )
 _REDERIVED_BY_PDF: dict[Path, tuple[DatasheetExtraction, Path]] = {}
 

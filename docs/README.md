@@ -2,11 +2,24 @@
 
 | Document | Contents |
 |---|---|
-| [`../README.md`](../README.md) | Product overview |
+| [`../README.md`](../README.md) | Product overview (English + 日本語) |
 | [`../AGENTS.md`](../AGENTS.md) | Working contract |
 | [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) | Third-party licenses and pins |
-| [`architecture.md`](architecture.md) | Responsibility boundaries and execution sequence |
-| [`operations.md`](operations.md) | Build, smoke, dependency updates |
+| [`architecture.md`](architecture.md) | Responsibility boundaries, execution sequence, records + liaison layers |
+| [`workflow.md`](workflow.md) | Stage-by-stage workflow: tools, gates, records left, vision points |
+| [`agents.md`](agents.md) | The 7 sub-agents: models, tools, hooks, records duty |
+| [`skills.md`](skills.md) | The 9 skills |
+| [`commands.md`](commands.md) | The agent-facing slash commands |
+| [`mcp.md`](mcp.md) | All 60 circuit MCP tools: purpose, inputs, access, inline images |
+| [`hooks.md`](hooks.md) | Every plugin and agent-frontmatter hook |
+| [`contracts.md`](contracts.md) | Every JSON artifact: shape, producer/consumer, strictness |
+| [`records-and-vision.md`](records-and-vision.md) | VRP for circuit: stages, decisions, globs, vision points |
+| [`sister-cooperation.md`](sister-cooperation.md) | SLP v2 rules/states and the interchange table |
+| [`performance-and-limits.md`](performance-and-limits.md) | Real numeric constants from the code |
+| [`operations.md`](operations.md) | Build, smoke, CI checks, dependency updates |
+| [`development.md`](development.md) | Setup, verify_all stages, test commands, release |
+| [`modules.md`](modules.md) | Every `src/circuit` module and its public API |
+| [`improvement-notes.md`](improvement-notes.md) | Implemented items vs remaining ideas |
 | [`konnect-tools.md`](konnect-tools.md) | Konnect v0.13.0 complete tool coverage matrix |
 
 ## Accepted ADR list
@@ -46,6 +59,7 @@
 | [0031](adr/ADR-0031-step-model-generation-and-inspection.md) | Deterministic STEP model generation and inspection |
 | [0032](adr/ADR-0032-library-release-evidence.md) | Golden-corpus, mutation, and escape-rate release evidence |
 | [0033](adr/ADR-0033-human-requests-and-confidential-datasheets.md) | Human requests, confidential datasheets, and library-authoring stops |
+| [0034](adr/ADR-0034-records-liaison-docs.md) | VRP v1, SLP v2, and the documentation split |
 
 ## Research
 

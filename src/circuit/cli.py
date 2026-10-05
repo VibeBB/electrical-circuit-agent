@@ -9,6 +9,9 @@ Subcommands:
   firmware-export  emit MCU pin connectivity for firmware-agent (JSON verdict)
   firmware-check   check a firmware-agent pin map against the circuit (JSON verdict)
   author       run e2e authoring from a design brief (JSON verdict)
+  record       append a VibeBB Record Protocol record (decision, impression,
+               vision-review) or print the records status
+  ux           Sister Liaison Protocol inbox listing or response writing
 
 All commands print a JSON verdict to stdout; the verdict is fail-closed.
 """
@@ -149,7 +152,42 @@ def cmd_review_record(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _fail("review-record", str(exc))
-    return _emit({"verdict": PASS, "record": str(path)})
+    vision = _log_vision_review(path)
+    return _emit(
+        {
+            "verdict": PASS,
+            "record": str(path),
+            "vision_log": vision["path"],
+            "vision_event_id": vision["event_id"],
+        }
+    )
+
+
+def _log_vision_review(advisory_path: Path) -> dict[str, str]:
+    """Mirror the advisory into the VRP vision-review log when the image is in the workspace."""
+    from .records import record_vision_review
+
+    detail = json.loads(advisory_path.read_text(encoding="utf-8"))["detail"]
+    try:
+        logged = record_vision_review(
+            {
+                "image_path": detail["image_path"],
+                "model": detail["model"],
+                "checklist": detail["checklist"].replace("_", "-"),
+                "findings": [
+                    {
+                        "category": f["category"],
+                        "severity": f["severity"],
+                        "note": f"{f['category']}: {f['note']}",
+                    }
+                    for f in detail["findings"]
+                ],
+                "impression": detail["impression"],
+            }
+        )
+    except ValueError as exc:
+        return {"path": f"skipped: {exc}", "event_id": ""}
+    return {"path": str(logged["path"]), "event_id": str(logged["record"]["event_id"])}
 
 
 def cmd_datasheet_revision_check(args: argparse.Namespace) -> int:
@@ -277,6 +315,38 @@ def cmd_firmware_check(args: argparse.Namespace) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
     return _emit(report.model_dump(mode="json"))
+
+
+def cmd_record(args: argparse.Namespace) -> int:
+    from pydantic import ValidationError
+
+    from .records import RECORDERS, records_summary
+
+    if args.kind == "status":
+        return _emit(records_summary())
+    try:
+        raw: Any = json.loads(Path(args.json).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("record JSON must be an object")
+        return _emit(RECORDERS[args.kind](cast(dict[str, Any], raw)))
+    except (OSError, ValueError, ValidationError, json.JSONDecodeError) as exc:
+        return _fail("record", str(exc))
+
+
+def cmd_ux(args: argparse.Namespace) -> int:
+    from pydantic import ValidationError
+
+    from .liaison import ux_inbox, ux_respond
+
+    if args.action == "inbox":
+        return _emit(ux_inbox().model_dump(mode="json"))
+    try:
+        raw: Any = json.loads(Path(args.json).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("ux response JSON must be an object")
+        return _emit(ux_respond(cast(dict[str, Any], raw)).model_dump(mode="json"))
+    except (OSError, ValueError, ValidationError, json.JSONDecodeError) as exc:
+        return _fail("ux", str(exc))
 
 
 def cmd_author(args: argparse.Namespace) -> int:
@@ -425,6 +495,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     firmware_check_parser.add_argument("--out", default=None)
     firmware_check_parser.set_defaults(handler=cmd_firmware_check)
 
+    record_parser = subparsers.add_parser("record", help="append a VibeBB Record Protocol record")
+    record_parser.add_argument(
+        "kind", choices=["decision", "impression", "vision-review", "status"]
+    )
+    record_parser.add_argument(
+        "--json", default=None, help="JSON object file with the record fields"
+    )
+    record_parser.set_defaults(handler=cmd_record)
+
+    ux_parser = subparsers.add_parser("ux", help="Sister Liaison Protocol inbox/respond")
+    ux_actions = ux_parser.add_subparsers(dest="action", required=True)
+    ux_inbox_parser = ux_actions.add_parser("inbox", help="list circuit liaison requests")
+    ux_inbox_parser.set_defaults(handler=cmd_ux)
+    ux_respond_parser = ux_actions.add_parser("respond", help="write liaison/<id>.ux-response.json")
+    ux_respond_parser.add_argument("--json", required=True, help="response payload file")
+    ux_respond_parser.set_defaults(handler=cmd_ux)
+
     author_parser = subparsers.add_parser("author", help="run e2e authoring from a design brief")
     author_parser.add_argument("--brief", required=True)
     author_parser.add_argument("--workdir", required=True)
@@ -434,6 +521,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     author_parser.set_defaults(handler=cmd_author)
 
     args = parser.parse_args(argv)
+    if args.command == "record" and args.kind != "status" and not args.json:
+        parser.error("record decision|impression|vision-review requires --json")
+    if args.command == "ux" and args.action == "respond" and not args.json:
+        parser.error("ux respond requires --json")
     handler: Any = args.handler
     result: int = handler(args)
     return result

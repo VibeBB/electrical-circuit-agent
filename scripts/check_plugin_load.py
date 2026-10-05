@@ -43,6 +43,7 @@ EXPECTED_SESSION_START_HOOKS = {
     "ensure-llm-profiles",
     "ensure-part-author-profiles",
     "intake-attachments",
+    "require-records",
 }
 EXPECTED_USER_PROMPT_SUBMIT_HOOKS = {
     "intake-attachments",
@@ -50,7 +51,12 @@ EXPECTED_USER_PROMPT_SUBMIT_HOOKS = {
     "record-human-response",
 }
 EXPECTED_PRE_TOOL_USE_HOOKS = {"protect-libraries", "safety-rail"}
-EXPECTED_STOP_HOOKS = {"report-design-status", "intake-attachments", "record-library-review"}
+EXPECTED_STOP_HOOKS = {
+    "report-design-status",
+    "intake-attachments",
+    "record-library-review",
+    "require-records",
+}
 EXPECTED_POST_TOOL_USE_HOOKS = {
     "record-authoring-commit",
     "record-image-observation",
@@ -65,6 +71,12 @@ EXPECTED_CIRCUIT_MCP_TOOLS = {
     "circuit_connector_placement_check",
     "circuit_human_request_create",
     "circuit_human_request_status",
+    "circuit_record_decision",
+    "circuit_record_impression",
+    "circuit_record_vision_review",
+    "circuit_records_status",
+    "circuit_ux_inbox",
+    "circuit_ux_respond",
 }
 
 

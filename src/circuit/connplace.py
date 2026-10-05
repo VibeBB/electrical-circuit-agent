@@ -583,7 +583,8 @@ def _human_request(
             "travel, access clearance, or matching connector PartSpec is incomplete. Without "
             "authoritative interface geometry, the transformed mating path cannot be checked "
             "against the board outline or neighboring component courtyards. The placement "
-            "must remain unapproved until the manufacturer evidence is reviewed."
+            "must remain unapproved until the manufacturer evidence is reviewed, because "
+            "either interference or unreachable travel would silently block assembly."
         ),
         recommendation="Provide the exact connector datasheet and mating envelope",
         recommendation_rationale=(

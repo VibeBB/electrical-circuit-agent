@@ -7,8 +7,10 @@
 - KiCad 11 nightly (Ubuntu 26.04 `ppa:kicad/kicad-dev-nightly`)
 - Konnect v0.13.0 (AGPL-3.0-only, separate process)
 
-README, docs, issues, PRs, code comments, identifiers, and commit messages are
-all written in English. Keep comments to the minimum necessary.
+Technical docs, issues, PRs, code comments, identifiers, and commit messages
+are all written in English. The single exception is `README.md`: it carries an
+English section followed by a `## 日本語` section with the same content — no
+separate `README.ja.md`. Keep comments to the minimum necessary.
 
 ## Layout
 
@@ -99,10 +101,31 @@ table. Commands carry a group (`lint`, `unit`, `docker`) selectable via
 The `docker` group additionally requires `CIRCUIT_TOOLS_IMAGE`; lint/unit
 selections run without it. The fast stage includes the shared-hook checker and enforces
 the configured line-coverage threshold. Policy: shared hooks are canonical
-across the family; change all 9 copies together and update EXPECTED.
+across the family; change all 11 copies together and update EXPECTED.
 `intake_attachments.py`, `protect_libraries.py`, `record_image_observation.py`,
 `record_vision_tool_event.py`, and `report_design_status.py` are intentionally
 repo-specific.
+
+## Records (VRP v1)
+
+Every non-trivial decision, stage impression, and vision review is appended to
+the append-only JSONL logs under `observations/circuit/` via
+`circuit_record_decision`, `circuit_record_impression`, and
+`circuit_record_vision_review` (or the `record` CLI subcommand). Impressions
+need 400+ characters and 3+ sentences of substance. Records are advisory: they
+never gate request inputs and never change an ERC, DRC, or kicad-cli verdict.
+`_records.py` and `require_records.py` are shared hook files canonical across
+the family; never edit them locally — `scripts/check_shared_hooks.py` verifies
+their normalized AST hashes.
+
+## Sister Liaison (SLP v2)
+
+UX-creator drops `*.ux-request.json` work orders into `liaison/`. Call
+`circuit_ux_inbox` at session start and answer every request targeting
+`circuit` with `circuit_ux_respond` (or the `ux` CLI subcommand), writing
+`*.ux-response.json`. A `done` answer must carry artifacts, gate verdicts,
+and VRP `decision_refs`/`impression_refs`; malformed, stale, and blocked
+requests are reported to the user, not worked around.
 
 ## Git
 
