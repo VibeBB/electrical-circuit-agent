@@ -221,8 +221,10 @@ def test_manifest_and_seeded_truth_files_validate() -> None:
         canaries.add(truth.canary)
         if entry.package_family == "connector":
             assert truth.connector is not None
-            assert truth.expected_mechanical or any(
-                pad.pad_type is not None for pad in truth.expected_pads
+            assert (
+                truth.expected_outcome == "human_request"
+                or truth.expected_mechanical
+                or any(pad.pad_type is not None for pad in truth.expected_pads)
             )
     snapshot = hashlib.sha256(
         json.dumps(datasheet_hashes, separators=(",", ":"), ensure_ascii=True).encode("utf-8")

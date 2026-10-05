@@ -41,8 +41,29 @@
     "manufacturer_to_kicad": null
   },
   "expected_outcome": "human_request",
-  "notes": "Ordered variant 4 signal + 4 power contacts. Table 1 formulas give DIM A = (2 x 0.625) + (3 x 3.75) + 16.05 = 28.55, DIM B = 23.65 (fixing-hole span), DIM C = 15.20; the drawing illustrates a different signal/power count, so geometry must come from the formulas. Signal contacts d0.55 in 2 rows at 1.25; power d1.40 at 3.75 TYP, (2.70) from the last signal column; fixing holes d2.50 for M2 screws, 3.90 and (4.55) outside the contact span, 0.62 above the power-contact centerline. The power-row offset from the signal rows is not dimensioned. Note 2: maximum near-side contact to board edge is 4.90 mm with unshielded cable and 2.75 mm with shielded cable; the encoded offset is the unshielded limit. Horizontal mating requires the connector at the board edge.",
-  "expected_mechanical": [],
+  "notes": "Ordered variant 4 signal + 4 power contacts. Table 1 formulas give DIM A = (2 x 0.625) + (3 x 3.75) + 16.05 = 28.55, DIM B = 23.65 (fixing-hole span), DIM C = 15.20; the drawing illustrates a different signal/power count, so geometry must come from the formulas. Frame: KiCad top view, origin at the DIM B midpoint on the board-edge-side signal row, y down. Fixing holes are 1.45 above that row at +/-DIM B/2 = +/-11.825; plating is not stated and stays unknown. Signal contacts d0.55 in 2 rows at 1.25; power d1.40 at 3.75 TYP, (2.70) from the last signal column; fixing holes d2.50 for M2 screws, 3.90 and (4.55) outside the contact span, 0.62 above the power-contact centerline. The power-row offset from the signal rows is not dimensioned. Note 2: maximum near-side contact to board edge is 4.90 mm with unshielded cable and 2.75 mm with shielded cable; the encoded offset is the unshielded limit. Horizontal mating requires the connector at the board edge.",
+  "expected_mechanical": [
+    {
+      "kind": "mounting",
+      "center": [
+        -11.825,
+        -1.45
+      ],
+      "drill": 2.5,
+      "size": null,
+      "plated": null
+    },
+    {
+      "kind": "mounting",
+      "center": [
+        11.825,
+        -1.45
+      ],
+      "drill": 2.5,
+      "size": null,
+      "plated": null
+    }
+  ],
   "drawing_id": null,
   "ambiguous_drawing_ids": [],
   "canary": "CIRCUIT-CORPUS-CANARY-fc04b674-db47-4c32-9121-f8aedaed8fa0"

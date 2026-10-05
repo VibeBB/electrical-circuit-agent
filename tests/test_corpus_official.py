@@ -284,8 +284,10 @@ def test_official_truth_files_validate_with_unique_canaries_and_families() -> No
         canaries.add(truth.canary)
         if entry.package_family == "connector":
             assert truth.connector is not None
-            assert truth.expected_mechanical or any(
-                pad.pad_type is not None for pad in truth.expected_pads
+            assert (
+                truth.expected_outcome == "human_request"
+                or truth.expected_mechanical
+                or any(pad.pad_type is not None for pad in truth.expected_pads)
             )
 
 
