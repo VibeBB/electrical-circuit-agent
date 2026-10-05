@@ -38,7 +38,10 @@ OBSERVED_TOOLS = {
     "circuit_render",
     "circuit_diff",
     "circuit_rasterize",
+    "circuit_stackup",
     "circuit_vision_read",
+    "circuit_vision_compare",
+    "circuit_model_compare",
     "file_editor",
 }
 

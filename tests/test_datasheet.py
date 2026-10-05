@@ -157,7 +157,9 @@ def _datasheet_request() -> Any:
             "is needed before the library can proceed. The package drawing, pinout, orderable "
             "variants, and mechanical dimensions must be checked against the received source. "
             "Until those claims are supported by evidence, the library artifacts remain blocked "
-            "and no release decision is justified."
+            "and no release decision is justified. The next step is to receive the "
+            "matching PDF and bind its hash before any package or pin claim is "
+            "recorded as evidence."
         ),
         recommendation="Provide the requested datasheet.",
         recommendation_rationale="The source evidence is required to verify the package.",

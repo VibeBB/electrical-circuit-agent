@@ -92,6 +92,20 @@ from .pinsource import PinSourceInput
 
 server = Server("circuit", version=__version__)
 
+# Every tool whose result can include rendered images (returned inline as
+# ImageContent); hooks/record_image_observation.py must observe all of them.
+IMAGE_TOOLS = frozenset(
+    {
+        "circuit_render",
+        "circuit_diff",
+        "circuit_rasterize",
+        "circuit_stackup",
+        "circuit_vision_read",
+        "circuit_vision_compare",
+        "circuit_model_compare",
+    }
+)
+
 _PIN_SOURCE_SCHEMA: dict[str, Any] = {
     "type": "array",
     "items": {
@@ -2230,10 +2244,13 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             json_path = out_dir / f"{board.stem}-stackup.json"
             data = kicad_cli.export_stackup(board, json_path)
             svg_path = stackup.write_stackup_diagram(data, out_dir / f"{board.stem}-stackup.svg")
+            png_images = raster.rasterize(svg_path, out_dir)
             result = {
                 "json_path": str(json_path),
                 "svg_path": str(svg_path),
+                "png_path": str(png_images[0]),
             }
+            image_paths = png_images
         elif name == "circuit_rasterize":
             images = raster.rasterize(
                 Path(str(args["source_path"])),

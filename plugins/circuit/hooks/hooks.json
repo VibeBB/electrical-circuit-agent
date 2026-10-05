@@ -104,7 +104,7 @@
   ],
   "post_tool_use": [
     {
-      "matcher": "circuit_render|circuit_diff|circuit_rasterize|circuit_vision_read|file_editor",
+      "matcher": "circuit_render|circuit_diff|circuit_rasterize|circuit_stackup|circuit_vision_read|circuit_vision_compare|circuit_model_compare|file_editor",
       "hooks": [
         {
           "type": "command",

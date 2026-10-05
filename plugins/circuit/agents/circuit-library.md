@@ -108,3 +108,20 @@ Vision and impressions are advisory: they never change an ERC, DRC or
 kicad-cli verdict. Results do not have to be identical from run to run;
 the reasoning must be recorded every run. `circuit_records_status` shows
 what is still owed.
+
+## Vision points
+
+Look at every render through the inline image or `inspect_image_with_vision`,
+then record BOTH a `circuit_record_vision_review` and a `review-record`
+advisory; the impression needs 400+ characters and 3+ sentences judging
+accuracy, ambiguity, design intent, and usefulness to the maker/user —
+not only legibility.
+
+| Stage | What to look at |
+|---|---|
+| intake | attached photos and sketches (checklist `intake_image`) |
+| library | symbol/footprint/3D renders, datasheet crops, lane comparison renders |
+| schematic | page plot after sch_lint (checklist `schematic`) |
+| layout | top/bottom/side/isometric views, layer plots, stackup PNG after DRC |
+| review | circuit_diff PNGs (checklist `diff`) |
+| manufacturing | gerber layer plots and fab PDF pages rasterized via circuit_rasterize |

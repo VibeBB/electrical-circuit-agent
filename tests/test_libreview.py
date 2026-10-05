@@ -1367,7 +1367,9 @@ def test_review_status_requires_hash_bound_vision_reviews_for_packet_images(
             "datasheet drawing visible beneath the proposed footprint. The red pad "
             "outlines can be compared against the rounded land pattern, and the "
             "highlighted pin-one pad is easy to locate. Some fine labels are small, "
-            "and I cannot independently confirm dimensions from this image alone."
+            "and I cannot independently confirm dimensions from this image alone. "
+            "A reviewer could still trace each pad back to the datasheet figure, "
+            "and the overlay alignment reads as intentional rather than drifted."
         ),
         findings=[],
     )
@@ -1389,7 +1391,9 @@ def test_review_status_requires_hash_bound_vision_reviews_for_packet_images(
             "datasheet drawing visible beneath the proposed footprint. The red pad "
             "outlines can be compared against the rounded land pattern, and the "
             "highlighted pin-one pad is easy to locate. Some fine labels are small, "
-            "and I cannot independently confirm dimensions from this image alone."
+            "and I cannot independently confirm dimensions from this image alone. "
+            "A reviewer could still trace each pad back to the datasheet figure, "
+            "and the overlay alignment reads as intentional rather than drifted."
         ),
         findings=[],
     )

@@ -129,7 +129,7 @@ a subjective `impression` — what the sheet communicates well, what it
 leaves unsaid, whether a stranger could build from it. The impression is
 a multi-sentence reading, not a verdict line: name strengths and
 residual gaps concretely (the record validator rejects anything under
-240 characters or with fewer than two sentences, so a one-liner never
+400 characters or with fewer than three sentences, so a one-liner never
 reaches the file). Write it in your reply and record it in the record's
 `impression` field.
 
@@ -156,7 +156,7 @@ python3 plugins/circuit/scripts/circuit_launcher.py review-record \
 
 where `findings.json` is a list of
 `{"category": ..., "severity": "error|warning|info", "note": ..., "bbox": [x, y, w, h]?}`.
-`impression` is required and floored at 240 characters with at least two
+`impression` is required and floored at 400 characters with at least three
 sentences (a terse record fails validation and is discarded); `bbox` is a
 normalized `[x, y, w, h]` region when the model can
 localize. Finding categories include the drawing-quality set
@@ -223,3 +223,20 @@ Vision and impressions are advisory: they never change an ERC, DRC or
 kicad-cli verdict. Results do not have to be identical from run to run;
 the reasoning must be recorded every run. `circuit_records_status` shows
 what is still owed.
+
+## Vision points
+
+Look at every render through the inline image or `inspect_image_with_vision`,
+then record BOTH a `circuit_record_vision_review` and a `review-record`
+advisory; the impression needs 400+ characters and 3+ sentences judging
+accuracy, ambiguity, design intent, and usefulness to the maker/user —
+not only legibility.
+
+| Stage | What to look at |
+|---|---|
+| intake | attached photos and sketches (checklist `intake_image`) |
+| library | symbol/footprint/3D renders, datasheet crops, lane comparison renders |
+| schematic | page plot after sch_lint (checklist `schematic`) |
+| layout | top/bottom/side/isometric views, layer plots, stackup PNG after DRC |
+| review | circuit_diff PNGs (checklist `diff`) |
+| manufacturing | gerber layer plots and fab PDF pages rasterized via circuit_rasterize |

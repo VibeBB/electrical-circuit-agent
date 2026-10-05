@@ -315,6 +315,20 @@ def test_author_lane_guard_denies_corpus_truth_and_scoring(lane: str) -> None:
         assert "blind authoring lane context is isolated" in result.stderr
 
 
+def test_record_image_observation_watches_every_image_tool() -> None:
+    from circuit import mcp_server
+
+    sys.path.insert(0, str(PROTECT_SCRIPT.parent))
+    spec = importlib.util.spec_from_file_location(
+        "record_image_observation", PROTECT_SCRIPT.parent / "record_image_observation.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.OBSERVED_TOOLS >= mcp_server.IMAGE_TOOLS
+    assert "file_editor" in module.OBSERVED_TOOLS
+
+
 def test_protect_denies_record_log_writes() -> None:
     for path in (
         "observations/circuit/decisions.jsonl",
@@ -1279,7 +1293,9 @@ def _human_request_for_hook() -> HumanRequest:
             "Compare each package and pin claim with the cited material before deciding. "
             "Hash agreement does not prove that the underlying library content is correct. "
             "Every unresolved field remains explicit, and approval requires independent "
-            "human review of the evidence."
+            "human review of the evidence. A reader should also note that the "
+            "packet binds current artifact hashes, so any later regeneration "
+            "invalidates this assessment until it is recorded again."
         ),
         recommendation="Approve only after review.",
         recommendation_rationale="Approval remains an independent human decision.",
@@ -1316,7 +1332,9 @@ def _datasheet_request_for_hook() -> HumanRequest:
             "The library cannot proceed without a datasheet matching the requested part and "
             "revision. Package, pin, orderable, and mechanical claims remain unsupported until "
             "the source PDF is checked. Keep the request open until an official matching "
-            "document is received and its evidence is reviewed."
+            "document is received and its evidence is reviewed. Until then every "
+            "dimension and pin claim must be treated as unverified, and the next "
+            "step is to confirm the revision printed on the received document."
         ),
         recommendation="Provide the requested datasheet.",
         recommendation_rationale="Package and pin claims require source evidence.",
