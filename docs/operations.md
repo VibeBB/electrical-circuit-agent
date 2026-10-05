@@ -388,12 +388,18 @@ without changing GitHub Issues.
 uv run python scripts/check_dependency_updates.py --dry-run
 ```
 
-`verify_all.py --stage standard` requires `CIRCUIT_TOOLS_IMAGE` and runs Docker
-integration in addition to the fast checks. Within a stage, barrier-marked
-commands (currently `uv sync --locked`) run alone and consecutive non-barrier
-commands run in parallel up to `--jobs` workers; `--jobs 1` restores the
-previous sequential order and `--list` dumps the command table with barrier
-flags.
+`verify_all.py --stage standard` requires `CIRCUIT_TOOLS_IMAGE` only for the
+`docker` command group and runs Docker integration in addition to the fast
+checks. Within a stage, barrier-marked commands (currently `uv sync --locked`)
+run alone and consecutive non-barrier commands run in parallel up to `--jobs`
+workers; `--jobs 1` restores the previous sequential order and `--list` dumps
+the command table with barrier flags and group tags. `--group` selects the
+`lint`, `unit`, or `docker` command set, `--match` narrows by substring, and
+`--shard K/N` partitions the selection — CI runs the standard stage as
+`standard-lint`, `standard-unit`, `standard-smoke`, and a four-way
+`standard-docker` shard matrix under the `docker-smoke` aggregator, and the
+real-part mutation matrix as three `--shard-index`/`--num-shards` legs under
+the `real-part-mutation` aggregator.
 
 For direct PyPI dependencies, the resolved version in `uv.lock` is reported as
 the current value rather than the specifier in `pyproject.toml`. For specifiers

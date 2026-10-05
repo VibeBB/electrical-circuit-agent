@@ -93,8 +93,11 @@ uv run python scripts/verify_all.py --stage fast
 `verify_all.py` runs barrier-marked commands alone and consecutive non-barrier
 commands in parallel up to `--jobs` workers (default
 `min(os.cpu_count() or 1, 4)`); `--list` dumps the machine-readable command
-table. `standard` additionally requires `CIRCUIT_TOOLS_IMAGE` for the Docker
-integration run. The fast stage includes the shared-hook checker and enforces
+table. Commands carry a group (`lint`, `unit`, `docker`) selectable via
+`--group`, narrowable with `--match <substring>`, and partitionable with
+`--shard K/N` — CI fans the standard stage across parallel jobs with these.
+The `docker` group additionally requires `CIRCUIT_TOOLS_IMAGE`; lint/unit
+selections run without it. The fast stage includes the shared-hook checker and enforces
 the configured line-coverage threshold. Policy: shared hooks are canonical
 across the family; change all 9 copies together and update EXPECTED.
 `intake_attachments.py`, `protect_libraries.py`, `record_image_observation.py`,

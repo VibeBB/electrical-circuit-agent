@@ -134,7 +134,14 @@ def test_real_mutation_matrix_success_marks_synthetic_evidence(
         assert (rules_dir / f"{entry.id}.json").is_file()
         return object()
 
-    def fake_run_mutations(_fixture: object) -> MutationReport:
+    def fake_run_mutations(
+        _fixture: object,
+        *,
+        shard_index: int = 0,
+        num_shards: int = 1,
+    ) -> MutationReport:
+        assert shard_index == 0
+        assert num_shards == 1
         return report
 
     monkeypatch.setattr(
@@ -168,6 +175,7 @@ def test_real_mutation_matrix_success_marks_synthetic_evidence(
     assert artifact == {
         "artifact_kind": "circuit_real_mutation_matrix",
         "entry": entry.id,
+        "shard": {"index": 0, "count": 1},
         "pdf_sha256": entry.datasheet.sha256,
         "synthetic_evidence": ["vision_reads", "advisory_reviews"],
         "synthetic_evidence_counted": False,

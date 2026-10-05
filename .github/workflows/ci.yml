@@ -137,7 +137,32 @@ jobs:
         if: matrix.experimental && (steps.step.outcome == 'failure' || steps.setup-uv.outcome == 'failure' || steps.step-2.outcome == 'failure' || steps.step-3.outcome == 'failure' || steps.step-4.outcome == 'failure')
         run: |
           echo "::warning::Python 3.15 canary leg failed — forward-compat signal, not a gate failure"
-  docker-smoke:
+  # The standard stage is split into parallel legs; the docker-smoke
+  # aggregator below keeps the required check name stable.
+  standard-lint:
+    needs: [changes, fast]
+    if: >-
+      needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: true
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-suffix: standard-lint
+      - run: uv run python scripts/verify_all.py --stage standard --group lint
+
+  standard-unit:
     needs: [changes, fast]
     if: >-
       needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -158,7 +183,27 @@ jobs:
         with:
           python-version: "3.14"
           enable-cache: true
-          cache-suffix: docker-smoke
+          cache-suffix: standard-unit
+      # pytest --cov stays unsharded: the coverage floor only holds when the
+      # whole suite runs in one leg. Docker-marked tests self-skip here.
+      - run: uv run python scripts/verify_all.py --stage standard --group unit
+
+  standard-smoke:
+    needs: [changes, fast]
+    if: >-
+      needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: true
+          persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - id: cern
         run: |
@@ -169,7 +214,6 @@ jobs:
             exit 1
           fi
           echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
-          echo "commit=$cern_commit" >> "$GITHUB_OUTPUT"
       # buildx with the GitHub Actions cache avoids rebuilding the KiCad base
       # layers on every run; the lock-recorded image stays the publish target.
       - run: >-
@@ -185,18 +229,106 @@ jobs:
           -v "$PWD/fixtures/smoke-board:/work:ro"
           circuit-tools:ci
           python3 /opt/circuit/bin/smoke_kicad11_konnect.py
-      - run: uv sync --locked
-      - run: uv run python scripts/verify_all.py --stage standard
-        env:
-          CIRCUIT_TOOLS_IMAGE: circuit-tools:ci
 
-  real-part-mutation:
-    name: real-part-mutation
+  standard-docker:
     needs: [changes, fast]
     if: >-
       needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
-    timeout-minutes: 60
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: true
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y poppler-utils librsvg2-bin
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-suffix: standard-docker-${{ matrix.shard }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - id: cern
+        run: |
+          set -euo pipefail
+          cern_commit=$(git -C libraries/cern-kicad-libs rev-parse HEAD)
+          if [[ ! "$cern_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "invalid CERN commit: $cern_commit" >&2
+            exit 1
+          fi
+          echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
+      # Every shard warms the image from the shared gha cache instead of
+      # transferring it between jobs; a warm build costs ~1-2 minutes.
+      - run: >-
+          docker buildx build --load
+          -f docker/circuit-tools.Dockerfile -t circuit-tools:ci
+          --build-arg "CERN_COMMIT=$CERN_COMMIT"
+          --cache-from type=gha,scope=circuit-tools
+          --cache-to type=gha,mode=max,scope=circuit-tools,ignore-error=true
+          .
+      - run: >-
+          uv run python scripts/verify_all.py --stage standard
+          --group docker --shard ${{ matrix.shard }}/4
+        env:
+          CIRCUIT_TOOLS_IMAGE: circuit-tools:ci
+
+  docker-smoke:
+    needs: [changes, standard-lint, standard-unit, standard-smoke, standard-docker]
+    if: always()
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - name: Aggregate standard stage results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS"])
+          legs = ("standard-lint", "standard-unit", "standard-smoke", "standard-docker")
+          results = {name: needs[name]["result"] for name in legs}
+          in_scope = (
+              needs["changes"]["outputs"].get("docker") == "true"
+              or os.environ["GITHUB_EVENT_NAME"] in ("push", "workflow_dispatch")
+          )
+          # Out of scope the legs are skipped by design; in scope every leg
+          # must succeed so a skipped-leg-needs-failure cannot masquerade.
+          expected = "success" if in_scope else "skipped"
+          bad = {k: v for k, v in results.items() if v != expected}
+          for name in legs:
+              print(f"{name}: {results[name]}")
+          if bad:
+              print(f"::error::standard stage legs not {expected}: {bad}")
+              sys.exit(1)
+          PY
+
+  real-part-mutation-shard:
+    needs: [changes, fast]
+    if: >-
+      needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -212,7 +344,7 @@ jobs:
         with:
           python-version: "3.14"
           enable-cache: true
-          cache-suffix: real-part-mutation
+          cache-suffix: real-part-mutation-${{ matrix.shard }}
       - run: uv sync --locked
       - name: Prepare corpus cache
         run: mkdir -p "$RUNNER_TEMP/corpus-cache" "$RUNNER_TEMP/real-part-mutation"
@@ -228,7 +360,8 @@ jobs:
           --entry tps62130-vqfn16
           --cache "$RUNNER_TEMP/corpus-cache"
       - name: Save TPS62130 datasheet cache
-        if: steps.corpus-cache.outputs.cache-hit != 'true'
+        # One shard writes the shared corpus entry; parallel saves race.
+        if: steps.corpus-cache.outputs.cache-hit != 'true' && matrix.shard == 0
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/corpus-cache
@@ -267,14 +400,48 @@ jobs:
               --entry tps62130-vqfn16 \
               --cache /corpus-cache \
               --out /out/tps62130-real-mutation-report.json \
-              --export-oracle
+              --export-oracle \
+              --shard-index ${{ matrix.shard }} --num-shards 3
       - name: Upload real-part mutation report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tps62130-real-mutation-report
+          name: tps62130-real-mutation-report-${{ matrix.shard }}
           path: ${{ runner.temp }}/real-part-mutation/tps62130-real-mutation-report.json
           if-no-files-found: ignore
+
+  real-part-mutation:
+    needs: [changes, real-part-mutation-shard]
+    if: always()
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - name: Aggregate mutation shard results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS"])
+          result = needs["real-part-mutation-shard"]["result"]
+          in_scope = (
+              needs["changes"]["outputs"].get("docker") == "true"
+              or os.environ["GITHUB_EVENT_NAME"] in ("push", "workflow_dispatch")
+          )
+          expected = "success" if in_scope else "skipped"
+          print(f"real-part-mutation-shard: {result}")
+          if result != expected:
+              print(f"::error::mutation shards not {expected}: {result}")
+              sys.exit(1)
+          PY
 
   plugin-load:
     runs-on: ubuntu-26.04
