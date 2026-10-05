@@ -19,9 +19,13 @@ _FIXTURE_ROOT = _REPO_ROOT / "tests" / "data" / "corpus_parts"
 _FIXTURE_DIR = _FIXTURE_ROOT / "tps62130-vqfn16"
 _MANIFEST_PATH = _REPO_ROOT / "library" / "corpus" / "corpus.json"
 _IMPRESSION = (
-    "The crop is legible and the cited marks are distinguishable. "
-    "The surrounding drawing context is visible and no clipping obscures the reading. "
-) * 3
+    "The crop is legible and the cited marks are distinguishable from the "
+    "surrounding linework. The drawing context is visible and no clipping "
+    "obscures the reading. A reviewer comparing the crop against the spec text "
+    "would find the values consistent with what is claimed. The resolution is "
+    "adequate for the glyphs at this zoom, and nothing in the frame looks "
+    "surprising or out of place for this kind of datasheet figure."
+)
 
 
 def _parser() -> argparse.ArgumentParser:

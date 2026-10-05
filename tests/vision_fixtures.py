@@ -37,9 +37,12 @@ class _PatchContext:
 FIXTURE_CONTROL = "ABC234"
 FIXTURE_IMPRESSION = (
     "The crop is legible and the printed marks are easy to distinguish. "
-    "The surrounding geometry provides useful context without obscuring the cited value. "
-    "No unexpected symbols or clipping are visible in this image. "
-) * 3
+    "The surrounding geometry provides useful context without obscuring the "
+    "cited value. No unexpected symbols or clipping are visible in this image. "
+    "A reviewer could read the dimension directly from the crop without "
+    "reaching for the full page. The rendering matches the datasheet figure "
+    "closely enough that the cited reading is trustworthy."
+)
 
 _JsonObject = dict[str, object]
 
