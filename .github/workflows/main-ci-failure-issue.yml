@@ -5,6 +5,8 @@ on:
   workflow_run:
     workflows:
       - "CI"
+      - "Cache sweep"
+      - "GHCR tag retention"
       - "Container hardening audit"
       - "Digest lock PR sweep"
       - "Check dependency updates"
