@@ -1039,6 +1039,7 @@ def _stage_schematic_gate(run: AuthoringRun) -> SchematicGate:
     schematic_snapshot = reports_dir / "snapshots" / "schematic-gate.kicad_sch"
     schematic_snapshot.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(schematic, schematic_snapshot)
+    _copy_project_context(run, schematic_snapshot)
     _record(
         run.log,
         {
@@ -1359,6 +1360,7 @@ def _stage_board_gate(run: AuthoringRun, schematic_snapshot: Path) -> BoardGate:
         )
     # Rendering can materialize project library tables in the board file.
     shutil.copy2(board, board_snapshot)
+    _copy_project_context(run, board_snapshot)
     for table_name in ("fp-lib-table", "sym-lib-table"):
         table = run.workdir / table_name
         if table.is_file():
@@ -1420,6 +1422,18 @@ def _stage_board_gate(run: AuthoringRun, schematic_snapshot: Path) -> BoardGate:
         diffs,
         version_about,
     )
+
+
+def _copy_project_context(run: AuthoringRun, snapshot: Path) -> None:
+    """Give a gate snapshot the project and drawing sheet it was gated with.
+
+    kicad-cli resolves the drawing sheet through the sibling project file;
+    without it a later ``diff`` reports a changed "Drawing Sheet File".
+    """
+    shutil.copy2(run.project, snapshot.with_suffix(".kicad_pro"))
+    sheet = run.project.with_suffix(".kicad_wks")
+    if sheet.is_file():
+        shutil.copy2(sheet, snapshot.parent / sheet.name)
 
 
 def _apply_drawing_sheet(run: AuthoringRun) -> None:
