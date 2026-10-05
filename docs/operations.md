@@ -945,6 +945,44 @@ build.
 - Verification: see the PR for `verify_all --stage fast`, plugin load,
   and shared-workflow results.
 
+### OpenHands SDK v1.52.0 update review
+
+- Checked on: 2026-10-05
+- `openhands-sdk`/`openhands-tools` `==1.51.0` → `==1.52.0` (main
+  dependencies). The complete `v1.51.0..v1.52.0` release (19 commits) was
+  reviewed:
+  - Bug fixes adopted implicitly by the bump: `ask_agent` in-flight
+    tool-call context (#4630), client create-retry dedupe (#5363),
+    server-side conversation create/fork dedupe (#5362), terminal tmux
+    socket isolation (#5485), and agent-server terminal run-permit release
+    (#5403). No plugin-side change is required; `check_plugin_load.py`
+    passes unchanged.
+  - `feat`: automation observability propagation (#5462) and agent-server
+    single-BashCommand stop (#5348) are not adopted — the plugin runs
+    under user/AgentCanvas sessions, not automations, and does not call
+    agent-server REST.
+  - `fix(workspace)`: loopback-only Docker port publishing (#5209)
+    hardens SDK-managed remote workspaces; the `circuit-server` image is
+    built from the upstream `openhands-agent-server` Dockerfile by the
+    publish workflow, so the change arrives with the next image republish
+    rather than through this repo.
+  - `uvicorn` 0.52.4 → 0.54.0, `posthog` 6.7.7 → 7.60.0, and
+    `python-frontmatter` 1.1.0 → 1.3.0 bumps are `openhands-agent-server`
+    dependencies, absent from this repo's `uv.lock`; the remaining
+    TypeScript-client/CI/example commits are n/a.
+  - The SDK still requires `fastmcp>=3.2.0,<4`, so the MCP 2.x deferral
+    stays and its reason now cites 1.52.0 (latest 2.3.0). The
+    `.trivyignore` SDK-borne waivers stay (upstream's 1.52.0 lock resolves
+    the same urllib3/pypdf/virtualenv/wheel versions); the
+    `sdk:openhands-agent-server/1.52.0` comment was refreshed. The
+    publish workflow derives `SDK_VERSION` from the lock pin and builds
+    the `v1.52.0` server image on the next publish — the digest lock is
+    left for the pin-PR machinery.
+- Reason for adoption: scheduled dependency alignment; the plugin's
+  fail-closed authoring boundary is unchanged.
+- Verification: see the PR for `verify_all --stage fast`, plugin load,
+  and shared-workflow results.
+
 ### OpenHands runtime surfaces
 
 Runtime policy surfaces the plugin declares but the host executes:

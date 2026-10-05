@@ -5,8 +5,8 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version < '3.13' and sys_platform != 'win32'",
 ]
 
@@ -783,8 +783,8 @@ dev = [
 requires-dist = [
     { name = "cadquery-ocp-novtk", specifier = "==8.0.1.0.0" },
     { name = "mcp", specifier = ">=1.29,<2" },
-    { name = "openhands-sdk", specifier = "==1.51.0" },
-    { name = "openhands-tools", specifier = "==1.51.0" },
+    { name = "openhands-sdk", specifier = "==1.52.0" },
+    { name = "openhands-tools", specifier = "==1.52.0" },
     { name = "pdfplumber", specifier = "==0.11.10" },
     { name = "pillow", specifier = "==12.3.0" },
     { name = "pydantic", specifier = ">=2" },
@@ -2630,7 +2630,7 @@ wheels = [
 
 [[package]]
 name = "openhands-sdk"
-version = "1.51.0"
+version = "1.52.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-client-protocol" },
@@ -2652,14 +2652,14 @@ dependencies = [
     { name = "tree-sitter-bash" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/9e/c7a1da2fc800afe7a897d3b7f5cad19db67084a6a159e2b98a620d3ef937/openhands_sdk-1.51.0.tar.gz", hash = "sha256:390957e499be86f623cb97f4ab925bb36ca53565ea20aea84843b46a23c1acd1", size = 763037, upload-time = "2026-10-03T07:38:27.704Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/b6/585632703816de400eadad6ff87299d90683f3701b6da5e6794903de21ea/openhands_sdk-1.52.0.tar.gz", hash = "sha256:8475f47dfe066e984d1001925daead67ec584b1f792e55722760e6b4ca865027", size = 766442, upload-time = "2026-10-05T04:10:30.325Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9d/45/1628c602fa04c3449b7b45da8db04e4fb4beccd41e39861421f49ba1bcb6/openhands_sdk-1.51.0-py3-none-any.whl", hash = "sha256:7757a729e8767816979ae9bb9a0f38c44941c5ec1df9aed1c51b9af3204552b9", size = 907999, upload-time = "2026-10-03T07:38:22.582Z" },
+    { url = "https://files.pythonhosted.org/packages/94/46/7521428ba6f9166cda0a02ed7c7f45ec60bb50749d4c7c692bbafd90b62c/openhands_sdk-1.52.0-py3-none-any.whl", hash = "sha256:92f5f03fd596608ca783269bd11a10de98365d8bddeae8a52d0ddccdfb6e2d97", size = 911666, upload-time = "2026-10-05T04:10:25.929Z" },
 ]
 
 [[package]]
 name = "openhands-tools"
-version = "1.51.0"
+version = "1.52.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "binaryornot" },
@@ -2673,9 +2673,9 @@ dependencies = [
     { name = "tree-sitter" },
     { name = "tree-sitter-bash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/17/c3/50f4c7558de6e1a8a176e838a05784779d3de979e6fc82057860df59d096/openhands_tools-1.51.0.tar.gz", hash = "sha256:20e4c340434388d4d4a5170ac167dea8d7860ad55345f108a8edb0eca1c18f59", size = 153101, upload-time = "2026-10-03T07:38:28.899Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6c/62/a0849674715a47e5a5d6bed5aa96cadb65424e683f2f2460fdbb32cce492/openhands_tools-1.52.0.tar.gz", hash = "sha256:b76670b40c3c1e6f98cc303ae0113c02b1c0fed00159be15a635195fc27ff0bd", size = 153165, upload-time = "2026-10-05T04:10:31.263Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/45/76/5527c743ba4364a7668cd0b952bae4f6f4dd995635d300782bcce4301a2b/openhands_tools-1.51.0-py3-none-any.whl", hash = "sha256:6935f6786ce2c065bfd531303a83934a832e49dcdad62a6c17b07dc6b28a25ae", size = 200330, upload-time = "2026-10-03T07:38:24.084Z" },
+    { url = "https://files.pythonhosted.org/packages/62/94/4f9cd14edb9fe0dc34413be72403543a811a6e8201df1ff21e57ca15ea9e/openhands_tools-1.52.0-py3-none-any.whl", hash = "sha256:0704f993f00b9b68a15b2131380fa7c439f8d731f12dcd1a6a173ad2517f5962", size = 200391, upload-time = "2026-10-05T04:10:27.37Z" },
 ]
 
 [[package]]

@@ -34,7 +34,7 @@ docker run --rm \
   python3 /opt/circuit/bin/smoke_kicad11_konnect.py
 ```
 
-The tools image's default user is root for SDK v1.51.0 server image build
+The tools image's default user is root for SDK v1.52.0 server image build
 compatibility. For standalone runs specify `--user circuit`; in the server
 image use the `openhands` user created by the SDK.
 
@@ -45,7 +45,7 @@ publishes the tools/server images to GHCR and records the actual digests in
 ## GHCR publishing and lock
 
 Publishing is done by `.github/workflows/publish-circuit-images.yml`. After the
-tools image is verified, the OpenHands SDK v1.51.0 server image is built, with
+tools image is verified, the OpenHands SDK v1.52.0 server image is built, with
 the immutable tags `<commit>-tools` and `<commit>-latest-source` plus the
 `latest` alias. Lock updates are separated into bot PRs. The publish workflow
 checks required PR statuses for up to 30 minutes, ignores non-required failures,
