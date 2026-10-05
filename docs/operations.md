@@ -1298,9 +1298,16 @@ kicadsexpr` against the design brief; Konnect's analysis results are treated as
 advisory evidence, including short detection.
 
 Before ERC, `e2e_authoring.py` injects the schematic title block (`title`,
-`date`, `rev`) with `circuit.titleblock.inject_title_block`, so generated
-renders carry document metadata and the `title_block_incomplete` sch_lint
-warning does not fire. The sch_lint gate verdict, warning count, and full
+`rev` from `brief.drawing.revision`, `company` from `legal_owner`, and
+`date` only once `date_of_issue` is set) with
+`circuit.titleblock.inject_title_block`, then
+`circuit.drawing_sheet.apply` writes `<name>.kicad_wks` (ISO 7200 title
+block, ADR-0035) beside the project and sets
+`schematic.page_layout_descr_file` plus the `VIBEBB_*` text variables in
+`<name>.kicad_pro`. The sheet is re-applied right before the exports so a
+KiCad session that saved the project cannot drop it. `title_block_incomplete`
+fires when `title` or `rev` is empty; an empty date is the expected state
+of an unapproved drawing. The sch_lint gate verdict, warning count, and full
 findings are also recorded under the `sch_lint` key in
 `e2e-authoring.json` so warnings stay visible in the run summary.
 

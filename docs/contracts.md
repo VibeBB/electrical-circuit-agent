@@ -8,7 +8,7 @@ strictness. "strict" = pydantic `extra="forbid"` (unknown fields rejected);
 
 | File | Model (`artifact_kind`) | Producer → consumer | Strictness |
 |---|---|---|---|
-| `*.brief.json` | `DesignBrief` (`circuit_design_brief`) — parts, nets, board, placement | circuit-brief → gates, exports, reports | strict |
+| `*.brief.json` | `DesignBrief` (`circuit_design_brief`) — parts, nets, board, placement, optional `drawing` (ISO 7200 title-block data, ADR-0035) | circuit-brief → gates, exports, reports | strict |
 | `*.intake.json` | `Intake`/`IntakeReport` (`circuit_brief_intake`/`_report`) — per-requirement provenance, `A*`/`Q*` | circuit-brief → orchestrator, intake gate | strict |
 | `*.connectivity.json` | ConnectivitySource contract — connectors, nets, cavities | `circuit_connectivity_export` → wire-agent, simulation-agent | frozen: sim `imports.py` mirror is extra=forbid — no VRP fields may be added |
 | `*.firmware.json` | `circuit_firmware_connectivity` — MCU pin map | `circuit_firmware_export` → firmware-agent | frozen: firmware strict mirror — shape must not change |
@@ -60,3 +60,16 @@ strictness. "strict" = pydantic `extra="forbid"` (unknown fields rejected);
 
 All records files are append-only; direct writes are denied by
 protect-libraries and written only through the typed writers or shared hooks.
+
+## `drawing` — ISO 7200 title-block data
+
+`DesignBrief.drawing` (`DrawingInfo`, all fields optional): `legal_owner`,
+`identification_prefix` (drawing number; defaults to the brief `name`),
+`revision` (default `A`), `responsible_dept`, `technical_reference`,
+`created_by`, `approved_by`, `date_of_issue` (ISO date, requires
+`approved_by`), `supplementary_title`, `classification`, `language`
+(default `en`). The document status is derived: `Released` (approver and
+issue date), `In approval` (approver only), otherwise `In preparation`.
+Unset fields print `—`. `drawing_sheet.variables` projects these into the
+`VIBEBB_*` project text variables the `.kicad_wks` prints; the brief digest
+prints as `VIBEBB_BRIEF_SHA256` (first 16 hex digits).

@@ -23,6 +23,7 @@ from circuit import __version__ as _circuit_version
 from circuit import (
     apiserver,
     brief,
+    drawing_sheet,
     fit_sheet,
     intake,
     kicad_cli,
@@ -857,11 +858,13 @@ def _stage_author_schematic(run: AuthoringRun) -> None:
     if _has_short(shorts):
         raise StepFailure("find_shorted_nets", f"shorted nets detected: {shorts}")
 
+    drawing = loaded_brief.drawing
     title_fields = titleblock.inject_title_block(
         schematic,
         title=loaded_brief.name,
-        date=time.strftime("%Y-%m-%d", time.gmtime()),
-        rev="1",
+        date=drawing.date_of_issue or "",
+        rev=drawing.revision,
+        company=drawing.legal_owner,
         comments=[loaded_brief.description] if loaded_brief.description else None,
         paper=titleblock.paper_for_part_count(len(loaded_brief.parts)),
     )
@@ -874,6 +877,7 @@ def _stage_author_schematic(run: AuthoringRun) -> None:
             "result": title_fields,
         },
     )
+    _apply_drawing_sheet(run)
 
     # Konnect ops can leave net labels outside the sheet bounds
     # (sch_lint reports them as item_out_of_bounds errors). Clamp
@@ -1418,7 +1422,30 @@ def _stage_board_gate(run: AuthoringRun, schematic_snapshot: Path) -> BoardGate:
     )
 
 
+def _apply_drawing_sheet(run: AuthoringRun) -> None:
+    """Point the project at the ISO 7200 sheet and refresh its variables."""
+    text_variables = drawing_sheet.variables(
+        run.loaded_brief, brief_sha256=brief.brief_sha256(run.brief_path)
+    )
+    try:
+        sheet = drawing_sheet.apply(run.project, text_variables=text_variables)
+    except ValueError as exc:
+        raise StepFailure("circuit_drawing_sheet", str(exc)) from exc
+    _record(
+        run.log,
+        {
+            "step": "circuit_drawing_sheet",
+            "tool": "circuit.drawing_sheet.apply",
+            "payload": {"project": str(run.project)},
+            "result": {"sheet": str(sheet), "text_variables": text_variables},
+        },
+    )
+
+
 def _stage_exports(run: AuthoringRun) -> None:
+    # Re-apply right before plotting: a KiCad session that saved the
+    # project during layout must not leave the exports on the default sheet.
+    _apply_drawing_sheet(run)
     board = run.board
     schematic = run.schematic
     exports_dir = run.workdir / "exports"

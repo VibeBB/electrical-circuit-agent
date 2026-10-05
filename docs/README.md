@@ -60,6 +60,7 @@
 | [0032](adr/ADR-0032-library-release-evidence.md) | Golden-corpus, mutation, and escape-rate release evidence |
 | [0033](adr/ADR-0033-human-requests-and-confidential-datasheets.md) | Human requests, confidential datasheets, and library-authoring stops |
 | [0034](adr/ADR-0034-records-liaison-docs.md) | VRP v1, SLP v2, and the documentation split |
+| [0035](adr/ADR-0035-iso7200-drawing-sheet.md) | ISO 7200 drawing sheet and title-block data from the brief |
 
 ## Research
 
