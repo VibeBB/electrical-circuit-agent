@@ -7,8 +7,10 @@
 - KiCad 11 nightly (Ubuntu 26.04 `ppa:kicad/kicad-dev-nightly`)
 - Konnect v0.13.0 (AGPL-3.0-only, separate process)
 
-README, docs, issues, PRs, code comments, identifiers, and commit messages are
-all written in English. Keep comments to the minimum necessary.
+Technical docs, issues, PRs, code comments, identifiers, and commit messages
+are all written in English. The single exception is `README.md`: it carries an
+English section followed by a `## 日本語` section with the same content — no
+separate `README.ja.md`. Keep comments to the minimum necessary.
 
 ## Layout
 

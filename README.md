@@ -1,261 +1,183 @@
 # electrical-circuit-agent
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/VibeBB/electrical-circuit-agent)
-
-Part of the [VibeBB](https://github.com/VibeBB) agent family:
-[bard-agent](https://github.com/VibeBB/bard-agent) ·
-[electrical-circuit-agent](https://github.com/VibeBB/electrical-circuit-agent) ·
-[mechanical-agent](https://github.com/VibeBB/mechanical-agent) ·
-[wire-agent](https://github.com/VibeBB/wire-agent)
-
+Part of the [VibeBB](https://vibebb.org/) family of AI hardware-design agents.
 [English](#english) | [日本語](#日本語)
 
 ## English
 
-An [OpenHands](https://github.com/OpenHands) plugin and tool image for
-conversational schematic and PCB design using KiCad 11 nightly — a
-requirements conversation becomes a verified schematic and a routed board.
+### What this is
 
-### What it does
+An [OpenHands](https://github.com/OpenHands) plugin that turns a plain-language
+conversation about an electronic product into a real KiCad design: a checked
+schematic, a routed printed circuit board, and the manufacturing files a fab
+house needs. The heavy work — drawing, checking, exporting — is done by
+deterministic tools, not by the model's imagination.
 
-- **Conversational intake** — clarifies design intent and fixes it as a JSON
-  design brief (parts, nets, board dimensions, optional placement) plus an
-  intake sidecar that binds every requirement and assumption to an id.
-- **Deterministic authoring** — validates the brief, then builds the
-  schematic with Konnect 0.13.0, updates/places/routes the PCB through
-  `kicad-cli api-server`, and exports manufacturing files.
-- **Deterministic verification** — ERC/DRC verdicts come solely from
-  `kicad-cli` JSON output; `circuit_connectivity_check` compares the
-  produced netlist against the design brief. LLM self-reports and Konnect
-  explanatory text are never promoted to a verdict — missing tools and
-  unknowns fail closed.
-- **Evidence-backed library parts** — the `circuit-library` agent coordinates
-  independent datasheet authoring lanes, deterministic library verification,
-  source/provenance recording, and hash-bound human approval. Unavailable or
-  mismatched evidence stops for a HumanRequest rather than being guessed.
-- **Firmware cooperation** — `circuit_firmware_export` writes MCU pin
-  connectivity for firmware-agent, and `circuit_firmware_check` confirms
-  the returned firmware pin map against the circuit (ADR-0023).
+### What you can do with it
 
-### Install
+- Describe a gadget in plain words and get a manufacturable board design.
+- Hand it photos, sketches, or part datasheets and have them understood.
+- Drop in an existing KiCad project and ask for changes.
+- Ask "why did you do that?" — every non-trivial choice is recorded with its
+  reasoning.
 
-The plugin lives in `plugins/circuit` and follows the OpenHands Software
-Agent SDK plugin layout (skills, agents, commands, hooks, `.mcp.json`).
-Install it from the OpenHands plugin UI (Agent Canvas → Customize →
-Plugins → Add plugin) with:
+### What you give it
 
-| Field | Value |
-| --- | --- |
-| Source | `github:VibeBB/electrical-circuit-agent` |
-| Ref | the latest tag from [Releases](https://github.com/VibeBB/electrical-circuit-agent/releases) |
-| Path | `plugins/circuit` |
+- A short description of what you want to build (features, size, connectors).
+- Optionally: photos or hand-drawn sketches, part datasheets (PDF), or an
+  existing KiCad project to modify.
 
-The plugin includes the `circuit` runtime MCP, a Konnect MCP configuration,
-brief/library/schematic/layout/review sub-agents, doctor/design/ERC/DRC/export
-commands, lifecycle hooks, and nine skills. Because MCP configuration is not
-automatically inherited by sub-agents from the parent, each AgentDefinition
-declares the same server map explicitly.
+### What you get back
 
-Prebuilt container images are published to GHCR
-(`ghcr.io/vibebb/circuit-tools`, `ghcr.io/vibebb/circuit-server`;
-digest-locked via `docker/image-digests.json`). `latest` is a convenience
-alias; runtime uses the SHA-256 digest-pinned references. No lock file is
-created until the first publish, and pull verification is fail-closed in
-environments without a lock. The tools image defaults to root for SDK
-server image build compatibility; specify the `circuit` user for
-standalone runs.
+- A schematic (`.kicad_sch`) and a routed PCB (`.kicad_pcb`) plus pictures of
+  them you can look at.
+- ERC and DRC reports — electrical and layout rule checks decided only by
+  KiCad itself, never by the model's opinion.
+- Manufacturing exports: Gerber plots, drill files, bill of materials, and
+  pick-and-place placement data.
+- A pin map for firmware sister plugins, a connectivity file for simulation,
+  and a design report summarizing every gate.
+- A reasoning trail: decisions, stage impressions, and image reviews recorded
+  under `observations/circuit/` so you can audit *why* the design looks this
+  way.
 
-```bash
-docker run --rm --user circuit \
-  -v "$PWD/fixtures/smoke-board:/work:ro" \
-  ghcr.io/vibebb/circuit-tools:latest \
-  python3 /opt/circuit/bin/smoke_kicad11_konnect.py
-```
+### How it works
 
-Requires Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/) for development.
+Work flows through stages — intake and brief, library parts, schematic,
+layout, review, manufacturing export — each delegated to a specialist
+sub-agent. Two checkpoints protect you: new library parts are packaged as a
+hash-bound evidence packet a human approves before use, and ERC/DRC verdicts
+are produced solely by `kicad-cli` JSON output; a model that "feels done"
+cannot overrule them.
 
-### Using the plugin
+### Working with sister plugins
 
-Commands (agent-facing):
+This plugin is one of the VibeBB sisters. UX-creator sends it work orders
+through `liaison/*.ux-request.json` files, which it answers with
+`*.ux-response.json` files. Firmware and FPGA sisters consume its MCU pin map;
+simulation consumes its connectivity export; wire consumes connector envelope
+data; mechanical, production-engineering, and document sisters consume its
+exports and reports.
 
-- `/circuit:doctor` — probe the KiCad/Konnect execution environment
-- `/circuit:design` — drive brief → schematic → PCB → gates → report
-- `/circuit:erc` — run the electrical rules check on a schematic
-- `/circuit:drc` — run the design rules check on a board
-- `/circuit:export` — regenerate manufacturing artifacts only
+### Getting started in AgentCanvas / OpenHands
 
-Sub-agents (`task` tool): `circuit-brief` (requirement/intake
-conversation), `circuit-library` (evidence-backed library parts),
-`circuit-schematic` and `circuit-layout` (authoring), and `circuit-review`
-(advisory review — no pass/fail authority).
+Install the plugin (Agent Canvas → Customize → Plugins → Add plugin) with
+source `github:VibeBB/electrical-circuit-agent`, path `plugins/circuit`, and
+the latest release tag. KiCad and Konnect run inside a published tools image —
+Docker is required. Then try a first message like: "Design a USB-C temperature
+logger board around an RP2040 with a JST battery connector."
 
-### Using the core directly
+### Limits
 
-The deterministic entry point is `scripts/e2e_authoring.py`; the `circuit`
-MCP server (`python3 -m circuit.mcp_server`) exposes the same deterministic
-tools over stdio. See [docs/operations.md](docs/operations.md) for the full
-command surface.
+- KiCad 11 nightly tooling; the toolchain runs in the provided Docker image.
+- Pass/fail is decided by KiCad checks only — visual reviews are advisory.
+- Custom library parts require human approval before use.
+- Large or unusual designs may need several conversation rounds.
 
-### Architecture
+### Safety
 
-```text
-user
-  -> OpenHands Agent Canvas
-  -> plugins/circuit
-  -> circuit-brief / circuit-library
-  -> circuit-schematic / circuit-layout / circuit-review
-  -> Konnect MCP + kicad-cli
-  -> KiCad project files
-```
+Never enter API keys, tokens, or secrets into prompts or project files.
+Manufacturing files are advisory artifacts; have a professional review the
+design before building products that touch mains voltage, batteries at
+scale, or safety-critical systems.
 
-KiCad 11 nightly is installed from Ubuntu 26.04's `ppa:kicad/kicad-dev-nightly`
-and provides headless IPC via `kicad-cli api-server` without a GUI or Xvfb.
-ACD's Design Graph, Evidence, and L1-L3 gate mechanisms are out of scope for
-this product.
+### Links
 
-### Development
+- Documentation index: [docs/README.md](docs/README.md)
+- Site: <https://vibebb.org/>
+- Sister plugins: [bard-agent](https://github.com/VibeBB/bard-agent) ·
+  [mechanical-agent](https://github.com/VibeBB/mechanical-agent) ·
+  [wire-agent](https://github.com/VibeBB/wire-agent)
 
-```bash
-uv sync
-uv run python scripts/verify_all.py --stage fast
-```
+### License
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), [docs/architecture.md](docs/architecture.md),
-and the ADR index in [docs/README.md](docs/README.md).
-
-### License and third-party components
-
-This project itself is licensed under BSD-3-Clause — see [LICENSE](LICENSE)
-and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the list of
-third-party components, their licenses, sources, and redistribution
-boundaries.
-
-Konnect runs as an unmodified AGPL-3.0-only binary in a separate process.
-Its source is release commit `6bbe3e4f890ba1d37c0e5d5f38ccd03d90958c9e` of
-[mixelpixx/Konnect](https://github.com/mixelpixx/Konnect). The Konnect README
-notes that "commercial licenses are available" for corporate use cases where
-the AGPL does not fit. This statement is not legal advice; users should verify
-the license conditions that apply to their own usage.
+BSD-3-Clause, © VibeBB — see [LICENSE](LICENSE) and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Konnect runs as an
+unmodified AGPL-3.0-only binary in a separate process.
 
 ## 日本語
 
-[OpenHands](https://github.com/OpenHands) 向けの、KiCad 11 nightly を使う
-会話型回路図・基板設計プラグインとツールイメージです — 要件の会話から
-検証済みの回路図と配線済み基板を生成します。
+### これは何ですか
+
+[OpenHands](https://github.com/OpenHands) 向けプラグインで、電子製品についての
+平易な会話から実際の KiCad 設計を生成します: 検査済みの回路図、配線済み
+プリント基板、製造業者が必要とする製造ファイル。図面・検査・出力という重い
+処理は、モデルの想像ではなく決定論的ツールが実行します。
 
 ### できること
 
-- **対話による要件取り込み** — 設計意図を明確化し、JSON 設計ブリーフ
-  （部品・net・基板寸法・任意の配置）と intake サイドカー（全要件・仮定を
-  ID に紐付け）として固定します。
-- **決定論的オーサリング** — ブリーフを検証し、Konnect 0.13.0 で回路図を
-  構築、`kicad-cli api-server` 経由で PCB の更新・配置・配線を行い、
-  製造ファイルをエクスポートします。
-- **決定論的検証** — ERC/DRC の合否は `kicad-cli` の JSON 出力のみで決定。
-  `circuit_connectivity_check` は生成 netlist を設計ブリーフと照合します。
-  LLM の自己申告や Konnect の説明文を合否へ昇格させることはなく、
-  ツール欠落・不明は fail-closed で不合格です。
-- **根拠に基づくライブラリ部品** — `circuit-library` エージェントが
-  独立した datasheet authoring lane、決定論的ライブラリ検証、source/provenance
-  の記録、hash-bound の人手承認を調整します。取得不能または不一致の根拠を
-  推測せず、HumanRequest で停止します。
-- **ファームウェア連携** — `circuit_firmware_export` が firmware-agent 向けに
-  MCU ピンの接続情報を書き出し、`circuit_firmware_check` が返ってきた
-  ファームウェアのピンマップを回路と照合します（ADR-0023）。
+- 作りたいものを平易な言葉で説明し、製造可能な基板設計を得る。
+- 写真・手描きスケッチ・部品データシートを渡して理解させる。
+- 既存の KiCad プロジェクトを渡して変更を依頼する。
+- 「なぜそうしたの?」と聞く — 重要な選択はすべて理由とともに記録される。
 
-### インストール
+### 何を渡すか
 
-プラグインは `plugins/circuit` にあり、OpenHands Software Agent SDK の
-プラグイン構成（skills・agents・commands・hooks・`.mcp.json`）に従います。
-OpenHands プラグイン UI（Agent Canvas → Customize → Plugins → Add plugin）
-から次の値でインストールします:
+- 作りたいものの短い説明(機能・サイズ・コネクタ)。
+- 任意で: 写真や手描きスケッチ、部品データシート(PDF)、変更したい既存の
+  KiCad プロジェクト。
 
-| 項目 | 値 |
-| --- | --- |
-| Source | `github:VibeBB/electrical-circuit-agent` |
-| Ref | [Releases](https://github.com/VibeBB/electrical-circuit-agent/releases) の最新タグ |
-| Path | `plugins/circuit` |
+### 何が返ってくるか
 
-プラグインには `circuit` runtime MCP、Konnect MCP 設定、
-brief・library・schematic・layout・review の各サブエージェント、
-doctor/design/ERC/DRC/export コマンド、ライフサイクル hook、9つのスキルが
-含まれます。サブエージェントは親から MCP 設定を自動継承しないため、
-各 AgentDefinition に同じ server map を明示しています。
+- 回路図(`.kicad_sch`)と配線済み基板(`.kicad_pcb`)、および目視できる画像。
+- ERC/DRC レポート — 電気・レイアウト規則検査は KiCad だけが判定し、
+  モデルの感想は使われない。
+- 製造エクスポート: ガーバー・ドリル・部品表・実装位置データ。
+- firmware 系 sister プラグイン向けピンマップ、simulation 向け
+  connectivity、各ゲートをまとめた設計レポート。
+- 推論の記録: `observations/circuit/` 以下に残る決定・工程感想・画像
+  レビュー。設計がこうなった理由を監査できる。
 
-ビルド済みコンテナイメージは GHCR に公開されています
-（`ghcr.io/vibebb/circuit-tools`、`ghcr.io/vibebb/circuit-server`。
-`docker/image-digests.json` で digest 固定）。`latest` は利便性のための
-別名であり、実行時は SHA-256 digest 固定参照を使います。初回 publish
-までは lock ファイルを作成せず、lock が無い環境では pull 検証を
-fail-closed にします。tools image は SDK server image build 互換のため
-root を既定 user とし、standalone 実行時は `circuit` user を明示します。
+### どう動くか
 
-```bash
-docker run --rm --user circuit \
-  -v "$PWD/fixtures/smoke-board:/work:ro" \
-  ghcr.io/vibebb/circuit-tools:latest \
-  python3 /opt/circuit/bin/smoke_kicad11_konnect.py
-```
+作業は工程 — 要件取り込みとブリーフ、ライブラリ部品、回路図、レイアウト、
+レビュー、製造エクスポート — ごとに専門サブエージェントへ委譲されます。
+2つのチェックポイントが保護します: 新規ライブラリ部品は hash 拘束の根拠
+パケットとして人間が承認するまで使われず、ERC/DRC の合否は `kicad-cli` の
+JSON 出力のみで決まり、「完成した気がする」モデルでは覆せません。
 
-開発には Python ≥ 3.12 と [uv](https://docs.astral.sh/uv/) が必要です。
+### sister プラグインとの連携
 
-### プラグインの使い方
+このプラグインは VibeBB sister の一つです。UX-creator は
+`liaison/*.ux-request.json` の作業指示を送り、本プラグインは
+`*.ux-response.json` で応答します。firmware/FPGA sister はピンマップを、
+simulation は connectivity を、wire はコネクタ envelope を、
+mechanical/production-engineering/document sister はエクスポートと
+レポートを消費します。
 
-コマンド（エージェント向け）:
+### AgentCanvas / OpenHands での始め方
 
-- `/circuit:doctor` — KiCad/Konnect 実行環境の診断
-- `/circuit:design` — brief → 回路図 → PCB → ゲート → レポートを実行
-- `/circuit:erc` — 回路図の電気ルール検査を実行
-- `/circuit:drc` — 基板のデザインルール検査を実行
-- `/circuit:export` — 製造成果物のみ再生成
+プラグインをインストール(Agent Canvas → Customize → Plugins → Add plugin)
+します: source は `github:VibeBB/electrical-circuit-agent`、path は
+`plugins/circuit`、ref は最新リリースタグ。KiCad と Konnect は公開済み
+ツールイメージ内で動くため Docker が必要です。最初のメッセージ例:
+「RP2040 と JST バッテリーコネクタを使った USB-C 温度ロガー基板を
+設計して」。
 
-サブエージェント（`task` ツール）: `circuit-brief`（要件・intake 対話）、
-`circuit-library`（根拠に基づくライブラリ部品）、
-`circuit-schematic` と `circuit-layout`（オーサリング）、
-`circuit-review`（助言レビュー — 合否権限なし）。
+### 制限
 
-### コアの直接使用
+- ツールは KiCad 11 nightly で、提供 Docker イメージ内で動作。
+- 合否は KiCad 検査のみが決定 — 視覚レビューは助言。
+- 自作ライブラリ部品は使用前に人間の承認が必要。
+- 大規模・特殊な設計は複数ラウンドの会話を要することがある。
 
-決定論的エントリポイントは `scripts/e2e_authoring.py` です。
-`circuit` MCP サーバー（`python3 -m circuit.mcp_server`）は同じ決定論
-ツールを stdio 経由で公開します。コマンド一覧は
-[docs/operations.md](docs/operations.md) を参照してください。
+### 安全
 
-### 構成
+API キー・トークン・秘密情報をプロンプトやプロジェクトファイルに
+入力しないでください。製造ファイルは助言的な成果物です。商用電源・
+大容量バッテリー・安全重視系に触れる製品は、製造前に専門家のレビューを
+受けてください。
 
-```text
-ユーザー
-  -> OpenHands Agent Canvas
-  -> plugins/circuit
-  -> circuit-brief
-  -> circuit-schematic / circuit-layout / circuit-review
-  -> Konnect MCP + kicad-cli
-  -> KiCad project files
-```
+### リンク
 
-KiCad 11 nightly は Ubuntu 26.04 の `ppa:kicad/kicad-dev-nightly` から導入し、
-GUI や Xvfb を使わず `kicad-cli api-server` で headless IPC を提供します。
-ACD の Design Graph、Evidence、L1-L3 gate 機構は本製品の範囲に含めません。
+- ドキュメント索引: [docs/README.md](docs/README.md)
+- サイト: <https://vibebb.org/>
+- sister プラグイン: [bard-agent](https://github.com/VibeBB/bard-agent) ·
+  [mechanical-agent](https://github.com/VibeBB/mechanical-agent) ·
+  [wire-agent](https://github.com/VibeBB/wire-agent)
 
-### 開発
+### ライセンス
 
-```bash
-uv sync
-uv run python scripts/verify_all.py --stage fast
-```
-
-[CONTRIBUTING.md](CONTRIBUTING.md)、[docs/architecture.md](docs/architecture.md)、
-[docs/README.md](docs/README.md) の ADR 索引を参照してください。
-
-### ライセンスと第三者コンポーネント
-
-本プロジェクト自身のライセンスは BSD-3-Clause です — [LICENSE](LICENSE) と
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)（第三者コンポーネントの
-一覧・ライセンス・取得元・再配布境界）を参照してください。
-
-Konnect は AGPL-3.0-only の無改変バイナリを別プロセスとして実行します。
-ソースは [mixelpixx/Konnect](https://github.com/mixelpixx/Konnect) の
-release commit `6bbe3e4f890ba1d37c0e5d5f38ccd03d90958c9e` です。Konnect の
-README は、企業利用で AGPL が適合しない場合について
-「commercial licenses are available」と案内しています。本記載は法的助言では
-なく、利用者は自身の利用形態に適用されるライセンス条件を確認してください。
+BSD-3-Clause、© VibeBB — [LICENSE](LICENSE) と
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照。Konnect は
+AGPL-3.0-only の無改変バイナリを別プロセスで実行します。

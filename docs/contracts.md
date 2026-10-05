@@ -1,0 +1,62 @@
+# Contracts
+
+Every JSON file the plugin reads or writes, its producer/consumer, and
+strictness. "strict" = pydantic `extra="forbid"` (unknown fields rejected);
+"frozen" = a strict mirror exists in a sister repo so the shape cannot grow.
+
+## Design artifacts
+
+| File | Model (`artifact_kind`) | Producer → consumer | Strictness |
+|---|---|---|---|
+| `*.brief.json` | `DesignBrief` (`circuit_design_brief`) — parts, nets, board, placement | circuit-brief → gates, exports, reports | strict |
+| `*.intake.json` | `Intake`/`IntakeReport` (`circuit_brief_intake`/`_report`) — per-requirement provenance, `A*`/`Q*` | circuit-brief → orchestrator, intake gate | strict |
+| `*.connectivity.json` | ConnectivitySource contract — connectors, nets, cavities | `circuit_connectivity_export` → wire-agent, simulation-agent | frozen: sim `imports.py` mirror is extra=forbid — no VRP fields may be added |
+| `*.firmware.json` | `circuit_firmware_connectivity` — MCU pin map | `circuit_firmware_export` → firmware-agent | frozen: firmware strict mirror — shape must not change |
+| `*.fw-pinmap.json` | `firmware_pinmap` | firmware-agent → `circuit_firmware_check` | strict (read only) |
+| `*.envelope.json` | EnvelopeSource — mechanical anchors | mechanical-agent → wire/sim; circuit does not write it | frozen upstream by mech/sim mirrors |
+| `*-stackup.json` | kicad-cli `pcb export stackup` output | `circuit_stackup` → agent, docs | kicad-cli schema |
+| `*.design-report.json` | `DesignReport` — every gate result | `circuit_design_report` → user, sisters | strict |
+
+## Part & library
+
+| File | `artifact_kind` | Notes |
+|---|---|---|
+| `part.spec.json` | `circuit_part_spec` | Agent-authored PartSpec; datasource-bound, hashable |
+| `*.part-spec-check.json` | `circuit_part_spec_check` | Cross-check vs extraction + provenance |
+| `*.datasheet-extraction.json` | `circuit_datasheet_extraction` | Dual-lane PDF text/tables/page images |
+| `*.land-pattern.json` | computed IPC-7351B pattern | `circuit_land_pattern` |
+| `provenance.json` | `circuit_library_provenance` | Per-library source/license manifest |
+| `*.library-verification.json` | `circuit_library_verification` | Symbol/footprint/model verification report |
+| `*.library-review-packet*` | `circuit_library_review_packet` | Hash-bound human review packet |
+| review status/decision | `circuit_library_review_status`, `circuit_library_review_correction` | Approval state + applied corrections |
+| `*.library-metrics.json` | `circuit_library_metrics` | Escape-rate/Clopper-Pearson metrics |
+| `*.mutation-report.json` | `circuit_mutation_report` | Seeded-mutation oracle results |
+| corpus truth | `circuit_golden_corpus`/`_truth` | Sealed golden corpus (`library/corpus`) |
+| lineage | `circuit_footprint_lineage` | Hash-bound base→current pad changes |
+| pin sources | `circuit_pin_source_comparison` | IBIS/BSDL/vendor pin-source comparison |
+| `*.kicad_sym`/`.kicad_mod`/`.step` | KiCad files | Deterministic writers + provenance |
+
+## Advisory, vision & human requests
+
+| File | `artifact_kind` | Notes |
+|---|---|---|
+| `review-visual-*.advisory.json` | `vision_review` AdvisoryResult — image sha256, model, checklist, findings, impression | `review-record` CLI writes it; mirrored into vision-reviews.jsonl |
+| `review-*.advisory.json` | generic AdvisoryResult | Konnect advisory records, never a verdict |
+| `*.vision-read.json` | `circuit_vision_read_batch` / `_answers` | Tool-managed crop batches + answers |
+| HumanRequest dir | `circuit_human_request` | Immutable hash-bound request + Markdown packet |
+| `*.ux-request.json` / `*.ux-response.json` | SLP v2 (`schema_version: 2`, `system: "ux-creator"`) | UX-creator → circuit; response written only by `circuit_ux_respond`; strict (extra=forbid) locally mirrored in `liaison.py` |
+
+## Records (VRP v1)
+
+| File | Producer | Shape |
+|---|---|---|
+| `observations/circuit/decisions.jsonl` | `circuit_record_decision` / `record decision` | event_id, stage, question, principles, options, chosen, rationale ≥200 chars, evidence sha256, assumptions, unknowns, risks, revisit_when |
+| `observations/circuit/impressions.jsonl` | `circuit_record_impression` | event_id, stage, artifact sha256 bindings, impression ≥400 chars / ≥3 sentences |
+| `observations/circuit/vision-reviews.jsonl` | `circuit_record_vision_review` / review-record mirror | event_id, image_path sha256 or source_event_id, model, checklist, findings, impression ≥400 chars |
+| `observations/circuit/vision-tool-events.jsonl` | record-vision-tool-event hook | inspect_image_with_vision Q&A events |
+| `observations/circuit/image-observations.jsonl` | record-image-observation hook | image paths produced/viewed by IMAGE_TOOLS + file_editor |
+| `observations/circuit/records-status.json` | require_records.py stop hook | last Stop verdict + owed records |
+| `plugins/circuit/hooks/records-policy.json` | repo | plugin, records_dir, artifact_globs, ignore_globs, max_stop_denials: 2, record_hint |
+
+All records files are append-only; direct writes are denied by
+protect-libraries and written only through the typed writers or shared hooks.
