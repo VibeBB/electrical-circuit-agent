@@ -75,3 +75,41 @@ def test_stackup_svg_fails_closed(tmp_path: Path) -> None:
         stackup_svg({"layers": [{"type": "BSLT_COPPER", "enabled": False}]})
     out = write_stackup_diagram(_stackup(), tmp_path / "sub" / "board-stackup.svg")
     assert out.read_text(encoding="utf-8").startswith("<svg")
+
+
+def test_stackup_svg_labels_do_not_overlap() -> None:
+    import re
+    from itertools import pairwise
+
+    svg = stackup_svg(_stackup())
+    ys = [
+        float(match.group(1))
+        for match in re.finditer(r'<text x="340" y="([\d.]+)"[^>]*font-size="12"', svg)
+    ]
+    assert len(ys) == 3
+    for earlier, later in pairwise(ys):
+        assert later - earlier >= 14.0 - 1e-6
+    assert "<line" in svg
+
+
+def test_stackup_svg_names_unnamed_dielectrics() -> None:
+    svg = stackup_svg(_stackup())
+    assert "BL_UNDEFINED" not in svg
+    assert "Dielectric 1 (core)" in svg
+    assert "1.530 mm" in svg and "FR4" in svg and "er=4.5" in svg and "tan=0.02" in svg
+
+
+def test_stackup_svg_prepreg_kind() -> None:
+    svg = stackup_svg(
+        {
+            "layers": [
+                {
+                    "layer": "BL_UNDEFINED",
+                    "type": "BSLT_DIELECTRIC",
+                    "enabled": True,
+                    "dielectric": {"type": "BSDT_PREPREG", "layer": []},
+                }
+            ]
+        }
+    )
+    assert "Dielectric 1 (prepreg)" in svg
