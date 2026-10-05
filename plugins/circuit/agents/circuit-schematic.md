@@ -165,7 +165,7 @@ session that still owes them.
   at an image (a board or schematic render, a photo, a datasheet crop, an
   `inspect_image_with_vision` answer): findings plus a long-form
   impression of 400+ characters judging accuracy, ambiguity, whether the
-  design intent comes across and whether the shop floor could act on it —
+  design intent comes across and whether a maker could build, assemble and debug from it —
   not only legibility. Bind it to `image_path` or to the vision event's
   `source_event_id`.
 

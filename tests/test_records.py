@@ -343,3 +343,98 @@ def test_records_policy_matches_core() -> None:
     for event, mode in (("session_start", "session-start"), ("stop", "stop")):
         commands = [h["command"] for g in hooks[event] for h in g["hooks"]]
         assert any(f'require_records.py" {mode}' in c for c in commands)
+
+
+def test_review_record_cli_mirrors_into_vision_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from circuit import cli
+
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    image = tmp_path / "render.png"
+    image.write_bytes(b"\x89PNG fixture bytes\n")
+    findings = tmp_path / "findings.json"
+    findings.write_text(
+        json.dumps(
+            [
+                {
+                    "category": "label_readability",
+                    "severity": "info",
+                    "note": "The routed pours match the intended net names.",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    rc = cli.main(
+        [
+            "review-record",
+            "--image",
+            str(image),
+            "--model",
+            "test-model",
+            "--checklist",
+            "schematic",
+            "--impression",
+            IMPRESSION,
+            "--findings",
+            str(findings),
+        ]
+    )
+    assert rc == 0
+    emitted = json.loads(capsys.readouterr().out)
+    assert emitted["verdict"] == "pass"
+    assert emitted["vision_event_id"]
+    log = tmp_path / "observations" / "circuit" / "vision-reviews.jsonl"
+    assert log.is_file()
+    lines = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    entry = lines[-1]
+    assert entry["event_id"] == emitted["vision_event_id"]
+    assert entry["image_sha256"] == hashlib.sha256(image.read_bytes()).hexdigest()
+    assert entry["checklist"] == "schematic"
+    assert entry["findings"][0]["note"].startswith("label_readability:")
+
+
+def test_review_record_cli_skips_mirror_for_external_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from circuit import cli
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(workspace))
+    image = tmp_path / "external.png"
+    image.write_bytes(b"\x89PNG outside workspace\n")
+    findings = workspace / "findings.json"
+    findings.write_text(
+        json.dumps(
+            [
+                {
+                    "category": "design_intent",
+                    "severity": "warning",
+                    "note": "The keepout boundary is not labelled.",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    rc = cli.main(
+        [
+            "review-record",
+            "--image",
+            str(image),
+            "--model",
+            "test-model",
+            "--checklist",
+            "schematic",
+            "--impression",
+            IMPRESSION,
+            "--findings",
+            str(findings),
+        ]
+    )
+    assert rc == 0
+    emitted = json.loads(capsys.readouterr().out)
+    assert emitted["vision_event_id"] == ""
+    assert emitted["vision_log"].startswith("skipped: ")
+    assert not (workspace / "observations" / "circuit" / "vision-reviews.jsonl").exists()

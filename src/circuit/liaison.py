@@ -237,7 +237,7 @@ def ux_inbox(root: Path | None = None) -> UxInboxResult:
         try:
             request = _load_request(path)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
-            malformed.append(MalformedEntry(path=str(path), error=str(exc)))
+            malformed.append(MalformedEntry(path=path.relative_to(base).as_posix(), error=str(exc)))
             continue
         if request.target_agent != RESPONDER:
             other_targets += 1
@@ -250,14 +250,14 @@ def ux_inbox(root: Path | None = None) -> UxInboxResult:
         try:
             response = _load_response(path)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
-            malformed.append(MalformedEntry(path=str(path), error=str(exc)))
+            malformed.append(MalformedEntry(path=path.relative_to(base).as_posix(), error=str(exc)))
             continue
         if response.request == stem:
             responses.setdefault(stem, response)
         else:
             malformed.append(
                 MalformedEntry(
-                    path=str(path),
+                    path=path.relative_to(base).as_posix(),
                     error=f"response.request {response.request!r} does not match file stem",
                 )
             )
@@ -294,7 +294,7 @@ def ux_inbox(root: Path | None = None) -> UxInboxResult:
         entries.append(
             InboxEntry(
                 id=request_id,
-                path=str(path),
+                path=path.relative_to(base).as_posix(),
                 stage=request.stage,
                 risk=request.risk,
                 purpose=request.purpose,
@@ -393,7 +393,7 @@ def ux_respond(payload: dict[str, Any], root: Path | None = None) -> UxRespondRe
 
     input_hashes = _current_input_hashes(request, base)
     missing = [item.path for item in request.inputs if not (base / item.path).exists()]
-    if missing:
+    if missing and status == "done":
         raise ValueError(f"request inputs are missing from the workspace: {missing}")
 
     if status == "done" and (
@@ -402,6 +402,10 @@ def ux_respond(payload: dict[str, Any], root: Path | None = None) -> UxRespondRe
         ]
     ):
         raise ValueError(f"request inputs changed since the request was written: {stale}")
+
+    # Missing inputs are omitted from the written input_hashes rather than
+    # recorded as an empty digest, so a refusal can say "input missing".
+    written_input_hashes = {path_key: digest for path_key, digest in input_hashes.items() if digest}
 
     artifacts: list[ArtifactOut] = []
     artifact_values: list[Any] = _list_field(payload, "artifacts")
@@ -419,17 +423,23 @@ def ux_respond(payload: dict[str, Any], root: Path | None = None) -> UxRespondRe
     gate_verdicts = [
         GateVerdict.model_validate(item) for item in _list_field(payload, "gate_verdicts")
     ]
+    decision_refs = [str(v) for v in _list_field(payload, "decision_refs")]
+    impression_refs = [str(v) for v in _list_field(payload, "impression_refs")]
     if status == "done":
+        if not gate_verdicts:
+            raise ValueError("a 'done' response needs at least one gate_verdict")
         if any(v.verdict != "pass" for v in gate_verdicts):
             raise ValueError(
                 "cannot answer 'done' while a gate verdict is fail or unknown; "
                 "change status to needs_info or rejected with a reason"
             )
-        if not gate_verdicts and not artifacts:
-            raise ValueError("a 'done' response needs gate verdicts or artifacts as evidence")
+        if not artifacts:
+            raise ValueError("a 'done' response needs at least one artifact")
+        if not decision_refs:
+            raise ValueError("a 'done' response needs at least one decision_ref")
+        if not impression_refs:
+            raise ValueError("a 'done' response needs at least one impression_ref")
 
-    decision_refs = [str(v) for v in _list_field(payload, "decision_refs")]
-    impression_refs = [str(v) for v in _list_field(payload, "impression_refs")]
     known_decisions, known_impressions = _record_event_ids(base)
     bad_decisions = [ref for ref in decision_refs if ref not in known_decisions]
     if bad_decisions:
@@ -453,7 +463,7 @@ def ux_respond(payload: dict[str, Any], root: Path | None = None) -> UxRespondRe
         responder=RESPONDER,
         status=cast(Statuses, status),
         reason=reason,
-        input_hashes=input_hashes,
+        input_hashes=written_input_hashes,
         artifacts=artifacts,
         gate_verdicts=gate_verdicts,
         decision_refs=decision_refs,

@@ -99,6 +99,7 @@ def test_inbox_new_request(workspace: Path) -> None:
     entry = inbox.requests[0]
     assert entry.id == "move-j2"
     assert entry.state == "new"
+    assert entry.path == "liaison/move-j2.ux-request.json"
     assert inbox.malformed == []
 
 
@@ -181,6 +182,9 @@ def test_inbox_malformed_files_reported(workspace: Path) -> None:
         json.dumps({"version": 1, "id": "old"}), encoding="utf-8"
     )
     inbox = liaison.ux_inbox()
+    for malformed_entry in inbox.malformed:
+        assert not Path(malformed_entry.path).is_absolute()
+        assert malformed_entry.path.startswith("liaison/")
     assert {Path(m.path).stem for m in inbox.malformed} == {
         "bad-json.ux-request",
         "mismatch.ux-request",
@@ -252,21 +256,49 @@ def _last_ids(workspace: Path) -> tuple[str, str]:
     return json.loads(decisions[-1])["event_id"], json.loads(impressions[-1])["event_id"]
 
 
-def test_respond_refuses_done_without_refs(workspace: Path) -> None:
+def _done_payload(workspace: Path) -> dict[str, Any]:
+    decision_id, impression_id = _make_refs(workspace)
+    return {
+        "request": "move-j2",
+        "status": "done",
+        "reason": "Connector moved to the east edge; DRC clean.",
+        "artifacts": ["out/board.kicad_pcb"],
+        "gate_verdicts": [{"gate": "drc", "verdict": "pass"}],
+        "decision_refs": [decision_id],
+        "impression_refs": [impression_id],
+    }
+
+
+def test_respond_refuses_done_without_gate_verdicts(workspace: Path) -> None:
     _write_request(workspace, "move-j2")
-    (workspace / "out").mkdir()
-    (workspace / "out" / "board.kicad_pcb").write_text("(kicad_pcb)\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="decision_ref or impression_ref"):
-        liaison.ux_respond(
-            {
-                "request": "move-j2",
-                "status": "done",
-                "reason": "Done but unreferenced reasoning record.",
-                "artifacts": ["out/board.kicad_pcb"],
-                "gate_verdicts": [{"gate": "drc", "verdict": "pass"}],
-            },
-            workspace,
-        )
+    payload = _done_payload(workspace)
+    payload["gate_verdicts"] = []
+    with pytest.raises(ValueError, match="gate_verdict"):
+        liaison.ux_respond(payload, workspace)
+
+
+def test_respond_refuses_done_without_artifacts(workspace: Path) -> None:
+    _write_request(workspace, "move-j2")
+    payload = _done_payload(workspace)
+    payload["artifacts"] = []
+    with pytest.raises(ValueError, match="artifact"):
+        liaison.ux_respond(payload, workspace)
+
+
+def test_respond_refuses_done_without_decision_refs(workspace: Path) -> None:
+    _write_request(workspace, "move-j2")
+    payload = _done_payload(workspace)
+    payload["decision_refs"] = []
+    with pytest.raises(ValueError, match="decision_ref"):
+        liaison.ux_respond(payload, workspace)
+
+
+def test_respond_refuses_done_without_impression_refs(workspace: Path) -> None:
+    _write_request(workspace, "move-j2")
+    payload = _done_payload(workspace)
+    payload["impression_refs"] = []
+    with pytest.raises(ValueError, match="impression_ref"):
+        liaison.ux_respond(payload, workspace)
 
 
 def test_respond_refuses_nonexistent_artifact(workspace: Path) -> None:
@@ -282,12 +314,30 @@ def test_respond_refuses_nonexistent_artifact(workspace: Path) -> None:
         )
 
 
-def test_respond_refuses_missing_input(workspace: Path) -> None:
+def test_respond_refuses_done_with_missing_input(workspace: Path) -> None:
     item = _input_file(workspace)
     _write_request(workspace, "move-j2", inputs=[item])
     (workspace / "input.txt").unlink()
+    payload = _done_payload(workspace)
     with pytest.raises(ValueError, match="missing"):
-        liaison.ux_respond({"request": "move-j2", "status": "accepted"}, workspace)
+        liaison.ux_respond(payload, workspace)
+
+
+def test_respond_missing_input_omitted_for_other_statuses(workspace: Path) -> None:
+    item = _input_file(workspace)
+    _write_request(workspace, "move-j2", inputs=[item])
+    (workspace / "input.txt").unlink()
+    result = liaison.ux_respond(
+        {
+            "request": "move-j2",
+            "status": "rejected",
+            "reason": "Cannot evaluate the change: the input file is missing.",
+        },
+        workspace,
+    )
+    assert result.response.input_hashes == {}
+    written = json.loads(Path(result.path).read_text(encoding="utf-8"))
+    assert written["input_hashes"] == {}
 
 
 def test_respond_rejected_needs_reason(workspace: Path) -> None:
