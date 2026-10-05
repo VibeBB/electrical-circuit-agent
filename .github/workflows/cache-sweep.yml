@@ -1,0 +1,59 @@
+name: Cache sweep
+
+on:
+  schedule:
+    # Monthly: keep the actions cache under GitHub's 10 GB per-repo LRU
+    # cliff so oldest-first eviction never silently drops the uv/build
+    # caches that keep verify and publish fast.
+    - cron: "33 5 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      actions: write # gh cache delete
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Delete stale caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Keep only the current ISO-week trivy DB key (the weekly cache
+          # shared by the container-audit CIS scan), drop daily trivy-action
+          # caches older than two days, and reset the buildx gha blob/index
+          # cache, which otherwise grows unbounded.
+          week_key="trivy-db-$(date +%G-W%V)"
+          cutoff=$(date -u -d '2 days ago' +%s)
+          deleted=0
+          gh api "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" \
+            --paginate \
+            --jq '.actions_caches[] | [.id, .key, .created_at] | @tsv' |
+          while IFS=$'\t' read -r id key created; do
+            stale=0
+            case "$key" in
+              trivy-db-*)
+                [ "$key" = "$week_key" ] || stale=1 ;;
+              cache-trivy-*)
+                [ "$(date -u -d "$created" +%s)" -lt "$cutoff" ] && stale=1 ;;
+              buildkit-blob-*|index-buildkit-*)
+                stale=1 ;;
+            esac
+            if [ "$stale" -eq 1 ]; then
+              echo "deleting stale cache: $key (id=$id created=$created)"
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id" || true
+              deleted=$((deleted + 1))
+            fi
+          done
+          echo "deleted $deleted stale cache entries" >> "$GITHUB_STEP_SUMMARY"

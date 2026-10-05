@@ -1,0 +1,50 @@
+name: GHCR tag retention
+
+# Deletes orphaned <sha>-tools tags from the ghcr circuit-tools package:
+# failed publishes push a per-sha tag that is never promoted, locked, or
+# attested. The prune script only removes tags older than 14 days whose
+# digest is unpinned and unattested.
+on:
+  schedule:
+    - cron: "53 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report candidate tags without deleting them"
+        type: boolean
+        default: true
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghcr-tag-retention
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Reads stored attestations to keep gated images.
+      attestations: read
+      # Deletes circuit-tools package versions.
+      packages: write
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prune orphaned circuit-tools tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GHCR_PACKAGE: circuit-tools
+          GHCR_PRUNE_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        # Scheduled runs prune for real; manual dispatches default to a
+        # dry-run report so the deletion set is reviewable first.
+        run: bash scripts/ghcr_orphan_tag_prune.sh
