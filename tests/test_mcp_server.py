@@ -2561,6 +2561,13 @@ def test_stackup_writes_json_and_svg(tmp_path: Path, monkeypatch: pytest.MonkeyP
         return {"layers": [{"type": "BSLT_COPPER", "enabled": True}]}
 
     monkeypatch.setattr(mcp_server.kicad_cli, "export_stackup", fake_stackup)
+    png = tmp_path / "stackup.png"
+    png.write_bytes(b"\x89PNG stackup\n")
+
+    def fake_rasterize(source: Path, out_dir: Path, *, dpi: int = 150) -> list[Path]:
+        return [png]
+
+    monkeypatch.setattr(mcp_server.raster, "rasterize", fake_rasterize)
 
     async def exercise() -> None:
         result = cast(

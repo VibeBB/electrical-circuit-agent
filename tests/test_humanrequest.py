@@ -21,7 +21,9 @@ _ASSESSMENT = (
     "The request collects the available source material and deterministic findings for "
     "human review. Compare each claim with the cited evidence and identify any unresolved "
     "risk before making a decision. Hash agreement and agent confidence are not proof that "
-    "the underlying library content is correct."
+    "the underlying library content is correct. A reviewer should treat the packet as a "
+    "starting point, verify the rendered artifacts against the source, and re-request "
+    "evidence for anything that remains ambiguous or unverifiable."
 )
 
 
@@ -263,7 +265,7 @@ def test_recommended_alternative_must_match_recommendation() -> None:
 def test_agent_assessment_must_be_multi_sentence_prose() -> None:
     fields = _request_fields()
     fields["agent_assessment"] = "This is too short."
-    with pytest.raises(ValidationError, match="impression must contain"):
+    with pytest.raises(ValidationError, match="impression has"):
         build_request(**fields)
 
 
