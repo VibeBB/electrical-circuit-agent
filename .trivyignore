@@ -22,7 +22,7 @@ CVE-2026-91777 exp:2027-01-03
 #
 # --- SDK-borne Python packages in /agent-server/.venv (circuit-server) -----
 # The server image is assembled by the upstream OpenHands agent-server build
-# (sdk:openhands-agent-server/1.51.0) on top of circuit-tools; these versions
+# (sdk:openhands-agent-server/1.52.0) on top of circuit-tools; these versions
 # come from upstream's dependency resolution, not this repo's uv.lock (which
 # already pins the fixed urllib3 2.8.0 / pypdf 6.19.0 / jaraco-context
 # 6.1.2). pypdf, urllib3, virtualenv, wheel (via setuptools _vendor), and

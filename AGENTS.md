@@ -2,7 +2,7 @@
 
 ## Scope
 
-- OpenHands Software Agent SDK v1.51.0
+- OpenHands Software Agent SDK v1.52.0
 - Python 3.12 or later, uv, ruff, pyright strict, pytest
 - KiCad 11 nightly (Ubuntu 26.04 `ppa:kicad/kicad-dev-nightly`)
 - Konnect v0.13.0 (AGPL-3.0-only, separate process)

@@ -3,7 +3,7 @@
     {
       "target": "mcp",
       "version": "2.x",
-      "reason": "openhands-sdk 1.51.0 requires fastmcp>=3.2.0,<4, which requires mcp<2 (latest 2.3.0). Defer MCP 2.x until a supported SDK/fastmcp release removes that constraint.",
+      "reason": "openhands-sdk 1.52.0 requires fastmcp>=3.2.0,<4, which requires mcp<2 (latest 2.3.0). Defer MCP 2.x until a supported SDK/fastmcp release removes that constraint.",
       "recheck_by": "2027-04-01"
     }
   ]
