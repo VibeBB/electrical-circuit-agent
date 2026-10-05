@@ -194,6 +194,11 @@ jobs:
       needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      # Writes the shared registry buildcache on push/dispatch runs; fork-PR
+      # tokens are clamped to read-only regardless.
+      packages: write
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -214,15 +219,43 @@ jobs:
             exit 1
           fi
           echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
+      # The GHCR buildcache survives the gha cache's eviction window. The
+      # cache lives as a `buildcache` tag on the public circuit-tools package
+      # so anonymous pulls (local `docker buildx --cache-from`) reuse it too;
+      # a separate -buildcache package would default to private. The login is
+      # skipped for fork PRs (their token cannot read packages).
+      - name: Log in to GHCR for the registry build cache
+        id: ghcr-login
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        continue-on-error: true
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       # buildx with the GitHub Actions cache avoids rebuilding the KiCad base
       # layers on every run; the lock-recorded image stays the publish target.
-      - run: >-
-          docker buildx build --load
-          -f docker/circuit-tools.Dockerfile -t circuit-tools:ci
-          --build-arg "CERN_COMMIT=$CERN_COMMIT"
-          --cache-from type=gha,scope=circuit-tools
-          --cache-to type=gha,mode=max,scope=circuit-tools,ignore-error=true
-          .
+      - name: Build circuit-tools image
+        env:
+          GHCR: ${{ steps.ghcr-login.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          args=(
+            docker buildx build --load
+            -f docker/circuit-tools.Dockerfile -t circuit-tools:ci
+            --build-arg "CERN_COMMIT=$CERN_COMMIT"
+            --cache-from "type=gha,scope=circuit-tools"
+          )
+          if [ "$GHCR" = "true" ]; then
+            args+=(--cache-from "type=registry,ref=ghcr.io/$owner/circuit-tools:buildcache")
+          fi
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] && [ "$GHCR" = "true" ]; then
+            args+=(--cache-to "type=registry,ref=ghcr.io/$owner/circuit-tools:buildcache,mode=max")
+          else
+            args+=(--cache-to "type=gha,mode=max,scope=circuit-tools,ignore-error=true")
+          fi
+          "${args[@]}" .
       - run: >-
           docker run --rm
           --user circuit
@@ -236,6 +269,11 @@ jobs:
       needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      # Writes the shared registry buildcache on push/dispatch runs; fork-PR
+      # tokens are clamped to read-only regardless.
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -266,15 +304,43 @@ jobs:
             exit 1
           fi
           echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
-      # Every shard warms the image from the shared gha cache instead of
+      # The GHCR buildcache survives the gha cache's eviction window. The
+      # cache lives as a `buildcache` tag on the public circuit-tools package
+      # so anonymous pulls (local `docker buildx --cache-from`) reuse it too;
+      # a separate -buildcache package would default to private. The login is
+      # skipped for fork PRs (their token cannot read packages).
+      - name: Log in to GHCR for the registry build cache
+        id: ghcr-login
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        continue-on-error: true
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Every shard warms the image from the shared caches instead of
       # transferring it between jobs; a warm build costs ~1-2 minutes.
-      - run: >-
-          docker buildx build --load
-          -f docker/circuit-tools.Dockerfile -t circuit-tools:ci
-          --build-arg "CERN_COMMIT=$CERN_COMMIT"
-          --cache-from type=gha,scope=circuit-tools
-          --cache-to type=gha,mode=max,scope=circuit-tools,ignore-error=true
-          .
+      - name: Build circuit-tools image
+        env:
+          GHCR: ${{ steps.ghcr-login.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          args=(
+            docker buildx build --load
+            -f docker/circuit-tools.Dockerfile -t circuit-tools:ci
+            --build-arg "CERN_COMMIT=$CERN_COMMIT"
+            --cache-from "type=gha,scope=circuit-tools"
+          )
+          if [ "$GHCR" = "true" ]; then
+            args+=(--cache-from "type=registry,ref=ghcr.io/$owner/circuit-tools:buildcache")
+          fi
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] && [ "$GHCR" = "true" ]; then
+            args+=(--cache-to "type=registry,ref=ghcr.io/$owner/circuit-tools:buildcache,mode=max")
+          else
+            args+=(--cache-to "type=gha,mode=max,scope=circuit-tools,ignore-error=true")
+          fi
+          "${args[@]}" .
       - run: >-
           uv run python scripts/verify_all.py --stage standard
           --group docker --shard ${{ matrix.shard }}/4
@@ -325,6 +391,11 @@ jobs:
       needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      # Writes the shared registry buildcache on push/dispatch runs; fork-PR
+      # tokens are clamped to read-only regardless.
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -376,13 +447,41 @@ jobs:
             exit 1
           fi
           echo "CERN_COMMIT=$cern_commit" >> "$GITHUB_ENV"
-      - run: >-
-          docker buildx build --load
-          -f docker/circuit-tools.Dockerfile -t circuit-tools:ci
-          --build-arg "CERN_COMMIT=$CERN_COMMIT"
-          --cache-from type=gha,scope=circuit-tools
-          --cache-to type=gha,mode=max,scope=circuit-tools,ignore-error=true
-          .
+      # The GHCR buildcache survives the gha cache's eviction window. The
+      # cache lives as a `buildcache` tag on the public circuit-tools package
+      # so anonymous pulls (local `docker buildx --cache-from`) reuse it too;
+      # a separate -buildcache package would default to private. The login is
+      # skipped for fork PRs (their token cannot read packages).
+      - name: Log in to GHCR for the registry build cache
+        id: ghcr-login
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        continue-on-error: true
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build circuit-tools image
+        env:
+          GHCR: ${{ steps.ghcr-login.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          args=(
+            docker buildx build --load
+            -f docker/circuit-tools.Dockerfile -t circuit-tools:ci
+            --build-arg "CERN_COMMIT=$CERN_COMMIT"
+            --cache-from "type=gha,scope=circuit-tools"
+          )
+          if [ "$GHCR" = "true" ]; then
+            args+=(--cache-from "type=registry,ref=ghcr.io/$owner/circuit-tools:buildcache")
+          fi
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] && [ "$GHCR" = "true" ]; then
+            args+=(--cache-to "type=registry,ref=ghcr.io/$owner/circuit-tools:buildcache,mode=max")
+          else
+            args+=(--cache-to "type=gha,mode=max,scope=circuit-tools,ignore-error=true")
+          fi
+          "${args[@]}" .
       - name: Run production mutation verifier in the tools image
         run: |
           set -euo pipefail
