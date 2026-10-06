@@ -90,6 +90,20 @@ Helpers for project-local confidential artifacts.
 - `confidential_root_for:`
 - `ensure_confidential_store:`
 
+## `sim_thermal.py`
+
+Thermal handoff to simulation-agent and its hash-bound answer.
+
+- `SimResponse` — Mirror of simulation-agent's `SimulationResponse` (schema v2).
+- `thermal_brief` — simulation-agent `*.sim.json` payload with a `thermal` section.
+- `lifetime_brief` — simulation-agent `*.sim.json` payload with an Arrhenius `lifetime` section.
+- `sim_brief` — simulation-agent payload for `kind`.
+- `expected_request` — `(request_id, sim brief sha256)` the current brief would request.
+- `write_sim_request` — Write the sim brief and its v1 `*.sim-request.json`.
+- `resolve_response` — Path of `<kind>.response_path` relative to the brief.
+- `thermal_findings` — `(subject, status, measured, detail)` per `kind` result; fail-closed.
+- `thermal_check` — JSON verdict over `thermal_findings`; a missing `kind` section is `unknown`.
+
 ## `board_geometry.py`
 
 Board geometry handoff for mechanical-agent (`*.board-geometry.json`, optional IDF 3.0).
