@@ -51,6 +51,7 @@ hashes, artifact hashes, gate verdicts, record refs, `responded_at`.
 | File | Circuit role | Consumed by | Shape |
 |---|---|---|---|
 | `*.connectivity.json` | written by `circuit_connectivity_export` | wire-agent, simulation-agent | frozen — sim mirror is extra=forbid |
+| `*.board-geometry.json` (+ `.emn`/`.emp`) | written by `circuit_board_geometry_export` | mechanical-agent (board envelope, mount holes, connector faces) | strict; `unknown` heights fail the export verdict |
 | `*.firmware.json` | written by `circuit_firmware_export` | firmware-agent | frozen — firmware strict mirror |
 | `*.fw-pinmap.json` | read by `circuit_firmware_check` | firmware-agent produces | strict read |
 | `*.envelope.json` | not written by circuit | mech → wire/sim | frozen upstream |
