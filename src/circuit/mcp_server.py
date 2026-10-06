@@ -60,6 +60,7 @@ from . import (
     revwatch,
     ruleprofile,
     sch_lint,
+    sim_thermal,
     stackup,
     visionread,
 )
@@ -233,6 +234,28 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "output_path": {"type": "string"},
             },
             "required": ["pcb_path"],
+        },
+    ),
+    (
+        "circuit_sim_thermal_request",
+        "Hand the brief's thermal facts to simulation-agent "
+        "(*.thermal.sim.json + *.thermal.sim-request.json)",
+        {
+            "type": "object",
+            "properties": {
+                "brief_path": {"type": "string"},
+                "out_dir": {"type": "string"},
+            },
+            "required": ["brief_path"],
+        },
+    ),
+    (
+        "circuit_sim_thermal_check",
+        "Check simulation-agent's hash-bound thermal response (thermal.response_path)",
+        {
+            "type": "object",
+            "properties": {"brief_path": {"type": "string"}},
+            "required": ["brief_path"],
         },
     ),
     (
@@ -1265,6 +1288,8 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_connectivity_check": _anno("Connectivity check", write=True),
     "circuit_connectivity_export": _anno("Connectivity export", write=True),
     "circuit_board_geometry_export": _anno("Board geometry export", write=True),
+    "circuit_sim_thermal_request": _anno("Simulation thermal request", write=True),
+    "circuit_sim_thermal_check": _anno("Simulation thermal check", write=False),
     "circuit_firmware_export": _anno("Firmware connectivity export", write=True),
     "circuit_firmware_check": _anno("Firmware pin map check", write=True),
     "circuit_doctor": _anno("Circuit doctor", write=False),
@@ -2099,6 +2124,26 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 geometry, output, design=pcb_path.stem, idf=bool(args.get("idf"))
             )
             result = board_geometry.board_geometry_result(geometry, written)
+        elif name == "circuit_sim_thermal_request":
+            from .workspace import workspace_path, workspace_root
+
+            brief_path = workspace_path(str(args["brief_path"]))
+            out_value = _optional_string(args.get("out_dir"))
+            out_dir = workspace_path(out_value) if out_value else brief_path.parent
+            result = sim_thermal.write_sim_request(
+                brief.load_brief(brief_path), out_dir, root=workspace_root()
+            )
+        elif name == "circuit_sim_thermal_check":
+            from .workspace import workspace_path, workspace_root
+
+            brief_path = workspace_path(str(args["brief_path"]))
+            design = brief.load_brief(brief_path)
+            response = sim_thermal.resolve_response(design, brief_path.parent)
+            result = sim_thermal.thermal_check(
+                design,
+                workspace_path(response) if response is not None else None,
+                workspace_root(),
+            )
         elif name in ("circuit_firmware_export", "circuit_firmware_check"):
             brief_path = Path(str(args["brief_path"]))
             netlist_arg = _optional_string(args.get("netlist_path"))

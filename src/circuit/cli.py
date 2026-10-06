@@ -40,6 +40,8 @@ from . import (
     partspec,
     revwatch,
     sch_lint,
+    sim_thermal,
+    workspace,
 )
 from .advisory import VisualChecklist
 
@@ -295,6 +297,32 @@ def cmd_board_geometry(args: argparse.Namespace) -> int:
     return _emit(board_geometry.board_geometry_result(geometry, written))
 
 
+def _sim_root(path: Path) -> Path | None:
+    root = workspace.workspace_root()
+    resolved = path.resolve()
+    return root if resolved == root or root in resolved.parents else None
+
+
+def cmd_sim_request(args: argparse.Namespace) -> int:
+    try:
+        design = _load_brief(args.brief)
+        out_dir = Path(args.out_dir) if args.out_dir else Path(args.brief).parent
+        payload = sim_thermal.write_sim_request(design, out_dir, root=_sim_root(out_dir))
+    except (ValueError, OSError) as exc:
+        return _fail("sim-request", str(exc))
+    return _emit(payload)
+
+
+def cmd_sim_check(args: argparse.Namespace) -> int:
+    try:
+        design = _load_brief(args.brief)
+        response = sim_thermal.resolve_response(design, Path(args.brief).parent)
+        payload = sim_thermal.thermal_check(design, response, workspace.workspace_root())
+    except (ValueError, OSError) as exc:
+        return _fail("sim-check", str(exc))
+    return _emit(payload)
+
+
 def _firmware_connectivity(args: argparse.Namespace) -> firmware.CircuitFirmwareConnectivity:
     brief_path = Path(args.brief)
     netlist_path = Path(args.netlist) if args.netlist else None
@@ -510,6 +538,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     geometry_parser.add_argument("--idf", action="store_true")
     geometry_parser.add_argument("--out", required=True)
     geometry_parser.set_defaults(handler=cmd_board_geometry)
+
+    sim_request_parser = subparsers.add_parser(
+        "sim-request", help="hand brief thermal facts to simulation-agent (*.sim-request.json)"
+    )
+    sim_request_parser.add_argument("--brief", required=True)
+    sim_request_parser.add_argument("--out-dir", default=None)
+    sim_request_parser.set_defaults(handler=cmd_sim_request)
+
+    sim_check_parser = subparsers.add_parser(
+        "sim-check", help="check simulation-agent's hash-bound thermal response"
+    )
+    sim_check_parser.add_argument("--brief", required=True)
+    sim_check_parser.set_defaults(handler=cmd_sim_check)
 
     firmware_export_parser = subparsers.add_parser(
         "firmware-export", help="emit MCU pin connectivity (*.firmware.json) for firmware-agent"

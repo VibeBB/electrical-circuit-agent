@@ -49,6 +49,8 @@ fail-closed.
 |---|---|---|---|---|
 | `circuit_connectivity_export` | rw | no | Emit the wire-agent ConnectivitySource contract (*.connectivity.json) | brief_path*, netlist_path, output_path |
 | `circuit_board_geometry_export` | rw | no | Emit board outline, thickness, mount holes, part placement and heights (*.board-geometry.json, optional IDF 3.0) for mechanical-agent | pcb_path*, part_specs, step_path, idf, output_path |
+| `circuit_sim_thermal_request` | rw | no | Hand the brief's thermal facts to simulation-agent (*.thermal.sim.json + *.thermal.sim-request.json) | brief_path*, out_dir |
+| `circuit_sim_thermal_check` | ro | no | Check simulation-agent's hash-bound thermal response (thermal.response_path) | brief_path* |
 | `circuit_firmware_export` | rw | no | Emit MCU pin connectivity for firmware-agent (*.firmware.json) | brief_path*, netlist_path, output_path |
 | `circuit_firmware_check` | rw | no | Check a firmware-agent pin map (*.fw-pinmap.json) against the circuit | brief_path*, pinmap_path*, netlist_path, output_path |
 

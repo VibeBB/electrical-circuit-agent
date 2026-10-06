@@ -113,6 +113,32 @@ class DrawingInfo(BaseModel):
         return self.identification_prefix or design
 
 
+class ThermalPart(BaseModel):
+    """Datasheet-sourced dissipation and junction limit of one part."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference: str = Field(pattern=r"^[A-Z][A-Z0-9]*[0-9]+$")
+    power_w: float = Field(ge=0)
+    tj_max_c: float
+    derating_margin_c: float = Field(default=0, ge=0)
+    theta_ja_c_per_w: float | None = Field(default=None, ge=0)
+    theta_jc: float | None = Field(default=None, ge=0)
+    theta_cs: float | None = Field(default=None, ge=0)
+    theta_sa: float | None = Field(default=None, ge=0)
+    source: str = Field(min_length=1)
+
+
+class ThermalSpec(BaseModel):
+    """Thermal facts handed to simulation-agent; simulation owns the verdict."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ambient_c: float
+    parts: list[ThermalPart] = Field(min_length=1)
+    response_path: str | None = Field(default=None, min_length=1)
+
+
 class DesignBrief(BaseModel):
     model_config = ConfigDict(extra="forbid")
     pin_pattern: ClassVar[re.Pattern[str]] = re.compile(r"^([A-Z][A-Z0-9]*[0-9]+)\.([^.\s]+)$")
@@ -123,6 +149,7 @@ class DesignBrief(BaseModel):
     nets: list[Net] = Field(min_length=1)
     board: Board
     drawing: DrawingInfo = Field(default_factory=DrawingInfo)
+    thermal: ThermalSpec | None = None
 
     @model_validator(mode="after")
     def validate_references_and_connections(self) -> DesignBrief:
@@ -151,6 +178,13 @@ class DesignBrief(BaseModel):
                 raise ValueError(f"placement x is outside board: {reference}")
             if not 0 <= placement.y_mm <= self.board.height_mm:
                 raise ValueError(f"placement y is outside board: {reference}")
+        if self.thermal is not None:
+            thermal_refs = [part.reference for part in self.thermal.parts]
+            if len(set(thermal_refs)) != len(thermal_refs):
+                raise ValueError("thermal part references must be unique")
+            for reference in thermal_refs:
+                if reference not in known_references:
+                    raise ValueError(f"thermal references unknown part: {reference}")
         return self
 
 
