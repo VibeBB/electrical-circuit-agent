@@ -90,6 +90,16 @@ Helpers for project-local confidential artifacts.
 - `confidential_root_for:`
 - `ensure_confidential_store:`
 
+## `board_geometry.py`
+
+Board geometry handoff for mechanical-agent (`*.board-geometry.json`, optional IDF 3.0).
+
+- `BoardGeometry:`
+- `board_geometry:`
+- `idf_files:`
+- `write_board_geometry:`
+- `board_geometry_result:`
+
 ## `connectivity.py`
 
 Emit the wire-agent ConnectivitySource contract (*.connectivity.json).

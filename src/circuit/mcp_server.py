@@ -27,6 +27,7 @@ from . import (
     advisory,
     apiserver,
     authoring,
+    board_geometry,
     brief,
     confidential,
     connectivity,
@@ -213,6 +214,25 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
                 "output_path": {"type": "string"},
             },
             "required": ["brief_path"],
+        },
+    ),
+    (
+        "circuit_board_geometry_export",
+        "Emit board outline, thickness, mount holes, part placement and heights "
+        "(*.board-geometry.json, optional IDF 3.0) for mechanical-agent",
+        {
+            "type": "object",
+            "properties": {
+                "pcb_path": {"type": "string"},
+                "part_specs": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+                "step_path": {"type": "string"},
+                "idf": {"type": "boolean"},
+                "output_path": {"type": "string"},
+            },
+            "required": ["pcb_path"],
         },
     ),
     (
@@ -1244,6 +1264,7 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_netlist_export": _anno("Netlist export", write=True),
     "circuit_connectivity_check": _anno("Connectivity check", write=True),
     "circuit_connectivity_export": _anno("Connectivity export", write=True),
+    "circuit_board_geometry_export": _anno("Board geometry export", write=True),
     "circuit_firmware_export": _anno("Firmware connectivity export", write=True),
     "circuit_firmware_check": _anno("Firmware pin map check", write=True),
     "circuit_doctor": _anno("Circuit doctor", write=False),
@@ -2057,6 +2078,27 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             connectivity.write_connectivity(design, output, parsed_netlist)
             payload = connectivity.connectivity_source(design, parsed_netlist)
             result = connectivity.connectivity_result(design, payload, str(output))
+        elif name == "circuit_board_geometry_export":
+            pcb_path = Path(str(args["pcb_path"]))
+            try:
+                spec_paths = TypeAdapter(dict[str, str]).validate_python(
+                    args.get("part_specs") or {}, strict=True
+                )
+            except ValidationError as exc:
+                raise ValueError("part_specs must map footprint references to spec paths") from exc
+            step_value = _optional_string(args.get("step_path"))
+            geometry = board_geometry.board_geometry(
+                pcb_path,
+                {ref: Path(path) for ref, path in spec_paths.items()},
+                Path(step_value) if step_value else None,
+            )
+            output = _output_path(
+                pcb_path, _optional_string(args.get("output_path")), "board-geometry"
+            )
+            written = board_geometry.write_board_geometry(
+                geometry, output, design=pcb_path.stem, idf=bool(args.get("idf"))
+            )
+            result = board_geometry.board_geometry_result(geometry, written)
         elif name in ("circuit_firmware_export", "circuit_firmware_check"):
             brief_path = Path(str(args["brief_path"]))
             netlist_arg = _optional_string(args.get("netlist_path"))

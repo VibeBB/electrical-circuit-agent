@@ -6,6 +6,7 @@ Subcommands:
   sch-lint     lint a .kicad_sch for readability defects (JSON verdict)
   datasheet-revision-check  compare a PartSpec with its manufacturer source
   connectivity emit the wire-agent ConnectivitySource contract (JSON verdict)
+  board-geometry   emit board outline/placement/heights for mechanical-agent (JSON verdict)
   firmware-export  emit MCU pin connectivity for firmware-agent (JSON verdict)
   firmware-check   check a firmware-agent pin map against the circuit (JSON verdict)
   author       run e2e authoring from a design brief (JSON verdict)
@@ -27,6 +28,7 @@ from pathlib import Path
 from typing import Any, Final, Literal, cast
 
 from . import (
+    board_geometry,
     brief,
     connectivity,
     doctor,
@@ -273,6 +275,26 @@ def cmd_connectivity(args: argparse.Namespace) -> int:
     return _emit(connectivity.connectivity_result(design, payload, args.out))
 
 
+def cmd_board_geometry(args: argparse.Namespace) -> int:
+    try:
+        specs: dict[str, Path] = {}
+        for item in args.part_spec:
+            ref, sep, path = item.partition("=")
+            if not sep or not ref or not path:
+                raise ValueError(f"--part-spec expects REF=PATH, got {item!r}")
+            specs[ref] = Path(path)
+        pcb_path = Path(args.pcb)
+        geometry = board_geometry.board_geometry(
+            pcb_path, specs, Path(args.step) if args.step else None
+        )
+        written = board_geometry.write_board_geometry(
+            geometry, Path(args.out), design=pcb_path.stem, idf=args.idf
+        )
+    except (ValueError, OSError) as exc:
+        return _fail("board-geometry", str(exc))
+    return _emit(board_geometry.board_geometry_result(geometry, written))
+
+
 def _firmware_connectivity(args: argparse.Namespace) -> firmware.CircuitFirmwareConnectivity:
     brief_path = Path(args.brief)
     netlist_path = Path(args.netlist) if args.netlist else None
@@ -477,6 +499,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     connectivity_parser.add_argument("--netlist", default=None)
     connectivity_parser.add_argument("--out", required=True)
     connectivity_parser.set_defaults(handler=cmd_connectivity)
+
+    geometry_parser = subparsers.add_parser(
+        "board-geometry",
+        help="emit board outline, mount holes, placement and heights for mechanical-agent",
+    )
+    geometry_parser.add_argument("--pcb", required=True)
+    geometry_parser.add_argument("--part-spec", action="append", default=[], metavar="REF=PATH")
+    geometry_parser.add_argument("--step", default=None)
+    geometry_parser.add_argument("--idf", action="store_true")
+    geometry_parser.add_argument("--out", required=True)
+    geometry_parser.set_defaults(handler=cmd_board_geometry)
 
     firmware_export_parser = subparsers.add_parser(
         "firmware-export", help="emit MCU pin connectivity (*.firmware.json) for firmware-agent"

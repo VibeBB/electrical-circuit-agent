@@ -284,6 +284,8 @@ python -m circuit doctor [--warn]
 python -m circuit intake --brief BRIEF --intake INTAKE
 python -m circuit sch-lint SCHEMATIC [--output PATH]
 python -m circuit connectivity --brief BRIEF --out PATH [--netlist NETLIST]
+python -m circuit board-geometry --pcb PCB --out PATH [--part-spec REF=SPEC ...] \
+  [--step BOARD_STEP] [--idf]
 python -m circuit author --brief BRIEF --workdir DIR [--intake INTAKE]
 python -m circuit library-review packet --part-spec SPEC --symbol-lib LIB \
   --symbol-name SYMBOL --footprint FOOTPRINT --library-dir LIBRARY

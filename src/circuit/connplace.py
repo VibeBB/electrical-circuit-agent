@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
@@ -482,6 +483,27 @@ def _neighbor_height(
     spec: PartSpec | None,
     board_path: Path,
 ) -> float | None:
+    return _height_evidence(footprint, spec, board_path)[0]
+
+
+def _is_connector(footprint: _BoardFootprint, part_specs: Mapping[str, object]) -> bool:
+    return (
+        footprint.ref in part_specs
+        or footprint.ref.upper().startswith(("J", "CN", "USB"))
+        or any(
+            token in footprint.lib_id.casefold()
+            for token in ("connector", "header", "fpc", "jst", "usb", "sma", "coax")
+        )
+    )
+
+
+def _height_evidence(
+    footprint: _BoardFootprint,
+    spec: PartSpec | None,
+    board_path: Path,
+) -> tuple[float | None, list[Literal["property", "part_spec", "step_model"]]]:
+    """Tallest verified height and its sources; a bare property never suffices."""
+    sources: list[Literal["property", "part_spec", "step_model"]] = []
     verified_heights: list[float] = []
     property_height: float | None = None
     property_value = footprint.properties.get("circuit_height_mm")
@@ -499,6 +521,7 @@ def _neighbor_height(
             height = math.nan
         if math.isfinite(height) and height > 0:
             verified_heights.append(height)
+            sources.append("part_spec")
 
     for model in footprint.models:
         model_path = model.replace("${KIPRJMOD}", str(board_path.parent))
@@ -516,11 +539,14 @@ def _neighbor_height(
             height = max(bbox.z_max for bbox in bounds) - min(bbox.z_min for bbox in bounds)
             if math.isfinite(height) and height > 0:
                 verified_heights.append(height)
+                if "step_model" not in sources:
+                    sources.append("step_model")
     if not verified_heights:
-        return None
+        return None, []
     if property_height is not None:
         verified_heights.append(property_height)
-    return max(verified_heights)
+        sources.insert(0, "property")
+    return max(verified_heights), sources
 
 
 def _envelope_box(
@@ -622,14 +648,7 @@ def check_connector_placement(
         specs[ref] = spec
         hashes[f"part_spec:{ref}"] = hashlib.sha256(path.read_bytes()).hexdigest()
     likely_connectors = [
-        footprint
-        for footprint in board_footprints
-        if footprint.ref in part_specs
-        or footprint.ref.upper().startswith(("J", "CN", "USB"))
-        or any(
-            token in footprint.lib_id.casefold()
-            for token in ("connector", "header", "fpc", "jst", "usb", "sma", "coax")
-        )
+        footprint for footprint in board_footprints if _is_connector(footprint, part_specs)
     ]
     for footprint in likely_connectors:
         spec = specs.get(footprint.ref)
