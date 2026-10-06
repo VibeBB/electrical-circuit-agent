@@ -48,7 +48,8 @@ _PAPER_SIZES: dict[str, tuple[float, float]] = {
 _LABEL_DISTANCE_MM = 30.0
 _PROPERTY_ON_BODY_MM = 2.5
 _LABELED_PROPERTIES = {"Reference", "Value"}
-_TITLE_BLOCK_FIELDS = ("title", "date", "rev")
+# The date of issue stays empty until the drawing is approved (ISO 7200).
+_TITLE_BLOCK_FIELDS = ("title", "rev")
 _MIN_SHEET_USAGE = 0.30
 # Tolerance for an endpoint/anchor sitting on a wire segment.
 _ON_WIRE_EPS_MM = 0.1

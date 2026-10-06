@@ -180,6 +180,14 @@ Firmware link: MCU pin connectivity out, firmware pin map check in.
 - `load_pinmap:`
 - `check_firmware_pinmap:`
 
+## `drawing_sheet.py`
+
+ISO 7200 drawing sheet (``.kicad_wks``) and project text variables.
+
+- `sheet_text` — Deterministic ``.kicad_wks`` text for the ISO 7200 sheet.
+- `variables` — Project text variables the sheet prints; unset fields print a dash.
+- `apply` — Write ``<stem>.kicad_wks`` beside ``project`` and point the project at it.
+
 ## `fit_sheet.py`
 
 Clamp out-of-bounds net labels back inside the sheet frame.

@@ -46,3 +46,14 @@ absent), `voltage_v`, and `current_a`. Emit the contract with
 --brief <brief.json> --out <name>.connectivity-source.json`); it writes the
 wire `ConnectivitySource` schema and fails closed when a connector has no pins
 in the brief (or in `--netlist <path>` when given).
+
+## Drawing title-block fields
+
+The optional `drawing` block carries the ISO 7200 title-block data a brief
+cannot derive (ADR-0035): `legal_owner`, `identification_prefix`, `revision`,
+`responsible_dept`, `technical_reference`, `created_by`, `approved_by`,
+`date_of_issue`, `supplementary_title`, `classification`, `language`. Fill in
+only what the user stated. The legal owner is the user's organisation, never
+VibeBB. Never invent an approver or an issue date: `date_of_issue` without
+`approved_by` is rejected, and the printed document status (`In preparation`,
+`In approval`, `Released`) is derived from those two fields.

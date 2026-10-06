@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import re
@@ -64,6 +65,54 @@ class Board(BaseModel):
     placements: dict[str, Placement] = Field(default_factory=dict)
 
 
+class DrawingInfo(BaseModel):
+    """ISO 7200 title-block data a brief cannot derive: who owns,
+    prepared and approved the drawing, and when it was released.
+
+    The document status is derived from the release fields, never declared.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    legal_owner: str | None = Field(default=None, min_length=1, max_length=40)
+    identification_prefix: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,23}$"
+    )
+    revision: str = Field(default="A", pattern=r"^[A-Za-z0-9][A-Za-z0-9.-]{0,7}$")
+    responsible_dept: str | None = Field(default=None, min_length=1, max_length=20)
+    technical_reference: str | None = Field(default=None, min_length=1, max_length=30)
+    created_by: str | None = Field(default=None, min_length=1, max_length=30)
+    approved_by: str | None = Field(default=None, min_length=1, max_length=30)
+    date_of_issue: str | None = Field(default=None, pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+    supplementary_title: str | None = Field(default=None, min_length=1, max_length=60)
+    classification: str | None = Field(default=None, min_length=1, max_length=25)
+    language: str = Field(default="en", pattern=r"^[a-z]{2,3}$")
+
+    @model_validator(mode="after")
+    def validate_release(self) -> DrawingInfo:
+        if self.date_of_issue is not None:
+            try:
+                datetime.date.fromisoformat(self.date_of_issue)
+            except ValueError as exc:
+                raise ValueError(f"date_of_issue is not a calendar date: {exc}") from exc
+            if self.approved_by is None:
+                raise ValueError("date_of_issue requires approved_by: only approved drawings issue")
+        return self
+
+    @property
+    def status(self) -> str:
+        """ISO 7200 document status derived from the release fields."""
+        if self.approved_by is not None and self.date_of_issue is not None:
+            return "Released"
+        if self.approved_by is not None:
+            return "In approval"
+        return "In preparation"
+
+    def identification(self, design: str) -> str:
+        """Drawing number: the prefix when set, else the design name."""
+        return self.identification_prefix or design
+
+
 class DesignBrief(BaseModel):
     model_config = ConfigDict(extra="forbid")
     pin_pattern: ClassVar[re.Pattern[str]] = re.compile(r"^([A-Z][A-Z0-9]*[0-9]+)\.([^.\s]+)$")
@@ -73,6 +122,7 @@ class DesignBrief(BaseModel):
     parts: list[Part] = Field(min_length=1)
     nets: list[Net] = Field(min_length=1)
     board: Board
+    drawing: DrawingInfo = Field(default_factory=DrawingInfo)
 
     @model_validator(mode="after")
     def validate_references_and_connections(self) -> DesignBrief:
