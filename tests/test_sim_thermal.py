@@ -176,6 +176,24 @@ def test_simulation_fail_is_never_promoted(tmp_path: Path) -> None:
     assert _status(design, path, tmp_path)["D1.tj"] == "fail"
 
 
+def test_failing_check_carries_margin_and_guidance(tmp_path: Path) -> None:
+    design = _brief()
+    failing = [
+        PASSING[0],
+        {
+            **PASSING[1],
+            "verdict": "fail",
+            "measured": 160.0,
+            "margin": -15.0,
+            "guidance": ["power_w(D1) ≤ 0.5 W at the current θ", None],
+        },
+    ]
+    path = _answer(tmp_path, design, failing)
+    detail = thermal_check(design, path, tmp_path)["checks"][2]["detail"]
+    assert "margin -15" in detail
+    assert detail.endswith("fix: power_w(D1) ≤ 0.5 W at the current θ")
+
+
 @pytest.mark.parametrize("status", ["needs_info", "deferred"])
 def test_unanswered_response_is_unknown(tmp_path: Path, status: str) -> None:
     design = _brief()

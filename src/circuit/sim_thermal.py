@@ -167,6 +167,14 @@ def _report_findings(report: Any, response: SimResponse) -> list[Finding]:
         limit = item.get("limit")
         if limit is not None:
             detail = f"{detail}; limit {limit}" if detail else f"limit {limit}"
+        margin = _number(item.get("margin"))
+        if margin is not None:
+            detail = f"{detail}; margin {margin:.6g}"
+        guidance: object = item.get("guidance")
+        if isinstance(guidance, list):
+            fixes = [str(line) for line in guidance if isinstance(line, str)]  # pyright: ignore[reportUnknownVariableType]
+            if fixes:
+                detail = f"{detail}; fix: {' | '.join(fixes)}"
         measured = _number(item.get("measured"))
         findings.append((check_id.removeprefix(_PREFIX), verdict, measured, detail))
     if not findings:
