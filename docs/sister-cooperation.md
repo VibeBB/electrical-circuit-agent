@@ -54,6 +54,7 @@ hashes, artifact hashes, gate verdicts, record refs, `responded_at`.
 | `*.board-geometry.json` (+ `.emn`/`.emp`) | written by `circuit_board_geometry_export` | mechanical-agent (board envelope, mount holes, connector faces) | strict; `unknown` heights fail the export verdict |
 | `*.thermal.sim.json` + `*.thermal.sim-request.json` | written by `circuit_sim_thermal_request` from the brief `thermal` section | simulation-agent (`sim-liaison` answers with `*.sim-response.json`) | strict; hash-bound request id |
 | `*.thermal.sim-response.json` | read by `circuit_sim_thermal_check` (`thermal.response_path`) | simulation-agent produces | strict read; stale or tampered → `fail`, unanswered → `unknown` |
+| `*.lifetime.sim.json` + `*.lifetime.sim-request.json` / `*.lifetime.sim-response.json` | written/read with `kind: lifetime` from the brief `lifetime` section (`lifetime.response_path`) | simulation-agent (Arrhenius + Miner) | same hash binding; stale or tampered → `fail`, unanswered → `unknown` |
 | `*.firmware.json` | written by `circuit_firmware_export` | firmware-agent | frozen — firmware strict mirror |
 | `*.fw-pinmap.json` | read by `circuit_firmware_check` | firmware-agent produces | strict read |
 | `*.envelope.json` | not written by circuit | mech → wire/sim | frozen upstream |

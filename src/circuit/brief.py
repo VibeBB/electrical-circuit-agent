@@ -139,6 +139,44 @@ class ThermalSpec(BaseModel):
     response_path: str | None = Field(default=None, min_length=1)
 
 
+class LifetimeStress(BaseModel):
+    """One mission-profile step: hot-spot temperature and time fraction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    temperature_c: float = Field(gt=-273.15)
+    fraction: float = Field(gt=0, le=1)
+
+
+class LifetimePart(BaseModel):
+    """Datasheet-sourced wear-out facts of one part (e.g. an electrolytic)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference: str = Field(pattern=r"^[A-Z][A-Z0-9]*[0-9]+$")
+    rated_life_h: float = Field(gt=0)
+    rated_temp_c: float = Field(gt=-273.15)
+    activation_energy_ev: float = Field(gt=0)
+    profile: list[LifetimeStress] = Field(min_length=1)
+    required_life_h: float = Field(gt=0)
+    source: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_profile(self) -> LifetimePart:
+        if abs(sum(step.fraction for step in self.profile) - 1) > 1e-9:
+            raise ValueError("lifetime profile fractions must sum to 1")
+        return self
+
+
+class LifetimeSpec(BaseModel):
+    """Arrhenius lifetime facts handed to simulation-agent; simulation owns the verdict."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    parts: list[LifetimePart] = Field(min_length=1)
+    response_path: str | None = Field(default=None, min_length=1)
+
+
 class DesignBrief(BaseModel):
     model_config = ConfigDict(extra="forbid")
     pin_pattern: ClassVar[re.Pattern[str]] = re.compile(r"^([A-Z][A-Z0-9]*[0-9]+)\.([^.\s]+)$")
@@ -150,6 +188,7 @@ class DesignBrief(BaseModel):
     board: Board
     drawing: DrawingInfo = Field(default_factory=DrawingInfo)
     thermal: ThermalSpec | None = None
+    lifetime: LifetimeSpec | None = None
 
     @model_validator(mode="after")
     def validate_references_and_connections(self) -> DesignBrief:
@@ -185,6 +224,13 @@ class DesignBrief(BaseModel):
             for reference in thermal_refs:
                 if reference not in known_references:
                     raise ValueError(f"thermal references unknown part: {reference}")
+        if self.lifetime is not None:
+            lifetime_refs = [part.reference for part in self.lifetime.parts]
+            if len(set(lifetime_refs)) != len(lifetime_refs):
+                raise ValueError("lifetime part references must be unique")
+            for reference in lifetime_refs:
+                if reference not in known_references:
+                    raise ValueError(f"lifetime references unknown part: {reference}")
         return self
 
 

@@ -238,12 +238,13 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
     ),
     (
         "circuit_sim_thermal_request",
-        "Hand the brief's thermal facts to simulation-agent "
-        "(*.thermal.sim.json + *.thermal.sim-request.json)",
+        "Hand the brief's thermal or lifetime facts to simulation-agent "
+        "(*.<kind>.sim.json + *.<kind>.sim-request.json)",
         {
             "type": "object",
             "properties": {
                 "brief_path": {"type": "string"},
+                "kind": {"type": "string", "enum": ["thermal", "lifetime"]},
                 "out_dir": {"type": "string"},
             },
             "required": ["brief_path"],
@@ -251,10 +252,13 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
     ),
     (
         "circuit_sim_thermal_check",
-        "Check simulation-agent's hash-bound thermal response (thermal.response_path)",
+        "Check simulation-agent's hash-bound thermal or lifetime response (<kind>.response_path)",
         {
             "type": "object",
-            "properties": {"brief_path": {"type": "string"}},
+            "properties": {
+                "brief_path": {"type": "string"},
+                "kind": {"type": "string", "enum": ["thermal", "lifetime"]},
+            },
             "required": ["brief_path"],
         },
     ),
@@ -1252,6 +1256,14 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
 ]
 
 
+def _sim_kind(value: Any) -> sim_thermal.Kind:
+    if value is None:
+        return "thermal"
+    if value not in sim_thermal.KINDS:
+        raise ValueError(f"kind must be one of {', '.join(sim_thermal.KINDS)}")
+    return value
+
+
 def _workspace_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     return _workspace_arguments_from_args(name, arguments, _TOOLS)
 
@@ -2131,18 +2143,23 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             out_value = _optional_string(args.get("out_dir"))
             out_dir = workspace_path(out_value) if out_value else brief_path.parent
             result = sim_thermal.write_sim_request(
-                brief.load_brief(brief_path), out_dir, root=workspace_root()
+                brief.load_brief(brief_path),
+                out_dir,
+                root=workspace_root(),
+                kind=_sim_kind(args.get("kind")),
             )
         elif name == "circuit_sim_thermal_check":
             from .workspace import workspace_path, workspace_root
 
             brief_path = workspace_path(str(args["brief_path"]))
             design = brief.load_brief(brief_path)
-            response = sim_thermal.resolve_response(design, brief_path.parent)
+            kind = _sim_kind(args.get("kind"))
+            response = sim_thermal.resolve_response(design, brief_path.parent, kind)
             result = sim_thermal.thermal_check(
                 design,
                 workspace_path(response) if response is not None else None,
                 workspace_root(),
+                kind,
             )
         elif name in ("circuit_firmware_export", "circuit_firmware_check"):
             brief_path = Path(str(args["brief_path"]))

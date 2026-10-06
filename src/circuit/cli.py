@@ -307,7 +307,9 @@ def cmd_sim_request(args: argparse.Namespace) -> int:
     try:
         design = _load_brief(args.brief)
         out_dir = Path(args.out_dir) if args.out_dir else Path(args.brief).parent
-        payload = sim_thermal.write_sim_request(design, out_dir, root=_sim_root(out_dir))
+        payload = sim_thermal.write_sim_request(
+            design, out_dir, root=_sim_root(out_dir), kind=args.kind
+        )
     except (ValueError, OSError) as exc:
         return _fail("sim-request", str(exc))
     return _emit(payload)
@@ -316,8 +318,8 @@ def cmd_sim_request(args: argparse.Namespace) -> int:
 def cmd_sim_check(args: argparse.Namespace) -> int:
     try:
         design = _load_brief(args.brief)
-        response = sim_thermal.resolve_response(design, Path(args.brief).parent)
-        payload = sim_thermal.thermal_check(design, response, workspace.workspace_root())
+        response = sim_thermal.resolve_response(design, Path(args.brief).parent, args.kind)
+        payload = sim_thermal.thermal_check(design, response, workspace.workspace_root(), args.kind)
     except (ValueError, OSError) as exc:
         return _fail("sim-check", str(exc))
     return _emit(payload)
@@ -540,16 +542,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     geometry_parser.set_defaults(handler=cmd_board_geometry)
 
     sim_request_parser = subparsers.add_parser(
-        "sim-request", help="hand brief thermal facts to simulation-agent (*.sim-request.json)"
+        "sim-request",
+        help="hand brief thermal or lifetime facts to simulation-agent (*.sim-request.json)",
     )
     sim_request_parser.add_argument("--brief", required=True)
+    sim_request_parser.add_argument("--kind", choices=sim_thermal.KINDS, default="thermal")
     sim_request_parser.add_argument("--out-dir", default=None)
     sim_request_parser.set_defaults(handler=cmd_sim_request)
 
     sim_check_parser = subparsers.add_parser(
-        "sim-check", help="check simulation-agent's hash-bound thermal response"
+        "sim-check", help="check simulation-agent's hash-bound thermal or lifetime response"
     )
     sim_check_parser.add_argument("--brief", required=True)
+    sim_check_parser.add_argument("--kind", choices=sim_thermal.KINDS, default="thermal")
     sim_check_parser.set_defaults(handler=cmd_sim_check)
 
     firmware_export_parser = subparsers.add_parser(

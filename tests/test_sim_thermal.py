@@ -11,6 +11,7 @@ from circuit import cli
 from circuit.brief import DesignBrief
 from circuit.sim_thermal import (
     expected_request,
+    lifetime_brief,
     resolve_response,
     thermal_brief,
     thermal_check,
@@ -325,3 +326,150 @@ def test_cli_round_trip(
     plain.write_text(json.dumps(data), encoding="utf-8")
     assert cli.main(["sim-request", "--brief", str(plain)]) == 1
     assert "no thermal section" in capsys.readouterr().out
+
+
+LIFETIME: dict[str, Any] = {
+    "parts": [
+        {
+            "reference": "R1",
+            "rated_life_h": 2000,
+            "rated_temp_c": 105,
+            "activation_energy_ev": 0.94,
+            "profile": [
+                {"temperature_c": 70, "fraction": 0.25},
+                {"temperature_c": 45, "fraction": 0.75},
+            ],
+            "required_life_h": 40000,
+            "source": "Nichicon UHE datasheet p.2; Ea from vendor life note",
+        }
+    ],
+    "response_path": "sim/led_loop.lifetime.sim-response.json",
+}
+
+
+def _life_brief(**changes: Any) -> DesignBrief:
+    data = json.loads(DATA.read_text(encoding="utf-8"))
+    return DesignBrief.model_validate({**data, "lifetime": {**LIFETIME, **changes}})
+
+
+def _life_answer(root: Path, design: DesignBrief, verdict: str) -> Path:
+    out = write_sim_request(design, root / "sim", root=root, kind="lifetime")
+    request_path = Path(out["request"])
+    rows: list[dict[str, Any]] = [
+        {
+            "id": "lifetime.R1.life_h",
+            "analysis": "lifetime",
+            "verdict": verdict,
+            "detail": "Arrhenius life",
+            "measured": 52000.0 if verdict == "pass" else 21000.0,
+            "limit": "≥ 40000 h",
+            "evidence": [],
+        },
+        {"id": "thermal.R1.tj", "analysis": "thermal", "verdict": "pass", "evidence": []},
+    ]
+    report = root / "out" / "lifetime" / "sim-report.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(
+        json.dumps({"schema_version": 1, "verdict": verdict, "checks": rows}), encoding="utf-8"
+    )
+    response = {
+        "schema_version": 2,
+        "request_id": out["request_id"],
+        "request_sha256": _sha(request_path),
+        "brief_sha256": out["sim_brief_sha256"],
+        "status": "accepted" if verdict == "pass" else "rejected",
+        "verdict": verdict,
+        "report_path": str(report),
+        "sha256": _sha(report),
+    }
+    path = root / "sim" / "led_loop.lifetime.sim-response.json"
+    path.write_text(json.dumps(response), encoding="utf-8")
+    return path
+
+
+def test_lifetime_brief_mirrors_simulation_schema() -> None:
+    payload = lifetime_brief(_life_brief())
+    assert payload["lifetime"]["model"] == "arrhenius"
+    (part,) = payload["lifetime"]["parts"]
+    assert part["ref"] == "R1"
+    assert part["activation_energy_ev"] == 0.94
+    assert part["profile"][1] == {"temperature_c": 45, "fraction": 0.75}
+    assert "Nichicon" in part["source"]
+
+
+def test_lifetime_request_is_its_own_kind(tmp_path: Path) -> None:
+    design = _life_brief()
+    out = write_sim_request(design, tmp_path / "sim", root=tmp_path, kind="lifetime")
+    request = json.loads(Path(out["request"]).read_text(encoding="utf-8"))
+    assert request["kind"] == "lifetime"
+    assert request["brief_path"] == "sim/led_loop.lifetime.sim.json"
+    assert out["request_id"] == expected_request(design, "lifetime")[0]
+    assert out["request_id"].startswith("led_loop-lifetime-")
+
+
+@pytest.mark.parametrize("verdict", ["pass", "fail"])
+def test_lifetime_round_trip_keeps_simulation_verdict(tmp_path: Path, verdict: str) -> None:
+    design = _life_brief()
+    path = _life_answer(tmp_path, design, verdict)
+    result = thermal_check(design, path, tmp_path, "lifetime")
+    assert result["verdict"] == verdict
+    subjects = [check["subject"] for check in result["checks"]]
+    assert subjects == ["response", "R1.life_h"]
+
+
+def test_lifetime_stale_brief_and_missing_section(tmp_path: Path) -> None:
+    path = _life_answer(tmp_path, _life_brief(), "pass")
+    changed = _life_brief(
+        parts=[{**LIFETIME["parts"][0], "required_life_h": 60000}],
+    )
+    assert thermal_check(changed, path, tmp_path, "lifetime")["verdict"] == "fail"
+    assert thermal_check(_brief(), path, tmp_path, "lifetime")["verdict"] == "unknown"
+    assert thermal_check(_life_brief(), path, tmp_path, "thermal")["verdict"] == "unknown"
+
+
+def test_thermal_response_does_not_answer_a_lifetime_check(tmp_path: Path) -> None:
+    data = json.loads(DATA.read_text(encoding="utf-8"))
+    design = DesignBrief.model_validate({**data, "thermal": THERMAL, "lifetime": LIFETIME})
+    thermal_path = _answer(tmp_path, design, PASSING)
+    assert thermal_check(design, thermal_path, tmp_path, "lifetime")["verdict"] == "fail"
+
+
+@pytest.mark.parametrize(
+    ("part", "message"),
+    [
+        ({"profile": [{"temperature_c": 60, "fraction": 0.5}]}, "sum to 1"),
+        ({"activation_energy_ev": 0}, "activation_energy_ev"),
+        ({"source": ""}, "source"),
+        ({"reference": "U9"}, "unknown part"),
+    ],
+)
+def test_lifetime_spec_rejects_bad_parts(part: dict[str, Any], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _life_brief(parts=[{**LIFETIME["parts"][0], **part}])
+
+
+def test_cli_lifetime_round_trip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    data = json.loads(DATA.read_text(encoding="utf-8"))
+    brief_path = tmp_path / "led_loop.brief.json"
+    brief_path.write_text(json.dumps({**data, "lifetime": LIFETIME}), encoding="utf-8")
+    assert (
+        cli.main(
+            [
+                "sim-request",
+                "--brief",
+                str(brief_path),
+                "--kind",
+                "lifetime",
+                "--out-dir",
+                str(tmp_path / "sim"),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    _life_answer(tmp_path, DesignBrief.model_validate({**data, "lifetime": LIFETIME}), "pass")
+    assert cli.main(["sim-check", "--brief", str(brief_path), "--kind", "lifetime"]) == 0
+    assert json.loads(capsys.readouterr().out)["verdict"] == "pass"
