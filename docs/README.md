@@ -18,6 +18,7 @@
 | [`performance-and-limits.md`](performance-and-limits.md) | Real numeric constants from the code |
 | [`operations.md`](operations.md) | Build, smoke, CI checks, dependency updates |
 | [`development.md`](development.md) | Setup, verify_all stages, test commands, release |
+| [`test-coverage.md`](test-coverage.md) | C0/C1/C2/MCC/MC/DC and boundary coverage, floors, test-design techniques |
 | [`modules.md`](modules.md) | Every `src/circuit` module and its public API |
 | [`improvement-notes.md`](improvement-notes.md) | Implemented items vs remaining ideas |
 | [`konnect-tools.md`](konnect-tools.md) | Konnect v0.13.0 complete tool coverage matrix |
@@ -61,6 +62,7 @@
 | [0033](adr/ADR-0033-human-requests-and-confidential-datasheets.md) | Human requests, confidential datasheets, and library-authoring stops |
 | [0034](adr/ADR-0034-records-liaison-docs.md) | VRP v1, SLP v2, and the documentation split |
 | [0035](adr/ADR-0035-iso7200-drawing-sheet.md) | ISO 7200 drawing sheet and title-block data from the brief |
+| [0036](adr/ADR-0036-structural-coverage.md) | Structural coverage gate (C0, C1, C2, MC/DC, boundaries) |
 
 ## Research
 

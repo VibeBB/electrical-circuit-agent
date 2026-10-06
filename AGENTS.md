@@ -100,7 +100,8 @@ table. Commands carry a group (`lint`, `unit`, `docker`) selectable via
 `--shard K/N` — CI fans the standard stage across parallel jobs with these.
 The `docker` group additionally requires `CIRCUIT_TOOLS_IMAGE`; lint/unit
 selections run without it. The fast stage includes the shared-hook checker and enforces
-the configured line-coverage threshold. Policy: shared hooks are canonical
+the structural coverage floors (`scripts/structural_coverage.py`,
+`docs/test-coverage.md`). Policy: shared hooks are canonical
 across the family; change all 11 copies together and update EXPECTED.
 `intake_attachments.py`, `protect_libraries.py`, `record_image_observation.py`,
 `record_vision_tool_event.py`, and `report_design_status.py` are intentionally
