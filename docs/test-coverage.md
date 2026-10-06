@@ -99,3 +99,21 @@ find what they missed.
 - **Mutation testing**: a mutant (a flipped comparison, a removed condition)
   that survives the suite marks an assertion that is missing even though the
   line is covered. Mutation runs are advisory evidence, not a CI gate.
+
+## Reference suite
+
+`tests/test_gate_boundaries.py` applies these techniques to the planar
+geometry kernel that `src/circuit/libverify.py` uses for courtyard
+enclosure, keep-out and clearance findings, following the family pattern
+set by wire-agent:
+
+- 3-value boundaries for box containment on each side and at the 1e-6 mm
+  tolerance, the 1e-9 collinearity tolerance of `_on_segment`, endpoint
+  touching in `_segments_intersect`, and the gap between two polygons;
+- properties checked on deterministic grids: containment is reflexive and
+  transitive, segment intersection is symmetric under argument and
+  endpoint swaps, polygon distance is symmetric, non-negative and
+  translation invariant, and point-to-segment distance is a lower bound of
+  densely sampled points;
+- equivalence classes for point-in-polygon (inside, outside, on an edge,
+  convex and concave outlines).
