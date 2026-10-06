@@ -39,6 +39,10 @@ line-length = 100
 target-version = "py312"
 src = ["src", "scripts", "tests"]
 
+[tool.ruff.format]
+# Family-canonical files are byte-identical across repos (formatted at 88).
+exclude = ["scripts/structural_coverage.py", "tests/test_structural_coverage.py"]
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 
@@ -55,11 +59,21 @@ include = [
 exclude = ["**/__pycache__", ".venv"]
 
 [tool.coverage.run]
-branch = false
+branch = true
 source = ["src/circuit"]
 
+[tool.vibebb-coverage]
+# Ratchet floors (percent) for scripts/structural_coverage.py, measured on
+# main minus one point for interpreter variance. Raise them, never lower.
+c0 = 83
+c1 = 72
+decision = 69
+c2 = 64
+mcdc = 37
+boundary = 37
+
 [tool.coverage.report]
-fail_under = 83
+fail_under = 80
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
