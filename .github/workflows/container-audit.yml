@@ -83,7 +83,13 @@ jobs:
         # private cache dir first and only ever writes there. Concurrent
         # trivy processes in one cache dir race on db/metadata.json and
         # corrupt it.
-        run: trivy image --download-db-only
+        run: |
+          trivy image --download-db-only
+          # The java-db mirror blob is ~934 MB; if the image ships jars,
+          # every leg would otherwise fetch it into its private cache dir at
+          # once (the disk-quota kill on the dashboard audit). Warm it once
+          # into the shared seed so the per-leg copies carry it.
+          trivy image --download-java-db-only
       # The scans read the same pinned images, each writes a disjoint
       # report path, and each trivy process writes to its own cache dir
       # seeded from the warmed DB, so they run as one parallel group
@@ -145,7 +151,7 @@ jobs:
               cp -a "$RUNNER_TEMP/trivy-cache/." "$TRIVY_CACHE_DIR/"
               run_cis() {
                 local image="$1" out="$2" attempt
-                for attempt in 1 2; do
+                for attempt in 1 2 3; do
                   # Trivy exits 0 even on the empty-results anomaly, so the
                   # retry keys on the MisconfSummary payload, not the exit
                   # code. The aggregation step stays fail-closed on empty.
