@@ -171,6 +171,13 @@ jobs:
           # dry runs; either way it is the content the SBOM and provenance
           # attestations bind to.
           scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
+          # Shared warm DB dir; sequential legs may share it. Never place
+          # trivy-action legs inside a `parallel:` group with a shared
+          # cache-dir — concurrent writers corrupt the DB, and the action
+          # also round-trips env vars through ./trivy_envs.txt in the job
+          # cwd, which races the same way. TRIVY_CACHE_DIR env does NOT
+          # override the action's cache-dir input.
+          cache-dir: ${{ runner.temp }}/trivy-cache
           version: v0.75.0
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
@@ -198,6 +205,7 @@ jobs:
         with:
           scan-type: image
           scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
+          cache-dir: ${{ runner.temp }}/trivy-cache
           version: v0.75.0
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
@@ -451,6 +459,7 @@ jobs:
           # Scan the pushed digest on real runs; SERVER_REF carries the
           # daemon-local tag under dry runs.
           scan-ref: ${{ env.SERVER_REF }}
+          cache-dir: ${{ runner.temp }}/trivy-cache
           version: v0.75.0
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
@@ -474,6 +483,7 @@ jobs:
         with:
           scan-type: image
           scan-ref: ${{ env.SERVER_REF }}
+          cache-dir: ${{ runner.temp }}/trivy-cache
           version: v0.75.0
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false

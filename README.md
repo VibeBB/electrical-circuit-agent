@@ -1,5 +1,7 @@
 # electrical-circuit-agent
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/VibeBB/electrical-circuit-agent)
+
 Part of the [VibeBB](https://vibebb.org/) family of AI hardware-design agents.
 [English](#english) | [日本語](#日本語)
 
