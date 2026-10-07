@@ -76,76 +76,73 @@ jobs:
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.75.0
-      - name: Warm the Trivy DB before the parallel scans
+      - name: Warm the Trivy DB for the raw-trivy scan legs
         env:
           TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache
-        # Populate the shared cache dir serially so the scan legs below
-        # only ever read the DB (concurrent DB downloads in one cache dir
-        # are not safe).
+        # Populate the shared seed dir serially; each leg copies it into a
+        # private cache dir first and only ever writes there. Concurrent
+        # trivy processes in one cache dir race on db/metadata.json and
+        # corrupt it.
         run: trivy image --download-db-only
-      # The six scans read the same pinned images and the now-warm shared
-      # vulnerability DB, and each writes a disjoint report path, so they
-      # run as one parallel group (implicit wait at the end).
+      # The scans read the same pinned images, each writes a disjoint
+      # report path, and each trivy process writes to its own cache dir
+      # seeded from the warmed DB, so they run as one parallel group
+      # (implicit wait at the end). They invoke trivy directly instead of
+      # trivy-action: concurrent action legs race on the workspace
+      # `trivy_envs.txt` file the action uses to pass envs between its
+      # internal steps.
       - parallel:
           - name: Scan tools image (Trivy SARIF)
-            uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-            with:
-              scan-type: image
-              # The digest is frozen; the vulnerability DB is not — this scan
-              # surfaces newly disclosed CVEs against the shipped tools image.
-              scan-ref: ${{ env.PINNED_TOOLS_IMAGE }}
-              version: v0.75.0
-              scanners: vuln,secret,misconfig
-              severity: CRITICAL,HIGH
-              ignore-unfixed: true
-              exit-code: '0'
-              format: sarif
-              output: trivy-circuit-tools.sarif
-              limit-severities-for-sarif: true
-              skip-setup-trivy: true
-          - name: Scan tools image (Trivy JSON, full)
-            uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-            with:
-              scan-type: image
-              scan-ref: ${{ env.PINNED_TOOLS_IMAGE }}
-              version: v0.75.0
-              scanners: vuln,secret,misconfig,license
-              list-all-pkgs: 'true'
-              exit-code: '0'
-              format: json
-              output: trivy-circuit-tools.json
-              skip-setup-trivy: true
-          - name: Scan server image (Trivy SARIF)
-            uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-            with:
-              scan-type: image
-              scan-ref: ${{ env.PINNED_SERVER_IMAGE }}
-              version: v0.75.0
-              scanners: vuln,secret,misconfig
-              severity: CRITICAL,HIGH
-              ignore-unfixed: true
-              exit-code: '0'
-              format: sarif
-              output: trivy-circuit-server.sarif
-              limit-severities-for-sarif: true
-              skip-setup-trivy: true
-          - name: Scan server image (Trivy JSON, full)
-            uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-            with:
-              scan-type: image
-              scan-ref: ${{ env.PINNED_SERVER_IMAGE }}
-              version: v0.75.0
-              scanners: vuln,secret,misconfig,license
-              list-all-pkgs: 'true'
-              exit-code: '0'
-              format: json
-              output: trivy-circuit-server.json
-              skip-setup-trivy: true
-          - name: Run Docker CIS compliance reports
             env:
-              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache
+              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-tools-sarif
+            # The digest is frozen; the vulnerability DB is not — this scan
+            # surfaces newly disclosed CVEs against the shipped tools image.
             run: |
               set -euo pipefail
+              mkdir -p "$TRIVY_CACHE_DIR"
+              cp -a "$RUNNER_TEMP/trivy-cache/." "$TRIVY_CACHE_DIR/"
+              trivy image --scanners vuln,secret,misconfig \
+                --severity CRITICAL,HIGH --ignore-unfixed \
+                --format sarif --output trivy-circuit-tools.sarif \
+                "$PINNED_TOOLS_IMAGE"
+          - name: Scan tools image (Trivy JSON, full)
+            env:
+              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-tools-json
+            run: |
+              set -euo pipefail
+              mkdir -p "$TRIVY_CACHE_DIR"
+              cp -a "$RUNNER_TEMP/trivy-cache/." "$TRIVY_CACHE_DIR/"
+              trivy image --scanners vuln,secret,misconfig,license \
+                --list-all-pkgs --format json \
+                --output trivy-circuit-tools.json "$PINNED_TOOLS_IMAGE"
+          - name: Scan server image (Trivy SARIF)
+            env:
+              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-server-sarif
+            run: |
+              set -euo pipefail
+              mkdir -p "$TRIVY_CACHE_DIR"
+              cp -a "$RUNNER_TEMP/trivy-cache/." "$TRIVY_CACHE_DIR/"
+              trivy image --scanners vuln,secret,misconfig \
+                --severity CRITICAL,HIGH --ignore-unfixed \
+                --format sarif --output trivy-circuit-server.sarif \
+                "$PINNED_SERVER_IMAGE"
+          - name: Scan server image (Trivy JSON, full)
+            env:
+              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-server-json
+            run: |
+              set -euo pipefail
+              mkdir -p "$TRIVY_CACHE_DIR"
+              cp -a "$RUNNER_TEMP/trivy-cache/." "$TRIVY_CACHE_DIR/"
+              trivy image --scanners vuln,secret,misconfig,license \
+                --list-all-pkgs --format json \
+                --output trivy-circuit-server.json "$PINNED_SERVER_IMAGE"
+          - name: Run Docker CIS compliance reports
+            env:
+              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-cis
+            run: |
+              set -euo pipefail
+              mkdir -p "$TRIVY_CACHE_DIR"
+              cp -a "$RUNNER_TEMP/trivy-cache/." "$TRIVY_CACHE_DIR/"
               run_cis() {
                 local image="$1" out="$2" attempt
                 for attempt in 1 2; do
