@@ -54,11 +54,11 @@ RUN grep -q "^URIs: http://security\.ubuntu\.com/ubuntu" \
         /etc/apt/sources.list.d/ubuntu.sources \
     && apt_install_retry() { \
         for attempt in 1 2 3 4 5; do \
-            apt-get -o Acquire::Retries=5 update \
-            && apt-get -o Acquire::Retries=5 install --no-install-recommends -y "$@" \
+            apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update \
+            && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --no-install-recommends -y "$@" \
             && return 0; \
             [ "$attempt" = 5 ] && return 1; \
-            sleep $((attempt * 10)); \
+            sleep $((attempt * 30)); \
         done; \
     } \
     && apt_install_retry \
@@ -73,9 +73,9 @@ RUN grep -q "^URIs: http://security\.ubuntu\.com/ubuntu" \
     && for attempt in 1 2 3 4 5; do \
         add-apt-repository --yes ppa:kicad/kicad-dev-nightly && break; \
         [ "$attempt" = 5 ] && exit 1; \
-        sleep $((attempt * 10)); \
+        sleep $((attempt * 30)); \
        done \
-    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update \
     && curl --fail --location --silent --show-error \
         --retry 5 --retry-delay 10 --retry-all-errors \
         --output /tmp/kicad-nightly.deb \
