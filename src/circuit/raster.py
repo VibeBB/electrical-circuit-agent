@@ -11,9 +11,8 @@ import math
 import os
 import shlex
 import subprocess
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
 
 from PIL import Image, ImageOps
 
@@ -41,8 +40,7 @@ def glyph_signature(image: Image.Image) -> tuple[float, ...] | None:
     resized = cropped.resize(  # pyright: ignore[reportUnknownMemberType]
         _GLYPH_GRID, Image.Resampling.LANCZOS
     )
-    pixels = cast(Iterable[int], resized.getdata())
-    return tuple(float(value) / 255 for value in pixels)
+    return tuple(float(value) / 255 for value in resized.tobytes())
 
 
 def normalized_cross_correlation(first: Sequence[float], second: Sequence[float]) -> float | None:

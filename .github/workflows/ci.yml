@@ -105,12 +105,6 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        include:
-          # Forward-compatibility canary ahead of the 2026-10-09 stable
-          # release: step-level continue-on-error keeps the leg green while
-          # the last step reports the failure as an annotation.
-          - python-version: "3.15"
-            experimental: true
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -123,10 +117,8 @@ jobs:
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y poppler-utils
         id: step
-        continue-on-error: ${{ matrix.experimental || false }}
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         id: setup-uv
-        continue-on-error: ${{ matrix.experimental || false }}
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
@@ -135,23 +127,65 @@ jobs:
           cache-suffix: fast-${{ matrix.python-version }}
       - run: uv sync --locked
         id: step-2
-        continue-on-error: ${{ matrix.experimental || false }}
       # The docs and fast stages are independent verify_all invocations
       # against the same synced venv; run them as background legs and join
-      # them before the canary report so steps.<id>.outcome stays defined.
+      # them at the end.
       - run: uv run python scripts/verify_all.py --stage docs
         id: step-3
         background: true
-        continue-on-error: ${{ matrix.experimental || false }}
       - run: uv run python scripts/verify_all.py --stage fast
         id: step-4
         background: true
-        continue-on-error: ${{ matrix.experimental || false }}
       - name: Wait for verification legs
         wait: [step-3, step-4]
 
+  # Forward-compatibility canary ahead of the next stable release. Runs
+  # sequentially: a tolerated step failure inside a background leg can end
+  # the run as failure even when every job is green (observed on main),
+  # so the canary keeps ordinary steps plus per-step continue-on-error
+  # and reports failures as an annotation instead.
+  canary:
+    name: fast (3.15)
+    needs: changes
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      # The canary leg builds sdists (e.g. fastuuid's pinned PyO3)
+      # against a pre-release CPython; abi3 forward-compat mode lets
+      # the wheel target the stable ABI instead of refusing at build
+      # time.
+      PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: true
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y poppler-utils
+        id: step
+        continue-on-error: true
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        id: setup-uv
+        continue-on-error: true
+        with:
+          python-version: "3.15"
+          enable-cache: true
+          cache-suffix: fast-3.15
+      - run: uv sync --locked
+        id: step-2
+        continue-on-error: true
+      - run: uv run python scripts/verify_all.py --stage docs
+        id: step-3
+        continue-on-error: true
+      - run: uv run python scripts/verify_all.py --stage fast
+        id: step-4
+        continue-on-error: true
       - name: Report 3.15 canary outcome
-        if: matrix.experimental && (steps.step.outcome == 'failure' || steps.setup-uv.outcome == 'failure' || steps.step-2.outcome == 'failure' || steps.step-3.outcome == 'failure' || steps.step-4.outcome == 'failure')
+        if: always() && (steps.step.outcome == 'failure' || steps.setup-uv.outcome == 'failure' || steps.step-2.outcome == 'failure' || steps.step-3.outcome == 'failure' || steps.step-4.outcome == 'failure')
         run: |
           echo "::warning::Python 3.15 canary leg failed — forward-compat signal, not a gate failure"
   # The standard stage is split into parallel legs; the docker-smoke
