@@ -244,7 +244,9 @@ jobs:
     if: >-
       needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    # Legs rebuild the tools image whenever the cache misses; a slow mirror
+    # window pushes them past 30 min (observed 2026-10-07).
+    timeout-minutes: 45
     permissions:
       contents: read
       # Writes the shared registry buildcache on push/dispatch runs; fork-PR
@@ -319,7 +321,9 @@ jobs:
     if: >-
       needs.changes.outputs.docker == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    # Same image build as standard-smoke: legs ran 17-30 min on 2026-10-07
+    # and shard 0 hit the cap. Headroom, not speed, is the fix.
+    timeout-minutes: 45
     permissions:
       contents: read
       # Writes the shared registry buildcache on push/dispatch runs; fork-PR
