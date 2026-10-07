@@ -35,6 +35,8 @@ jobs:
   changes:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    # No actions/cache usage: forbid restore and save entirely.
+    cache-mode: none
     outputs:
       docker: ${{ steps.scope.outputs.docker }}
     steps:
@@ -68,6 +70,8 @@ jobs:
   dockerfile-lint:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    # No actions/cache usage: forbid restore and save entirely.
+    cache-mode: none
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -77,7 +81,11 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
+      # Hadolint is read-only on docker/**: overlap it with the BuildKit
+      # setup + --check and join it before the job ends.
       - name: Lint Dockerfiles with hadolint
+        id: hadolint
+        background: true
         uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
         with:
           dockerfile: docker/circuit-tools.Dockerfile
@@ -85,6 +93,8 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Run BuildKit checks
         run: docker build --check -f docker/circuit-tools.Dockerfile .
+      - name: Wait for hadolint
+        wait: hadolint
 
   fast:
     name: ${{ matrix.python-version == '3.12' && 'fast' || format('fast ({0})', matrix.python-version) }}
@@ -126,12 +136,19 @@ jobs:
       - run: uv sync --locked
         id: step-2
         continue-on-error: ${{ matrix.experimental || false }}
+      # The docs and fast stages are independent verify_all invocations
+      # against the same synced venv; run them as background legs and join
+      # them before the canary report so steps.<id>.outcome stays defined.
       - run: uv run python scripts/verify_all.py --stage docs
         id: step-3
+        background: true
         continue-on-error: ${{ matrix.experimental || false }}
       - run: uv run python scripts/verify_all.py --stage fast
         id: step-4
+        background: true
         continue-on-error: ${{ matrix.experimental || false }}
+      - name: Wait for verification legs
+        wait: [step-3, step-4]
 
       - name: Report 3.15 canary outcome
         if: matrix.experimental && (steps.step.outcome == 'failure' || steps.setup-uv.outcome == 'failure' || steps.step-2.outcome == 'failure' || steps.step-3.outcome == 'failure' || steps.step-4.outcome == 'failure')
@@ -352,6 +369,8 @@ jobs:
     if: always()
     runs-on: ubuntu-26.04
     timeout-minutes: 5
+    # Aggregation only: no checkout and no actions/cache usage.
+    cache-mode: none
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -425,18 +444,16 @@ jobs:
         with:
           path: ${{ runner.temp }}/corpus-cache
           key: corpus-tps62130-f9b1af285622c0cf1a5991f9641a6e64c5e6d899e52cc0b1632808742019579f
+      # The datasheet fetch only needs the restored cache dir — not the
+      # image build — so it runs as a background leg joined before the
+      # cache save and the mutation run that mount the cache.
       - name: Fetch and verify TPS62130 datasheet
+        id: corpus-fetch
+        background: true
         run: >-
           uv run python scripts/fetch_corpus_datasheet.py
           --entry tps62130-vqfn16
           --cache "$RUNNER_TEMP/corpus-cache"
-      - name: Save TPS62130 datasheet cache
-        # One shard writes the shared corpus entry; parallel saves race.
-        if: steps.corpus-cache.outputs.cache-hit != 'true' && matrix.shard == 0
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/corpus-cache
-          key: corpus-tps62130-f9b1af285622c0cf1a5991f9641a6e64c5e6d899e52cc0b1632808742019579f
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - id: cern
         run: |
@@ -482,6 +499,15 @@ jobs:
             args+=(--cache-to "type=gha,mode=max,scope=circuit-tools,ignore-error=true")
           fi
           "${args[@]}" .
+      - name: Wait for datasheet fetch
+        wait: corpus-fetch
+      - name: Save TPS62130 datasheet cache
+        # One shard writes the shared corpus entry; parallel saves race.
+        if: steps.corpus-cache.outputs.cache-hit != 'true' && matrix.shard == 0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/corpus-cache
+          key: corpus-tps62130-f9b1af285622c0cf1a5991f9641a6e64c5e6d899e52cc0b1632808742019579f
       - name: Run production mutation verifier in the tools image
         run: |
           set -euo pipefail
@@ -514,6 +540,8 @@ jobs:
     if: always()
     runs-on: ubuntu-26.04
     timeout-minutes: 5
+    # Aggregation only: no checkout and no actions/cache usage.
+    cache-mode: none
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:

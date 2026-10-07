@@ -19,6 +19,8 @@ jobs:
   check-lock:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    # No actions/cache usage: forbid restore and save entirely.
+    cache-mode: none
     outputs:
       present: ${{ steps.lock.outputs.present }}
       image: ${{ steps.lock.outputs.image }}
@@ -230,6 +232,8 @@ jobs:
     if: needs.check-lock.outputs.present == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
+    # No actions/cache usage: forbid restore and save entirely.
+    cache-mode: none
     permissions:
       contents: read
       attestations: read
@@ -241,71 +245,75 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Fail when tools image has no attestation metadata
-        # Publish always emits attestations now; a lock without them means
-        # the attestation stage silently regressed — fail closed rather
-        # than skip provenance verification.
-        if: needs.check-lock.outputs.attestation == ''
-        run: |
-          echo "::error::circuit_tools image lock has no attestation metadata; the publish workflow must emit provenance attestations."
-          exit 1
-      - name: Verify tools image provenance
-        if: needs.check-lock.outputs.attestation != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMAGE: ${{ needs.check-lock.outputs.image }}
-          DIGEST: ${{ needs.check-lock.outputs.digest }}
-        run: |
-          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
-      - name: Fail when tools image has no SBOM attestation
-        if: needs.check-lock.outputs.sbom_attestation == ''
-        run: |
-          echo "::error::circuit_tools image lock has no SBOM attestation; the publish workflow must emit SBOM attestations."
-          exit 1
-      - name: Verify tools image SBOM attestation
-        if: needs.check-lock.outputs.sbom_attestation != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMAGE: ${{ needs.check-lock.outputs.image }}
-          DIGEST: ${{ needs.check-lock.outputs.digest }}
-        run: |
-          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
-            --predicate-type https://spdx.dev/Document/v2.3
-      - name: Fail when server image has no attestation metadata
-        if: needs.check-lock.outputs.server_attestation == ''
-        run: |
-          echo "::error::circuit_server image lock has no attestation metadata; the publish workflow must emit provenance attestations."
-          exit 1
-      - name: Verify server image provenance
-        if: needs.check-lock.outputs.server_attestation != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMAGE: ${{ needs.check-lock.outputs.server_image }}
-          DIGEST: ${{ needs.check-lock.outputs.server_digest }}
-        run: |
-          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
-      - name: Fail when server image has no SBOM attestation
-        if: needs.check-lock.outputs.server_sbom_attestation == ''
-        run: |
-          echo "::error::circuit_server image lock has no SBOM attestation; the publish workflow must emit SBOM attestations."
-          exit 1
-      - name: Verify server image SBOM attestation
-        if: needs.check-lock.outputs.server_sbom_attestation != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMAGE: ${{ needs.check-lock.outputs.server_image }}
-          DIGEST: ${{ needs.check-lock.outputs.server_digest }}
-        run: |
-          gh attestation verify "oci://${IMAGE}@${DIGEST}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
-            --predicate-type https://spdx.dev/Document/v2.3
+      # The eight attestation checks only read the lock outputs — the
+      # fail-closed/verify pairs are mutually exclusive per `if:` — so they
+      # run as one parallel group (implicit wait at the end).
+      - parallel:
+          - name: Fail when tools image has no attestation metadata
+            # Publish always emits attestations now; a lock without them means
+            # the attestation stage silently regressed — fail closed rather
+            # than skip provenance verification.
+            if: needs.check-lock.outputs.attestation == ''
+            run: |
+              echo "::error::circuit_tools image lock has no attestation metadata; the publish workflow must emit provenance attestations."
+              exit 1
+          - name: Verify tools image provenance
+            if: needs.check-lock.outputs.attestation != ''
+            env:
+              GH_TOKEN: ${{ github.token }}
+              IMAGE: ${{ needs.check-lock.outputs.image }}
+              DIGEST: ${{ needs.check-lock.outputs.digest }}
+            run: |
+              gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+                --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
+          - name: Fail when tools image has no SBOM attestation
+            if: needs.check-lock.outputs.sbom_attestation == ''
+            run: |
+              echo "::error::circuit_tools image lock has no SBOM attestation; the publish workflow must emit SBOM attestations."
+              exit 1
+          - name: Verify tools image SBOM attestation
+            if: needs.check-lock.outputs.sbom_attestation != ''
+            env:
+              GH_TOKEN: ${{ github.token }}
+              IMAGE: ${{ needs.check-lock.outputs.image }}
+              DIGEST: ${{ needs.check-lock.outputs.digest }}
+            run: |
+              gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+                --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
+                --predicate-type https://spdx.dev/Document/v2.3
+          - name: Fail when server image has no attestation metadata
+            if: needs.check-lock.outputs.server_attestation == ''
+            run: |
+              echo "::error::circuit_server image lock has no attestation metadata; the publish workflow must emit provenance attestations."
+              exit 1
+          - name: Verify server image provenance
+            if: needs.check-lock.outputs.server_attestation != ''
+            env:
+              GH_TOKEN: ${{ github.token }}
+              IMAGE: ${{ needs.check-lock.outputs.server_image }}
+              DIGEST: ${{ needs.check-lock.outputs.server_digest }}
+            run: |
+              gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+                --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
+          - name: Fail when server image has no SBOM attestation
+            if: needs.check-lock.outputs.server_sbom_attestation == ''
+            run: |
+              echo "::error::circuit_server image lock has no SBOM attestation; the publish workflow must emit SBOM attestations."
+              exit 1
+          - name: Verify server image SBOM attestation
+            if: needs.check-lock.outputs.server_sbom_attestation != ''
+            env:
+              GH_TOKEN: ${{ github.token }}
+              IMAGE: ${{ needs.check-lock.outputs.server_image }}
+              DIGEST: ${{ needs.check-lock.outputs.server_digest }}
+            run: |
+              gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+                --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
+                --predicate-type https://spdx.dev/Document/v2.3
   check-smoke:
     needs: check-lock
     if: needs.check-lock.outputs.present == 'true'
@@ -330,75 +338,78 @@ jobs:
       - run: uv run python scripts/pull_locked_image.py --entry circuit_tools
       - id: image
         run: echo "ref=$(uv run python scripts/print_locked_image.py --entry circuit_tools)" >> "$GITHUB_OUTPUT"
-      - name: Smoke locked image
-        env:
-          IMAGE_REF: ${{ steps.image.outputs.ref }}
-        run: docker run --rm --user circuit -v "$PWD/fixtures/smoke-board:/work:ro" "$IMAGE_REF" python3 /opt/circuit/bin/smoke_kicad11_konnect.py
-      - name: Smoke locked image through the plugin launcher
-        env:
-          CIRCUIT_VERIFY_ATTESTATION: ${{ needs.check-lock.outputs.attestation != '' && 'require' || 'auto' }}
-          GH_TOKEN: ${{ github.token }}
-          OPENHANDS_PROJECT_DIR: ${{ github.workspace }}
-          SMOKE_OUT: ${{ github.workspace }}/circuit-smoke-out
-        run: |
-          set -euo pipefail
-          mkdir -p "$SMOKE_OUT"
-          launcher=plugins/circuit/scripts/circuit_launcher.py
-          python3 "$launcher" prewarm
-          python3 "$launcher" doctor > "$SMOKE_OUT/doctor.json"
-          set +e
-          python3 "$launcher" author \
-            --brief tests/data/brief_led_loop.json \
-            --intake tests/data/brief_led_loop.intake.json \
-            --workdir "$SMOKE_OUT/authoring" \
-            > "$SMOKE_OUT/author.stdout.json"
-          author_status=$?
-          set -e
-          python3 - "$SMOKE_OUT" "$author_status" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
+      # Both smokes only need the pulled image and write disjoint paths,
+      # so they run as a parallel group.
+      - parallel:
+          - name: Smoke locked image
+            env:
+              IMAGE_REF: ${{ steps.image.outputs.ref }}
+            run: docker run --rm --user circuit -v "$PWD/fixtures/smoke-board:/work:ro" "$IMAGE_REF" python3 /opt/circuit/bin/smoke_kicad11_konnect.py
+          - name: Smoke locked image through the plugin launcher
+            env:
+              CIRCUIT_VERIFY_ATTESTATION: ${{ needs.check-lock.outputs.attestation != '' && 'require' || 'auto' }}
+              GH_TOKEN: ${{ github.token }}
+              OPENHANDS_PROJECT_DIR: ${{ github.workspace }}
+              SMOKE_OUT: ${{ github.workspace }}/circuit-smoke-out
+            run: |
+              set -euo pipefail
+              mkdir -p "$SMOKE_OUT"
+              launcher=plugins/circuit/scripts/circuit_launcher.py
+              python3 "$launcher" prewarm
+              python3 "$launcher" doctor > "$SMOKE_OUT/doctor.json"
+              set +e
+              python3 "$launcher" author \
+                --brief tests/data/brief_led_loop.json \
+                --intake tests/data/brief_led_loop.intake.json \
+                --workdir "$SMOKE_OUT/authoring" \
+                > "$SMOKE_OUT/author.stdout.json"
+              author_status=$?
+              set -e
+              python3 - "$SMOKE_OUT" "$author_status" <<'PY'
+              import json
+              import sys
+              from pathlib import Path
 
-          out = Path(sys.argv[1])
-          author_status = int(sys.argv[2])
-          workdir = out / "authoring"
-          report_path = workdir / "circuit-reports" / "design-report.json"
-          if report_path.is_file():
-              raw_report = report_path.read_text(encoding="utf-8")
-              try:
-                  report = json.loads(raw_report)
-              except json.JSONDecodeError:
-                  print(raw_report)
-                  report = {}
-              if isinstance(report, dict):
-                  for name in ("connectivity", "erc", "drc"):
-                      gate = report.get(name)
-                      verdict = gate.get("verdict") if isinstance(gate, dict) else "missing"
-                      print(f"{name}: {verdict}")
+              out = Path(sys.argv[1])
+              author_status = int(sys.argv[2])
+              workdir = out / "authoring"
+              report_path = workdir / "circuit-reports" / "design-report.json"
+              if report_path.is_file():
+                  raw_report = report_path.read_text(encoding="utf-8")
+                  try:
+                      report = json.loads(raw_report)
+                  except json.JSONDecodeError:
+                      print(raw_report)
+                      report = {}
+                  if isinstance(report, dict):
+                      for name in ("connectivity", "erc", "drc"):
+                          gate = report.get(name)
+                          verdict = gate.get("verdict") if isinstance(gate, dict) else "missing"
+                          print(f"{name}: {verdict}")
+                  else:
+                      print(raw_report)
               else:
-                  print(raw_report)
-          else:
-              print((out / "author.stdout.json").read_text(encoding="utf-8"))
-              report = {}
-          result_path = workdir / "e2e-authoring.json"
-          result = (
-              json.loads(result_path.read_text(encoding="utf-8"))
-              if result_path.is_file()
-              else {}
-          )
-          gates_pass = all(
-              isinstance(report.get(name), dict)
-              and report[name].get("verdict") == "pass"
-              for name in ("connectivity", "erc", "drc")
-          )
-          if (
-              author_status != 0
-              or report.get("verdict") != "pass"
-              or not gates_pass
-              or result.get("verdict") != "pass"
-          ):
-              raise SystemExit("circuit launcher authoring smoke did not pass")
-          PY
+                  print((out / "author.stdout.json").read_text(encoding="utf-8"))
+                  report = {}
+              result_path = workdir / "e2e-authoring.json"
+              result = (
+                  json.loads(result_path.read_text(encoding="utf-8"))
+                  if result_path.is_file()
+                  else {}
+              )
+              gates_pass = all(
+                  isinstance(report.get(name), dict)
+                  and report[name].get("verdict") == "pass"
+                  for name in ("connectivity", "erc", "drc")
+              )
+              if (
+                  author_status != 0
+                  or report.get("verdict") != "pass"
+                  or not gates_pass
+                  or result.get("verdict") != "pass"
+              ):
+                  raise SystemExit("circuit launcher authoring smoke did not pass")
+              PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -505,6 +516,8 @@ jobs:
     if: always()
     runs-on: ubuntu-26.04
     timeout-minutes: 5
+    # Aggregation only: no checkout and no actions/cache usage.
+    cache-mode: none
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:

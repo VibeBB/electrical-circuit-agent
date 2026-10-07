@@ -148,6 +148,18 @@ jobs:
             ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
           cache-from: type=gha
           cache-to: type=gha,mode=max,ignore-error=true
+      # Attestation only needs the pushed digest: run it as a background
+      # step overlapping every post-build leg and join it before the
+      # digest-lock update that reads its attestation-url output.
+      - name: Attest tools image provenance
+        id: attest
+        if: inputs.skip_tools != true && inputs.dry_run != true
+        background: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/vibebb/circuit-tools
+          subject-digest: ${{ steps.tools.outputs.digest }}
+          push-to-registry: true
       - name: Scan tools image (Trivy SARIF)
         id: trivy-scan-tools
         if: inputs.skip_tools != true
@@ -215,14 +227,6 @@ jobs:
           name: circuit-tools-trivy
           path: trivy-circuit-tools.json
           retention-days: 90
-      - name: Attest tools image provenance
-        id: attest
-        if: inputs.skip_tools != true && inputs.dry_run != true
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ghcr.io/vibebb/circuit-tools
-          subject-digest: ${{ steps.tools.outputs.digest }}
-          push-to-registry: true
       - name: Resolve tools digest
         env:
           BUILT_DIGEST: ${{ steps.tools.outputs.digest }}
@@ -248,21 +252,43 @@ jobs:
             TOOLS_DIGEST="${BUILT_DIGEST}"
           fi
           printf 'TOOLS_REF=%s\nTOOLS_DIGEST=%s\nTOOLS_TAG=%s\n' "$TOOLS_REF" "$TOOLS_DIGEST" "$TOOLS_TAG" >> "$GITHUB_ENV"
-      - name: Generate tools SPDX SBOM
-        if: inputs.skip_tools != true
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        env:
-          # Dry runs read the daemon-loaded image; real runs pull the
-          # pushed digest from the registry.
-          SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: ${{ inputs.dry_run == true && 'docker' || 'registry' }}
-          TMPDIR: ${{ runner.temp }}
-          SYFT_FILE_METADATA_SELECTION: none
-        with:
-          image: ${{ env.TOOLS_REF }}
-          format: spdx-json
-          output-file: ${{ runner.temp }}/circuit-tools.full.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
+      # The SBOM scan, the tool measurement, and the smoke run all
+      # only need the resolved tools image and write disjoint paths,
+      # so they run as one parallel group; the SBOM packaging chain
+      # and the server build follow the implicit wait unchanged.
+      - parallel:
+          - name: Generate tools SPDX SBOM
+            if: inputs.skip_tools != true
+            uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+            env:
+              # Dry runs read the daemon-loaded image; real runs pull the
+              # pushed digest from the registry.
+              SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: ${{ inputs.dry_run == true && 'docker' || 'registry' }}
+              TMPDIR: ${{ runner.temp }}
+              SYFT_FILE_METADATA_SELECTION: none
+            with:
+              image: ${{ env.TOOLS_REF }}
+              format: spdx-json
+              output-file: ${{ runner.temp }}/circuit-tools.full.spdx.json
+              upload-artifact: false
+              upload-release-assets: false
+          - name: Measure published tools
+            env:
+              TOOLS_REF: ${{ env.TOOLS_REF }}
+            run: uv run python scripts/measure_image_tools.py --image-ref "$TOOLS_REF" --out "$RUNNER_TEMP/circuit-tools.json"
+          - name: Verify published tools smoke
+            env:
+              TOOLS_REF: ${{ env.TOOLS_REF }}
+              DRY_RUN: ${{ inputs.dry_run }}
+            run: |
+              set -euo pipefail
+              # Dry-run images are already in the local daemon (built with
+              # --load, or pulled by pull_locked_image.py when tools are
+              # skipped); the sha tag does not exist in the registry.
+              if [ "$DRY_RUN" != true ]; then
+                docker pull "$TOOLS_REF"
+              fi
+              docker run --rm --user circuit -v "$PWD/fixtures/smoke-board:/work:ro" "$TOOLS_REF" python3 /opt/circuit/bin/smoke_kicad11_konnect.py
       - name: Package tools SPDX SBOM
         if: inputs.skip_tools != true
         run: |
@@ -295,9 +321,13 @@ jobs:
           if sbom.get("spdxVersion") != "SPDX-2.3":
               raise SystemExit("tools SBOM must use SPDX-2.3")
           PY
+      # Attestation writes the attestation-url consumed by the digest-lock
+      # update; run it as a background leg overlapping the server build
+      # and join it with the other attestations before the lock update.
       - name: Attest tools SBOM
         if: inputs.skip_tools != true && inputs.dry_run != true
         id: attest_sbom
+        background: true
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/vibebb/circuit-tools
@@ -312,23 +342,6 @@ jobs:
           path: ${{ runner.temp }}/circuit-tools.full.spdx.json
           retention-days: 90
           if-no-files-found: error
-      - name: Measure published tools
-        env:
-          TOOLS_REF: ${{ env.TOOLS_REF }}
-        run: uv run python scripts/measure_image_tools.py --image-ref "$TOOLS_REF" --out "$RUNNER_TEMP/circuit-tools.json"
-      - name: Verify published tools smoke
-        env:
-          TOOLS_REF: ${{ env.TOOLS_REF }}
-          DRY_RUN: ${{ inputs.dry_run }}
-        run: |
-          set -euo pipefail
-          # Dry-run images are already in the local daemon (built with
-          # --load, or pulled by pull_locked_image.py when tools are
-          # skipped); the sha tag does not exist in the registry.
-          if [ "$DRY_RUN" != true ]; then
-            docker pull "$TOOLS_REF"
-          fi
-          docker run --rm --user circuit -v "$PWD/fixtures/smoke-board:/work:ro" "$TOOLS_REF" python3 /opt/circuit/bin/smoke_kicad11_konnect.py
       - name: Clone OpenHands SDK
         run: git clone --depth 1 --branch "v${SDK_VERSION}" https://github.com/OpenHands/software-agent-sdk "$RUNNER_TEMP/sdk"
       - name: Stabilize server build cache tag
@@ -479,25 +492,36 @@ jobs:
       - name: Attest server image provenance
         id: attest_server
         if: inputs.dry_run != true
+        background: true
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/vibebb/circuit-server
           subject-digest: ${{ env.SERVER_DIGEST }}
           push-to-registry: true
-      - name: Generate server SPDX SBOM
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        env:
-          # Dry runs read the daemon-loaded image; real runs pull the
-          # pushed digest from the registry.
-          SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: ${{ inputs.dry_run == true && 'docker' || 'registry' }}
-          TMPDIR: ${{ runner.temp }}
-          SYFT_FILE_METADATA_SELECTION: none
-        with:
-          image: ${{ env.SERVER_REF }}
-          format: spdx-json
-          output-file: ${{ runner.temp }}/circuit-server.full.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
+      # The server SBOM scan and the tool measurement only need the
+      # resolved server image and write disjoint paths — a parallel
+      # group; the SBOM packaging chain follows the implicit wait.
+      - parallel:
+          - name: Generate server SPDX SBOM
+            uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+            env:
+              # Dry runs read the daemon-loaded image; real runs pull the
+              # pushed digest from the registry.
+              SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: ${{ inputs.dry_run == true && 'docker' || 'registry' }}
+              TMPDIR: ${{ runner.temp }}
+              SYFT_FILE_METADATA_SELECTION: none
+            with:
+              image: ${{ env.SERVER_REF }}
+              format: spdx-json
+              output-file: ${{ runner.temp }}/circuit-server.full.spdx.json
+              upload-artifact: false
+              upload-release-assets: false
+          - name: Measure published server
+            run: |
+              set -euo pipefail
+              uv run python scripts/measure_image_tools.py \
+                --image-ref "$SERVER_REF" \
+                --out "$RUNNER_TEMP/circuit-server.json"
       - name: Package server SPDX SBOM
         run: |
           python3 scripts/package_level_sbom.py \
@@ -528,6 +552,7 @@ jobs:
       - name: Attest server SBOM
         id: attest_server_sbom
         if: inputs.dry_run != true
+        background: true
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ghcr.io/vibebb/circuit-server
@@ -541,12 +566,6 @@ jobs:
           path: ${{ runner.temp }}/circuit-server.full.spdx.json
           retention-days: 90
           if-no-files-found: error
-      - name: Measure published server
-        run: |
-          set -euo pipefail
-          uv run python scripts/measure_image_tools.py \
-            --image-ref "$SERVER_REF" \
-            --out "$RUNNER_TEMP/circuit-server.json"
       - name: Record published image summary
         env:
           SKIP_TOOLS: ${{ inputs.skip_tools }}
@@ -565,6 +584,10 @@ jobs:
             echo "- **server tag**: \`$SERVER_TAG\`"
             echo "- **workflow run**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } >> "$GITHUB_STEP_SUMMARY"
+      # Join every background attestation leg before the lock update
+      # reads their attestation-url outputs (skipped legs pass instantly).
+      - name: Wait for attestations
+        wait: [attest, attest_sbom, attest_server, attest_server_sbom]
       - name: Update digest lock and merge PR
         if: inputs.dry_run != true
         env:

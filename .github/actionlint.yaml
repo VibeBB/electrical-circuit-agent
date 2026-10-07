@@ -3,3 +3,36 @@
 self-hosted-runner:
   labels:
     - ubuntu-26.04
+# actionlint v1.7.12 predates GitHub Actions parallel steps
+# (background/wait/wait-all/cancel/parallel, GA 2026-06-25) and the
+# cache-mode job key (GA 2026-09-10): it rejects them as unknown keys and
+# treats parallel-group container steps as steps without run/uses. Track
+# rhysd/actionlint#693; drop each file entry once a release understands
+# the new keywords. Files are listed individually so the suppression does
+# not widen.
+paths:
+  .github/workflows/ci.yml:
+    ignore:
+      - 'unexpected key "background" for step .+'
+      - 'unexpected key "cache-mode" for "job" section'
+      - 'step must run script with "run" section or run action with "uses" section'
+  .github/workflows/container-audit.yml:
+    ignore:
+      - 'step must run script with "run" section or run action with "uses" section'
+  .github/workflows/digest-lock-sweep.yml:
+    ignore:
+      - 'unexpected key "cache-mode" for "job" section'
+  .github/workflows/ghcr-tag-retention.yml:
+    ignore:
+      - 'unexpected key "cache-mode" for "job" section'
+  .github/workflows/locked-image-check.yml:
+    ignore:
+      - 'unexpected key "cache-mode" for "job" section'
+      - 'step must run script with "run" section or run action with "uses" section'
+  .github/workflows/publish-circuit-images.yml:
+    ignore:
+      - 'unexpected key "background" for step .+'
+      - 'step must run script with "run" section or run action with "uses" section'
+  .github/workflows/release.yml:
+    ignore:
+      - 'unexpected key "cache-mode" for "job" section'
