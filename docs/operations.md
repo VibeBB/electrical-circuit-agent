@@ -1567,6 +1567,29 @@ package-level SPDX-2.3 SBOM. A guard reports disk space and the attested SBOM
 size after transformation and fails above 16 MiB; the full Syft SBOM is
 uploaded as a 90-day workflow-run artifact.
 
+## Python canary promotion policy
+
+The `3.15` canary leg in `ci.yml` is advisory: step-level
+`continue-on-error` converts its failure into a `::warning::` signal so a
+forward-incompatible interpreter never blocks the gate chain. Promote it
+to a required matrix leg only when all of these hold:
+
+1. The interpreter is a stable release — release candidates and earlier
+   pre-releases stay advisory.
+2. Every required dependency publishes wheels carrying the new ABI tag.
+   The blockers seen so far are `cadquery-ocp-novtk` (no `cp315` wheels)
+   and PyO3-based transitive pins such as `fastuuid` via the OpenHands
+   SDK. The leg detects the landing itself: it goes green once wheels
+   exist.
+3. Three consecutive green runs on main — weekly or push-triggered runs
+   with no canary `::warning::` in their logs.
+
+Promotion moves `3.15` into the required version list and drops the
+`continue-on-error`/`::warning::` reporting step; record the adoption in
+`docs/dependency-updates.md` where that file exists, otherwise in this
+section. A regression after promotion is handled like any main CI
+failure — the leg does not silently revert to advisory.
+
 ## Settings-level posture (recorded decisions)
 
 The following live in repository Settings rather than code; they are
