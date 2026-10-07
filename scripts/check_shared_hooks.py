@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import cast
 
 _EXPECTED_ENSURE_LLM_PROFILES_NORMALIZED_AST_SHA256 = (
-    "e8eb58bf540e432be683e737a913a97e84b7f2c2e20daddf27cb6fec42316c79"
+    "8cb8ea31ef79d00a26e4a8b0259f2a668e6dc0d976fba1d61f019ada95b94aa6"
+)
+_EXPECTED_ENSURE_AGENT_PROFILES_NORMALIZED_AST_SHA256 = (
+    "81cf8a503e249c29e4a67901b58004bde0037e4e7d969b3287f5087ca7e25152"
 )
 _EXPECTED_PROVENANCE_NORMALIZED_AST_SHA256 = (
     "129bc2a98d85c300026ef50dabe90940c4b3c0e7054fb02d52d1d1dee3b18672"
@@ -25,13 +28,20 @@ _EXPECTED_REQUIRE_RECORDS_NORMALIZED_AST_SHA256 = (
 )
 EXPECTED: dict[str, str] = {
     "ensure_llm_profiles.py": _EXPECTED_ENSURE_LLM_PROFILES_NORMALIZED_AST_SHA256,
+    "ensure_agent_profiles.py": _EXPECTED_ENSURE_AGENT_PROFILES_NORMALIZED_AST_SHA256,
     "_provenance.py": _EXPECTED_PROVENANCE_NORMALIZED_AST_SHA256,
     "safety_rail.py": _EXPECTED_SAFETY_RAIL_NORMALIZED_AST_SHA256,
     "_records.py": _EXPECTED_RECORDS_NORMALIZED_AST_SHA256,
     "require_records.py": _EXPECTED_REQUIRE_RECORDS_NORMALIZED_AST_SHA256,
 }
 REQUIRED = frozenset(
-    {"ensure_llm_profiles.py", "safety_rail.py", "_records.py", "require_records.py"}
+    {
+        "ensure_llm_profiles.py",
+        "ensure_agent_profiles.py",
+        "safety_rail.py",
+        "_records.py",
+        "require_records.py",
+    }
 )
 _DOCSTRING_NODE_TYPES = (
     ast.Module,

@@ -23,7 +23,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-_PROFILES = ("vibebb-author", "vibebb-review")
+_PROFILES = ("vibebb-author", "vibebb-review", "oracle")
 
 if TYPE_CHECKING:
     from openhands.sdk.llm import LLM as _LLMType
@@ -126,9 +126,11 @@ def main() -> int:
                     findings.append(f"could not write {dest}: {exc}")
 
     missing = [n for n in _PROFILES if not (store / f"{n}.json").is_file()]
+    # Vision capability only gates the VibeBB review lane; `oracle` is a
+    # plain text consult profile, so probing it would just waste a call.
     vision = {
         name: _vision_status(profile) if profile is not None else "unverified"
-        for name in _PROFILES
+        for name in ("vibebb-author", "vibebb-review")
         if (store / f"{name}.json").is_file()
         for profile in (_read_profile(store / f"{name}.json"),)
     }

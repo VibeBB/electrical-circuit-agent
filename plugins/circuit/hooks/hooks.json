@@ -6,27 +6,32 @@
         {
           "type": "command",
           "name": "circuit-doctor",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/scripts/circuit_launcher.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || { echo \"circuit plugin root unresolved\" >&2; exit 1; }; exec python3 \"$p/scripts/circuit_launcher.py\" doctor --warn"
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/scripts/circuit_launcher.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || { echo \"circuit plugin root unresolved\" >&2; exit 1; }; exec python3 \"$p/scripts/circuit_launcher.py\" doctor --warn"
         },
         {
           "type": "command",
           "name": "intake-attachments",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/intake_attachments.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/intake_attachments.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/intake_attachments.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/intake_attachments.py\""
         },
         {
           "type": "command",
           "name": "ensure-llm-profiles",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/ensure_llm_profiles.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/ensure_llm_profiles.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/ensure_llm_profiles.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/ensure_llm_profiles.py\""
+        },
+        {
+          "type": "command",
+          "name": "ensure-agent-profiles",
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/ensure_agent_profiles.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/ensure_agent_profiles.py\""
         },
         {
           "type": "command",
           "name": "ensure-part-author-profiles",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/ensure_part_author_profiles.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/ensure_part_author_profiles.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/ensure_part_author_profiles.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/ensure_part_author_profiles.py\""
         },
         {
           "type": "command",
           "name": "require-records",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/require_records.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/require_records.py\" session-start"
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/require_records.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/require_records.py\" session-start"
         }
       ]
     }
@@ -38,17 +43,17 @@
         {
           "type": "command",
           "name": "intake-attachments",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/intake_attachments.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/intake_attachments.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/intake_attachments.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/intake_attachments.py\""
         },
         {
           "type": "command",
           "name": "record-library-review",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_library_review.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_library_review.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_library_review.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_library_review.py\""
         },
         {
           "type": "command",
           "name": "record-human-response",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_human_response.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_human_response.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_human_response.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_human_response.py\""
         }
       ]
     }
@@ -60,7 +65,7 @@
         {
           "type": "command",
           "name": "protect-libraries",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/protect_libraries.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || { echo \"circuit plugin root unresolved\" >&2; exit 2; }; exec python3 \"$p/hooks/scripts/protect_libraries.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/protect_libraries.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || { echo \"circuit plugin root unresolved\" >&2; exit 2; }; exec python3 \"$p/hooks/scripts/protect_libraries.py\""
         }
       ]
     },
@@ -70,7 +75,7 @@
         {
           "type": "command",
           "name": "safety-rail",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/safety_rail.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/safety_rail.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/safety_rail.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/safety_rail.py\""
         }
       ]
     }
@@ -82,22 +87,22 @@
         {
           "type": "command",
           "name": "require-records",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/require_records.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/require_records.py\" stop"
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/require_records.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/require_records.py\" stop"
         },
         {
           "type": "command",
           "name": "report-design-status",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/report_design_status.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || { echo \"circuit plugin root unresolved\" >&2; exit 1; }; exec python3 \"$p/hooks/scripts/report_design_status.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/report_design_status.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || { echo \"circuit plugin root unresolved\" >&2; exit 1; }; exec python3 \"$p/hooks/scripts/report_design_status.py\""
         },
         {
           "type": "command",
           "name": "intake-attachments",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/intake_attachments.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/intake_attachments.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/intake_attachments.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/intake_attachments.py\""
         },
         {
           "type": "command",
           "name": "record-library-review",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_library_review.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_library_review.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_library_review.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_library_review.py\""
         }
       ]
     }
@@ -109,7 +114,7 @@
         {
           "type": "command",
           "name": "record-image-observation",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_image_observation.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_image_observation.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_image_observation.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_image_observation.py\""
         }
       ]
     },
@@ -119,7 +124,7 @@
         {
           "type": "command",
           "name": "record-vision-tool-event",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_vision_tool_event.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_vision_tool_event.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_vision_tool_event.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_vision_tool_event.py\""
         }
       ]
     },
@@ -129,7 +134,7 @@
         {
           "type": "command",
           "name": "record-authoring-commit",
-          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_authoring_commit.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_authoring_commit.py\""
+          "command": "p=$(for c in \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/record_authoring_commit.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/record_authoring_commit.py\""
         }
       ]
     }

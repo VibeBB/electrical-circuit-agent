@@ -42,6 +42,7 @@ does not re-verify an image that is already present locally.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pwd
@@ -225,6 +226,22 @@ def _docker() -> str | None:
     return shutil.which("docker")
 
 
+def _inside_conversation_container() -> bool:
+    """True when running inside an OpenHands docker conversation runtime.
+
+    The runtime injects ``OH_PERSISTENCE_DIR``/``OH_RUNTIME_LAUNCHED_PROFILE``
+    into each ``agent-server-conversation-*`` container, which carries no
+    docker client — circuit tools then have nowhere to launch the pinned
+    tools image. ``OH_CONVERSATION_RUNTIME`` is not usable as the signal:
+    the runtime sets it to ``local`` inside the container itself.
+    """
+    if os.environ.get("OH_PERSISTENCE_DIR") or os.environ.get("OH_RUNTIME_LAUNCHED_PROFILE"):
+        return True
+    with contextlib.suppress(OSError):
+        return Path.home() == Path("/var/openhands/.openhands")
+    return False
+
+
 def _attestation_mode() -> str:
     mode = os.environ.get(_VERIFY_ENV, "auto")
     if mode not in {"auto", "require", "off"}:
@@ -316,7 +333,15 @@ def _ensure_image(plugin_root: Path, *, pull: bool = True, prewarm: bool = False
     SessionStart doctor hook (--warn) must stay lightweight."""
     docker = _docker()
     if docker is None:
-        raise RuntimeError("docker not found on PATH (circuit runs docker-only)")
+        detail = "docker not found on PATH (circuit runs docker-only)"
+        if _inside_conversation_container():
+            detail += (
+                " — this appears to be an OpenHands docker conversation "
+                "container, which cannot launch tool containers; set the "
+                "conversation runtime to local (Agent Canvas -> Settings -> "
+                "Application) and start a new conversation"
+            )
+        raise RuntimeError(detail)
 
     override_ref = os.environ.get("CIRCUIT_TOOLS_IMAGE")
     pin: ImagePin | None = (
