@@ -10,8 +10,8 @@ dependencies = [
     "pillow==12.3.0",
     "cadquery-ocp-novtk==8.0.1.0.0",
     "mcp>=1.29,<2",
-    "openhands-sdk==1.52.0",
-    "openhands-tools==1.52.0",
+    "openhands-sdk==1.53.0",
+    "openhands-tools==1.53.0",
 ]
 
 [dependency-groups]

@@ -105,8 +105,8 @@ legal advice.
 ## OpenHands Software Agent SDK
 
 - License: MIT
-- Packages: `openhands-sdk==1.52.0`, `openhands-tools==1.52.0`
-- Source: <https://pypi.org/project/openhands-sdk/1.52.0/>
+- Packages: `openhands-sdk==1.53.0`, `openhands-tools==1.53.0`
+- Source: <https://pypi.org/project/openhands-sdk/1.53.0/>
 - The project uses the SDK as a dependency and does not vendor SDK code.
 
 ## Python runtime dependencies
@@ -125,8 +125,8 @@ direct dependencies are:
   and <https://github.com/Open-Cascade-SAS/OCCT/blob/master/OCCT_LGPL_EXCEPTION.txt>.
 - `mcp>=1.29,<2`: MIT — <https://pypi.org/project/mcp/>
 - `pydantic>=2`: MIT — <https://pypi.org/project/pydantic/>
-- `openhands-sdk==1.52.0`: MIT — <https://pypi.org/project/openhands-sdk/1.52.0/>
-- `openhands-tools==1.52.0`: MIT — <https://pypi.org/project/openhands-tools/1.52.0/>
+- `openhands-sdk==1.53.0`: MIT — <https://pypi.org/project/openhands-sdk/1.53.0/>
+- `openhands-tools==1.53.0`: MIT — <https://pypi.org/project/openhands-tools/1.53.0/>
 
 Transitive dependencies (anyio, httpx, starlette, etc.) follow the pins in
 `uv.lock` and each PyPI distribution's own metadata. This file is not legal
