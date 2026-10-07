@@ -58,7 +58,7 @@ RUN grep -q "^URIs: http://security\.ubuntu\.com/ubuntu" \
             && apt-get -o Acquire::Retries=5 install --no-install-recommends -y "$@" \
             && return 0; \
             [ "$attempt" = 5 ] && return 1; \
-            sleep $((attempt * 10)); \
+            sleep $((attempt * 30)); \
         done; \
     } \
     && apt_install_retry \
@@ -73,7 +73,7 @@ RUN grep -q "^URIs: http://security\.ubuntu\.com/ubuntu" \
     && for attempt in 1 2 3 4 5; do \
         add-apt-repository --yes ppa:kicad/kicad-dev-nightly && break; \
         [ "$attempt" = 5 ] && exit 1; \
-        sleep $((attempt * 10)); \
+        sleep $((attempt * 30)); \
        done \
     && apt-get -o Acquire::Retries=5 update \
     && curl --fail --location --silent --show-error \
