@@ -672,13 +672,13 @@ def test_check_workflow_downloads_flags_unpinned_trivy(tmp_path: Path) -> None:
 
 def test_check_sdk_build_layout_reports_layout_drift(tmp_path: Path) -> None:
     (tmp_path / "uv.lock").write_text(
-        '[[package]]\nname = "openhands-sdk"\nversion = "1.52.0"\n',
+        '[[package]]\nname = "openhands-sdk"\nversion = "1.53.0"\n',
         encoding="utf-8",
     )
     needle = dependency_updates_module.SDK_CACHE_NEEDLE.encode()
 
     intact = check_sdk_build_layout(tmp_path, fetch=lambda url: needle)
-    assert intact[0].current == "v1.52.0"
+    assert intact[0].current == "v1.53.0"
     assert intact[0].latest == "intact"
     assert intact[0].outdated is False
 
