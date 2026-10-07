@@ -194,8 +194,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     docker_selected = any(command.group == "docker" for command in commands)
     if docker_selected and not os.environ.get("CIRCUIT_TOOLS_IMAGE"):
-        print("CIRCUIT_TOOLS_IMAGE is required for the docker command group")
-        return 2
+        try:
+            lock = json.loads(
+                (Path(ROOT) / "docker" / "image-digests.json").read_text(encoding="utf-8")
+            )
+            entry = lock["circuit_tools"]
+            os.environ["CIRCUIT_TOOLS_IMAGE"] = f"{entry['image']}@{entry['digest']}"
+        except (OSError, KeyError, json.JSONDecodeError):
+            print("CIRCUIT_TOOLS_IMAGE is required for the docker command group")
+            return 2
     if args.jobs <= 1:
         for command in commands:
             print("$ " + " ".join(command.argv), flush=True)
