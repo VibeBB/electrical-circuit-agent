@@ -73,58 +73,134 @@ jobs:
             trivy-db-${{ env.TRIVY_DB_WEEK }}-
             trivy-db-
           fail-on-cache-miss: false
-      - name: Scan tools image (Trivy SARIF)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
-          scan-type: image
-          # The digest is frozen; the vulnerability DB is not — this scan
-          # surfaces newly disclosed CVEs against the shipped tools image.
-          scan-ref: ${{ env.PINNED_TOOLS_IMAGE }}
           version: v0.75.0
-          scanners: vuln,secret,misconfig
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '0'
-          format: sarif
-          output: trivy-circuit-tools.sarif
-          limit-severities-for-sarif: true
-      - name: Scan tools image (Trivy JSON, full)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: image
-          scan-ref: ${{ env.PINNED_TOOLS_IMAGE }}
-          version: v0.75.0
-          scanners: vuln,secret,misconfig,license
-          list-all-pkgs: 'true'
-          exit-code: '0'
-          format: json
-          output: trivy-circuit-tools.json
-          skip-setup-trivy: true
-      - name: Scan server image (Trivy SARIF)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: image
-          scan-ref: ${{ env.PINNED_SERVER_IMAGE }}
-          version: v0.75.0
-          scanners: vuln,secret,misconfig
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '0'
-          format: sarif
-          output: trivy-circuit-server.sarif
-          limit-severities-for-sarif: true
-      - name: Scan server image (Trivy JSON, full)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: image
-          scan-ref: ${{ env.PINNED_SERVER_IMAGE }}
-          version: v0.75.0
-          scanners: vuln,secret,misconfig,license
-          list-all-pkgs: 'true'
-          exit-code: '0'
-          format: json
-          output: trivy-circuit-server.json
-          skip-setup-trivy: true
+      - name: Warm the Trivy DB before the parallel scans
+        env:
+          TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache
+        # Populate the shared cache dir serially so the scan legs below
+        # only ever read the DB (concurrent DB downloads in one cache dir
+        # are not safe).
+        run: trivy image --download-db-only
+      # The six scans read the same pinned images and the now-warm shared
+      # vulnerability DB, and each writes a disjoint report path, so they
+      # run as one parallel group (implicit wait at the end).
+      - parallel:
+          - name: Scan tools image (Trivy SARIF)
+            uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+            with:
+              scan-type: image
+              # The digest is frozen; the vulnerability DB is not — this scan
+              # surfaces newly disclosed CVEs against the shipped tools image.
+              scan-ref: ${{ env.PINNED_TOOLS_IMAGE }}
+              version: v0.75.0
+              scanners: vuln,secret,misconfig
+              severity: CRITICAL,HIGH
+              ignore-unfixed: true
+              exit-code: '0'
+              format: sarif
+              output: trivy-circuit-tools.sarif
+              limit-severities-for-sarif: true
+              skip-setup-trivy: true
+          - name: Scan tools image (Trivy JSON, full)
+            uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+            with:
+              scan-type: image
+              scan-ref: ${{ env.PINNED_TOOLS_IMAGE }}
+              version: v0.75.0
+              scanners: vuln,secret,misconfig,license
+              list-all-pkgs: 'true'
+              exit-code: '0'
+              format: json
+              output: trivy-circuit-tools.json
+              skip-setup-trivy: true
+          - name: Scan server image (Trivy SARIF)
+            uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+            with:
+              scan-type: image
+              scan-ref: ${{ env.PINNED_SERVER_IMAGE }}
+              version: v0.75.0
+              scanners: vuln,secret,misconfig
+              severity: CRITICAL,HIGH
+              ignore-unfixed: true
+              exit-code: '0'
+              format: sarif
+              output: trivy-circuit-server.sarif
+              limit-severities-for-sarif: true
+              skip-setup-trivy: true
+          - name: Scan server image (Trivy JSON, full)
+            uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+            with:
+              scan-type: image
+              scan-ref: ${{ env.PINNED_SERVER_IMAGE }}
+              version: v0.75.0
+              scanners: vuln,secret,misconfig,license
+              list-all-pkgs: 'true'
+              exit-code: '0'
+              format: json
+              output: trivy-circuit-server.json
+              skip-setup-trivy: true
+          - name: Run Docker CIS compliance reports
+            env:
+              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache
+            run: |
+              set -euo pipefail
+              run_cis() {
+                local image="$1" out="$2" attempt
+                for attempt in 1 2; do
+                  # Trivy exits 0 even on the empty-results anomaly, so the
+                  # retry keys on the MisconfSummary payload, not the exit
+                  # code. The aggregation step stays fail-closed on empty.
+                  if trivy image --compliance docker-cis-1.6.0 --include-non-failures --report all \
+                    --ignorefile /dev/null --format json --output "$out" \
+                    "$image" && \
+                    python3 scripts/trivy_report_utils.py cis-nonempty "$out"; then
+                    return 0
+                  fi
+                  echo "::warning::CIS report for $image returned no results (attempt $attempt)"
+                  [ "$attempt" -lt 2 ] && sleep 15 || true
+                done
+                return 0
+              }
+              run_cis "${PINNED_TOOLS_IMAGE}" "$RUNNER_TEMP/trivy-cis-circuit-tools.json"
+              run_cis "${PINNED_SERVER_IMAGE}" "$RUNNER_TEMP/trivy-cis-circuit-server.json"
+          - name: Run informational Lynis audit inside the tools image
+            id: lynis
+            continue-on-error: true
+            env:
+              LYNIS_OUT: ${{ runner.temp }}/lynis-out
+            run: |
+              set -uo pipefail
+              # Lynis 3.1.7 resolves to commit 2e99f92265760b73fd6b139868eb8d4116624030;
+              # verify the checkout so a re-pointed tag fails instead of
+              # silently auditing with different code.
+              git clone --depth 1 --branch 3.1.7 \
+                https://github.com/CISOfy/lynis "$RUNNER_TEMP/lynis"
+              resolved=$(git -C "$RUNNER_TEMP/lynis" rev-parse HEAD)
+              if [ "$resolved" != "2e99f92265760b73fd6b139868eb8d4116624030" ]; then
+                echo "::error::Lynis 3.1.7 resolved to $resolved, expected 2e99f92265760b73fd6b139868eb8d4116624030"
+                exit 1
+              fi
+              mkdir -p "$LYNIS_OUT"
+              docker run --rm --user 0 \
+                -v "$RUNNER_TEMP/lynis:/lynis:ro" \
+                -v "$GITHUB_WORKSPACE/docker/lynis-container.prf:/container.prf:ro" \
+                -v "$LYNIS_OUT:/out" \
+                --entrypoint /bin/sh "$PINNED_TOOLS_IMAGE" \
+                -c 'cd /lynis && ./lynis audit system --quick --no-colors \
+                    --profile /container.prf \
+                    --report-file /out/lynis-report.dat --logfile /out/lynis.log \
+                    --auditor github-actions; \
+                    chmod 644 /out/lynis-report.dat /out/lynis.log 2>/dev/null' || true
+              # The audit is informational (continue-on-error) but a missing
+              # report means the run was broken, not clean — mark it failed.
+              test -s "$LYNIS_OUT/lynis-report.dat" || exit 1
+              index=$(grep '^hardening_index=' "$LYNIS_OUT/lynis-report.dat" \
+                | head -1 | cut -d= -f2 || true)
+              warnings=$(grep -c '^warning\[\]' "$LYNIS_OUT/lynis-report.dat" || true)
+              printf 'hardening_index=%s\nwarnings=%s\n' \
+                "${index:-unknown}" "${warnings:-0}" >> "$GITHUB_OUTPUT"
       - name: Upload tools Trivy SARIF
         if: always() && hashFiles('trivy-circuit-tools.sarif') != ''
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
@@ -137,64 +213,6 @@ jobs:
         with:
           sarif_file: trivy-circuit-server.sarif
           category: trivy-circuit-server-audit
-      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
-        with:
-          version: v0.75.0
-      - name: Run Docker CIS compliance reports
-        run: |
-          set -euo pipefail
-          run_cis() {
-            local image="$1" out="$2" attempt
-            for attempt in 1 2; do
-              # Trivy exits 0 even on the empty-results anomaly, so the
-              # retry keys on the MisconfSummary payload, not the exit
-              # code. The aggregation step stays fail-closed on empty.
-              if trivy image --compliance docker-cis-1.6.0 --include-non-failures --report all \
-                --ignorefile /dev/null --format json --output "$out" \
-                "$image" && \
-                python3 scripts/trivy_report_utils.py cis-nonempty "$out"; then
-                return 0
-              fi
-              echo "::warning::CIS report for $image returned no results (attempt $attempt)"
-              [ "$attempt" -lt 2 ] && sleep 15 || true
-            done
-            return 0
-          }
-          run_cis "${PINNED_TOOLS_IMAGE}" "$RUNNER_TEMP/trivy-cis-circuit-tools.json"
-          run_cis "${PINNED_SERVER_IMAGE}" "$RUNNER_TEMP/trivy-cis-circuit-server.json"
-      - name: Run informational Lynis audit inside the tools image
-        id: lynis
-        continue-on-error: true
-        env:
-          LYNIS_OUT: ${{ runner.temp }}/lynis-out
-        run: |
-          set -uo pipefail
-          # Lynis 3.1.7 resolves to commit 2e99f92265760b73fd6b139868eb8d4116624030;
-          # verify the checkout so a re-pointed tag fails instead of
-          # silently auditing with different code.
-          git clone --depth 1 --branch 3.1.7 \
-            https://github.com/CISOfy/lynis "$RUNNER_TEMP/lynis"
-          resolved=$(git -C "$RUNNER_TEMP/lynis" rev-parse HEAD)
-          if [ "$resolved" != "2e99f92265760b73fd6b139868eb8d4116624030" ]; then
-            echo "::error::Lynis 3.1.7 resolved to $resolved, expected 2e99f92265760b73fd6b139868eb8d4116624030"
-            exit 1
-          fi
-          mkdir -p "$LYNIS_OUT"
-          docker run --rm --user 0 \
-            -v "$RUNNER_TEMP/lynis:/lynis:ro" \
-            -v "$GITHUB_WORKSPACE/docker/lynis-container.prf:/container.prf:ro" \
-            -v "$LYNIS_OUT:/out" \
-            --entrypoint /bin/sh "$PINNED_TOOLS_IMAGE" \
-            -c 'cd /lynis && ./lynis audit system --quick --no-colors \
-                --profile /container.prf \
-                --report-file /out/lynis-report.dat --logfile /out/lynis.log \
-                --auditor github-actions; \
-                chmod 644 /out/lynis-report.dat /out/lynis.log 2>/dev/null' || true
-          index=$(grep '^hardening_index=' "$LYNIS_OUT/lynis-report.dat" \
-            | head -1 | cut -d= -f2 || true)
-          warnings=$(grep -c '^warning\[\]' "$LYNIS_OUT/lynis-report.dat" || true)
-          printf 'hardening_index=%s\nwarnings=%s\n' \
-            "${index:-unknown}" "${warnings:-0}" >> "$GITHUB_OUTPUT"
       - name: Compute container-hardening report
         env:
           LYNIS_OUT: ${{ runner.temp }}/lynis-out

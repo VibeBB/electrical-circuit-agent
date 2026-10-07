@@ -26,6 +26,8 @@ jobs:
   prune:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
+    # No actions/cache usage: forbid restore and save entirely.
+    cache-mode: none
     permissions:
       contents: read
       # Reads stored attestations to keep gated images.

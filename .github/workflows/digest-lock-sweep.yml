@@ -16,6 +16,8 @@ jobs:
   sweep:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    # No actions/cache usage: forbid restore and save entirely.
+    cache-mode: none
     permissions:
       # Dispatches the post-merge workflows on main; bot merges do not
       # fire push events.

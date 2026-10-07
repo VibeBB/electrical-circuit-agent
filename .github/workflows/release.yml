@@ -32,6 +32,8 @@ jobs:
     # Covers the slow path: direct-push rejection → bump PR + dispatched
     # checks + merge wait.
     timeout-minutes: 45
+    # No actions/cache usage: forbid restore and save entirely.
+    cache-mode: none
     permissions:
       actions: write # approve gated pull_request runs and dispatch ci.yml checks
       contents: write # push the version bump to main or a bot branch
@@ -98,6 +100,8 @@ jobs:
     needs: [bump-version, verify, install-smoke]
     runs-on: ubuntu-26.04
     timeout-minutes: 15
+    # No actions/cache usage: forbid restore and save entirely.
+    cache-mode: none
     permissions:
       contents: write # create the release tag and GitHub release
     env:
