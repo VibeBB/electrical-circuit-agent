@@ -544,7 +544,8 @@ def test_som_batch_numbers_and_overlays_mechanical_tokens(
     assert loaded_item.glyph_findings == [glyph_finding]
     with Image.open(image_path) as image:
         assert image.convert("RGB").getbbox() is not None
-        assert any(pixel != (255, 255, 255) for pixel in image.convert("RGB").getdata())
+        rgb = image.convert("RGB").tobytes()
+        assert any(rgb[offset : offset + 3] != b"\xff\xff\xff" for offset in range(0, len(rgb), 3))
 
 
 def test_som_answers_resolve_token_ids_to_bound_lane_text(
