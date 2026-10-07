@@ -344,6 +344,18 @@ jobs:
           if-no-files-found: error
       - name: Clone OpenHands SDK
         run: git clone --depth 1 --branch "v${SDK_VERSION}" https://github.com/OpenHands/software-agent-sdk "$RUNNER_TEMP/sdk"
+      - name: Bump SDK fsspec for CVE-2026-104851
+        # SDK v${SDK_VERSION}'s root uv.lock pins fsspec 2025.9.0, which the
+        # agent-server build installs via `uv sync --frozen` and the Trivy
+        # gate flags as a fixable HIGH (fixed upstream in 2026.6.0).
+        # Re-resolve just that package in the cloned lockfile before the
+        # build. Fail-closed: the lock must move to >= 2026.6.0.
+        run: |
+          set -euo pipefail
+          uv lock --project "$RUNNER_TEMP/sdk" --upgrade-package fsspec
+          newver=$(grep -A2 'name = "fsspec"' "$RUNNER_TEMP/sdk/uv.lock" | grep 'version =' | head -1 | cut -d'"' -f2)
+          echo "fsspec in SDK lock: $newver"
+          python3 -c "import sys; sys.exit(0 if tuple(map(int, '$newver'.split('.'))) >= (2026, 6, 0) else 'fsspec still vulnerable')"
       - name: Stabilize server build cache tag
         # Upstream keys the registry cache tag on the base-image digest, so
         # every new tools digest opens a fresh (empty) cache namespace and
