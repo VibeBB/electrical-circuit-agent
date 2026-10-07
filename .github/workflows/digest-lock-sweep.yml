@@ -16,7 +16,11 @@ jobs:
   sweep:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
-    # No actions/cache usage: forbid restore and save entirely.
+    # No actions/cache usage: forbid restore and save entirely. The token
+    # consequently carries no cache scopes, so harden-runner's optional
+    # cache lookup logs "cache read/write denied" warnings — expected and
+    # harmless under this hardening (the run succeeds; there is no
+    # harden-runner input to silence it).
     cache-mode: none
     permissions:
       # Dispatches the post-merge workflows on main; bot merges do not
