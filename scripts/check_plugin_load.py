@@ -34,12 +34,14 @@ EXPECTED_SKILLS = {
     "circuit-libraries",
     "circuit-library-authoring",
     "circuit-library-guard",
+    "circuit-out-rules",
     "circuit-verification",
     "circuit-workflow",
 }
 EXPECTED_COMMANDS = {"design", "doctor", "drc", "erc", "export"}
 EXPECTED_SESSION_START_HOOKS = {
     "circuit-doctor",
+    "ensure-agent-profiles",
     "ensure-llm-profiles",
     "ensure-part-author-profiles",
     "intake-attachments",

@@ -1,0 +1,18 @@
+{
+  "name": "circuit-reverify-weekly",
+  "plugins": [
+    {
+      "source": "github:VibeBB/electrical-circuit-agent",
+      "ref": "main",
+      "repo_path": "plugins/circuit"
+    }
+  ],
+  "prompt": "Re-run the circuit design verification for the checked-in board project in the workspace. Run `/circuit:erc <schematic.kicad_sch>` and `/circuit:drc <board.kicad_pcb>` plus the connectivity gate on the project's design files, compare the verdicts to the recorded ones in the design report, and write a short result to observations/circuit/. If any gate regressed from pass to fail or unknown, say so explicitly in the run summary.",
+  "trigger": {
+    "type": "cron",
+    "schedule": "0 3 * * 1",
+    "timezone": "UTC"
+  },
+  "repos": [],
+  "enabled": true
+}

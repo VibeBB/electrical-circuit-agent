@@ -2,10 +2,16 @@
 
 Hook commands resolve the plugin root (`CIRCUIT_PLUGIN_ROOT`, the project
 `plugins/circuit`, `~/.agents/plugins/circuit`,
-`~/.openhands/plugins/installed/circuit`) then exec the script. Scripts read
+`~/.openhands/plugins/installed/circuit`, `${HOME}/plugins/installed/circuit`
+or `${OH_PERSISTENCE_DIR}/plugins/installed/circuit`) then exec the script.
+The two extra candidates resolve the plugin inside an OpenHands docker
+conversation runtime (inner `HOME=/var/openhands/.openhands`), where
+`circuit_launcher.py` then fails closed with guidance — docker is
+unavailable there by design. Scripts read
 one JSON event on stdin; exit 0 allows, exit 2 denies with stderr shown to
-the agent, other exits are non-blocking errors. `_records.py` and
-`require_records.py` are canonical across the family — never edit locally
+the agent, other exits are non-blocking errors. `_records.py`,
+`require_records.py`, `ensure_llm_profiles.py` and `ensure_agent_profiles.py`
+are canonical across the family — never edit locally
 (`scripts/check_shared_hooks.py` verifies normalized-AST hashes).
 
 ## Plugin hooks (`plugins/circuit/hooks/hooks.json`)
@@ -14,7 +20,8 @@ the agent, other exits are non-blocking errors. `_records.py` and
 |---|---|---|---|---|
 | session_start | `*` | circuit-doctor | Reports environment diagnostics into the session context | none |
 | session_start | `*` | intake-attachments | Materializes newly attached images to `intake/attachments/<sha256[:12]>.<ext>` + `manifest.jsonl` | intake/attachments/* |
-| session_start | `*` | ensure-llm-profiles | Ensures `.openhands/profiles/` LLM profiles exist | .openhands/profiles/* |
+| session_start | `*` | ensure-llm-profiles | Ensures `.openhands/profiles/` LLM profiles exist (`vibebb-author`/`vibebb-review`/`oracle`, cloned from the active profile; shared canon) | .openhands/profiles/* |
+| session_start | `*` | ensure-agent-profiles | Writes `~/.openhands/agent-profiles/vibebb-circuit.json` when missing: openhands-kind, `llm_profile_ref=vibebb-author`, MCP scoped to `circuit`, no secrets (shared canon) | .openhands/agent-profiles/* |
 | session_start | `*` | ensure-part-author-profiles | Ensures the lane-a/b author profiles exist | .openhands/profiles/* |
 | session_start | `*` | require-records (`session-start`) | Injects the VRP hint: which record tools exist and what must be left | none (records-status.json read only) |
 | user_prompt_submit | `*` | intake-attachments | Same attachment materialization per user message | intake/attachments/* |

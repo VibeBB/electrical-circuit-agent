@@ -23,7 +23,7 @@ def test_plugin_loads_all_assets() -> None:
         "circuit-part-author-a",
         "circuit-part-author-b",
     }
-    assert len(plugin.skills) == 9
+    assert len(plugin.skills) == 10
     assert any(skill.name == "circuit-library-authoring" for skill in plugin.skills)
     assert set(plugin.mcp_config) == {"circuit", "konnect"}
     assert plugin.hooks is not None
@@ -37,6 +37,10 @@ def test_plugin_loads_all_assets() -> None:
         type(skill.trigger) for skill in plugin.skills if skill.name == "circuit-brief-rules"
     }
     assert brief_trigger_types == {PathTrigger}
+    out_trigger_types = {
+        type(skill.trigger) for skill in plugin.skills if skill.name == "circuit-out-rules"
+    }
+    assert out_trigger_types == {PathTrigger}
 
     protect_command = plugin.hooks.pre_tool_use[0].hooks[0].command
     assert plugin.hooks.pre_tool_use[0].matcher == "*"
@@ -205,4 +209,5 @@ def test_ensure_llm_profiles_tolerates_missing_settings(tmp_path: Path) -> None:
     assert json.loads(proc.stdout)["missing"] == [
         "vibebb-author",
         "vibebb-review",
+        "oracle",
     ]

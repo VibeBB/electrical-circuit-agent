@@ -13,7 +13,7 @@ mcp_config:
     command: sh
     args:
       - -c
-      - 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit"; do [ -f "$c/scripts/circuit_launcher.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || { echo "circuit plugin root unresolved" >&2; exit 2; }; CIRCUIT_AUTHORING_LANE=a CIRCUIT_LLM_PROFILE=vibebb-part-author-a exec python3 "$p/scripts/circuit_launcher.py" mcp_server'
+      - 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit" "${HOME:-}/plugins/installed/circuit" "${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit"; do [ -f "$c/scripts/circuit_launcher.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || { echo "circuit plugin root unresolved" >&2; exit 2; }; CIRCUIT_AUTHORING_LANE=a CIRCUIT_LLM_PROFILE=vibebb-part-author-a exec python3 "$p/scripts/circuit_launcher.py" mcp_server'
   konnect:
     command: konnect
     env:
@@ -24,13 +24,13 @@ hooks:
       hooks:
         - type: command
           name: blind-author-lane-guard
-          command: 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit"; do [ -f "$c/hooks/scripts/guard_author_lane.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || exit 2; CIRCUIT_AUTHORING_LANE=a exec python3 "$p/hooks/scripts/guard_author_lane.py"'
+          command: 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit" "${HOME:-}/plugins/installed/circuit" "${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit"; do [ -f "$c/hooks/scripts/guard_author_lane.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || exit 2; CIRCUIT_AUTHORING_LANE=a exec python3 "$p/hooks/scripts/guard_author_lane.py"'
   post_tool_use:
     - matcher: circuit_part_author_commit
       hooks:
         - type: command
           name: record-authoring-commit
-          command: 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit"; do [ -f "$c/hooks/scripts/record_authoring_commit.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || exit 0; exec python3 "$p/hooks/scripts/record_authoring_commit.py"'
+          command: 'p=$(for c in "${CIRCUIT_PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit" "${HOME:-}/plugins/installed/circuit" "${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit"; do [ -f "$c/hooks/scripts/record_authoring_commit.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || exit 0; exec python3 "$p/hooks/scripts/record_authoring_commit.py"'
 max_iteration_per_run: 30
 max_budget_per_run: 3.0
 when_to_use_examples:
