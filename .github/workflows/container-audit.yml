@@ -98,22 +98,15 @@ jobs:
       # `trivy_envs.txt` file the action uses to pass envs between its
       # internal steps.
       - parallel:
-          - name: Scan tools image (Trivy SARIF)
+          - name: Scan tools image (Trivy JSON + SARIF)
             env:
-              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-tools-sarif
+              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-tools-scan
             # The digest is frozen; the vulnerability DB is not — this scan
             # surfaces newly disclosed CVEs against the shipped tools image.
-            run: |
-              set -euo pipefail
-              mkdir -p "$TRIVY_CACHE_DIR"
-              cp -a "$RUNNER_TEMP/trivy-cache/." "$TRIVY_CACHE_DIR/"
-              trivy image --scanners vuln,secret,misconfig \
-                --severity CRITICAL,HIGH --ignore-unfixed \
-                --format sarif --output trivy-circuit-tools.sarif \
-                "$PINNED_TOOLS_IMAGE"
-          - name: Scan tools image (Trivy JSON, full)
-            env:
-              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-tools-json
+            # One scan feeds both artifacts: the SARIF for code scanning is
+            # derived from the same JSON (trivy convert has no
+            # --ignore-unfixed, so unfixed vulnerabilities are dropped
+            # first and --severity applies the HIGH/CRITICAL limit).
             run: |
               set -euo pipefail
               mkdir -p "$TRIVY_CACHE_DIR"
@@ -121,20 +114,14 @@ jobs:
               trivy image --scanners vuln,secret,misconfig,license \
                 --list-all-pkgs --format json \
                 --output trivy-circuit-tools.json "$PINNED_TOOLS_IMAGE"
-          - name: Scan server image (Trivy SARIF)
+              jq '.Results = ((.Results // []) | map(if .Vulnerabilities then
+                    .Vulnerabilities |= map(select((.FixedVersion // "") != "")) else . end))' \
+                trivy-circuit-tools.json > "$RUNNER_TEMP/trivy-tools-sarif.json"
+              trivy convert --format sarif --severity HIGH,CRITICAL \
+                --output trivy-circuit-tools.sarif "$RUNNER_TEMP/trivy-tools-sarif.json"
+          - name: Scan server image (Trivy JSON + SARIF)
             env:
-              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-server-sarif
-            run: |
-              set -euo pipefail
-              mkdir -p "$TRIVY_CACHE_DIR"
-              cp -a "$RUNNER_TEMP/trivy-cache/." "$TRIVY_CACHE_DIR/"
-              trivy image --scanners vuln,secret,misconfig \
-                --severity CRITICAL,HIGH --ignore-unfixed \
-                --format sarif --output trivy-circuit-server.sarif \
-                "$PINNED_SERVER_IMAGE"
-          - name: Scan server image (Trivy JSON, full)
-            env:
-              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-server-json
+              TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-server-scan
             run: |
               set -euo pipefail
               mkdir -p "$TRIVY_CACHE_DIR"
@@ -142,6 +129,11 @@ jobs:
               trivy image --scanners vuln,secret,misconfig,license \
                 --list-all-pkgs --format json \
                 --output trivy-circuit-server.json "$PINNED_SERVER_IMAGE"
+              jq '.Results = ((.Results // []) | map(if .Vulnerabilities then
+                    .Vulnerabilities |= map(select((.FixedVersion // "") != "")) else . end))' \
+                trivy-circuit-server.json > "$RUNNER_TEMP/trivy-server-sarif.json"
+              trivy convert --format sarif --severity HIGH,CRITICAL \
+                --output trivy-circuit-server.sarif "$RUNNER_TEMP/trivy-server-sarif.json"
           - name: Run Docker CIS compliance reports
             env:
               TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache-cis
