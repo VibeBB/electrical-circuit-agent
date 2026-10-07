@@ -835,10 +835,12 @@ def check_python_versions(
         if match is not None:
             values.append((match.group(1), ".python-version"))
     for workflow in workflow_files(repo_root):
-        for minor in re.findall(
-            r'python-version:\s*"?(\d+\.\d+)"?',
-            workflow.read_text(encoding="utf-8"),
-        ):
+        text = workflow.read_text(encoding="utf-8")
+        # Quoted "3.x" strings catch matrix entries; the key pattern covers
+        # `python-version: 3.x` inputs.
+        minors = {f"3.{m}" for m in re.findall(r'"3\.(\d+)"', text)}
+        minors.update(re.findall(r'python-version:\s*"?(\d+\.\d+)"?', text))
+        for minor in sorted(minors):
             values.append((minor, workflow.name))
     tags = list_remote_tags("https://github.com/python/cpython")
     stable_minors = sorted(
@@ -850,7 +852,20 @@ def check_python_versions(
     )
     if not stable_minors:
         raise ValueError("no stable CPython minor series found")
-    latest = ".".join(str(part) for part in stable_minors[-1])
+    latest_minor = stable_minors[-1]
+    latest = ".".join(str(part) for part in latest_minor)
+
+    def _minor_of(v: str, src: str) -> tuple[int, int]:
+        m = re.search(r"(\d+)\.(\d+)", v)
+        if m is None:
+            raise ValueError(f"unparseable python version {v!r} in {src}")
+        return int(m.group(1)), int(m.group(2))
+
+    # A source that already pins the latest minor (a CI matrix spanning
+    # 3.12-3.15 alongside it) needs no update for its older legs.
+    sources_at_latest = {
+        source for value, source in values if _minor_of(value, source) >= latest_minor
+    }
     statuses: list[Status] = []
     seen: set[tuple[str, str]] = set()
     for value, source in values:
@@ -858,17 +873,14 @@ def check_python_versions(
         if key in seen:
             continue
         seen.add(key)
-        value_match = re.search(r"(\d+)\.(\d+)", value)
-        if value_match is None:
-            raise ValueError(f"unparseable python version {value!r} in {source}")
-        minor = (int(value_match.group(1)), int(value_match.group(2)))
+        minor = _minor_of(value, source)
         statuses.append(
             Status(
                 f"Python minor ({source})",
                 value,
                 latest,
                 source,
-                minor < stable_minors[-1],
+                minor < latest_minor and source not in sources_at_latest,
             )
         )
     return statuses
