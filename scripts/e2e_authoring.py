@@ -814,16 +814,159 @@ def _stage_create_project(run: AuthoringRun) -> None:
             )
 
 
+# Readable schematic placement: connectors enter top-left and the signal
+# chain snakes left-to-right down the sheet, spread over the usable area so
+# sch_lint's sheet-usage check passes. Board placements are PCB coordinates
+# and are never reused here.
+_SCHEMATIC_GRID_MAX_COLUMNS = 4
+_SCHEMATIC_MARGIN_X_MM = 20.0
+_SCHEMATIC_MARGIN_TOP_MM = 25.4
+# The ISO 7200 title block reaches ~45 mm up from the bottom edge; keep the
+# bottom row's symbols and their downward field text (≤ ~8 mm) clear of it.
+_SCHEMATIC_MARGIN_BOTTOM_MM = 60.0
+# Distance Reference/Value text is offset above the topmost / below the
+# bottom-most pin of a symbol so it clears the body (sch_lint flags any
+# property within 2.5 mm of the symbol anchor).
+_FIELD_CLEARANCE_MM = 3.81
+
+
+def _schematic_part_order(loaded_brief: brief.DesignBrief) -> list[str]:
+    """Order parts along the signal chain: connectors first, then net adjacency."""
+    seen: set[str] = set()
+    order: list[str] = []
+    for part in loaded_brief.parts:
+        if part.connector and part.reference not in seen:
+            seen.add(part.reference)
+            order.append(part.reference)
+    progressed = True
+    while progressed:
+        progressed = False
+        for net_item in loaded_brief.nets:
+            references = [token.split(".", 1)[0] for token in net_item.pins]
+            if not any(reference in seen for reference in references):
+                continue
+            for reference in references:
+                if reference not in seen:
+                    seen.add(reference)
+                    order.append(reference)
+                    progressed = True
+    for part in loaded_brief.parts:
+        if part.reference not in seen:
+            order.append(part.reference)
+    return order
+
+
+def _schematic_layout(loaded_brief: brief.DesignBrief, paper: str) -> dict[str, Point]:
+    """Return signal-chain positions waved across the usable sheet area.
+
+    Each successive part steps one column right and one row down, wrapping on
+    a cell-staggered diagonal, so any count ≥ 2 spans both axes (a single row
+    or column can never satisfy sch_lint's sheet-usage floor)."""
+    order = _schematic_part_order(loaded_brief)
+    count = len(order)
+    width, height = titleblock.PAPER_SIZES[paper]
+    rows = max(2, math.ceil(count / _SCHEMATIC_GRID_MAX_COLUMNS))
+    columns = min(count, max(2, math.ceil(count / rows)))
+    usable_x = width - 2 * _SCHEMATIC_MARGIN_X_MM
+    usable_y = height - _SCHEMATIC_MARGIN_TOP_MM - _SCHEMATIC_MARGIN_BOTTOM_MM
+    xs = (
+        [_SCHEMATIC_MARGIN_X_MM + usable_x / 2]
+        if columns == 1
+        else [_SCHEMATIC_MARGIN_X_MM + usable_x * index / (columns - 1) for index in range(columns)]
+    )
+    ys = [_SCHEMATIC_MARGIN_TOP_MM + usable_y * index / (rows - 1) for index in range(rows)]
+    positions: dict[str, Point] = {}
+    for index, reference in enumerate(order):
+        column = index % columns
+        row = (index // columns + column) % rows
+        positions[reference] = (xs[column], ys[row])
+    return positions
+
+
+def _place_symbol_fields(run: AuthoringRun) -> None:
+    """Move Reference/Value text off symbol bodies using pin geometry."""
+    references = [part.reference for part in run.loaded_brief.parts]
+    locations = run.session.call(
+        "batch_get_schematic_pin_locations",
+        {"schematic": str(run.schematic), "references": references},
+    )
+    components: object = None
+    if isinstance(locations, list):
+        components = cast(list[Any], locations)
+    elif isinstance(locations, dict):
+        components = cast(dict[str, Any], locations).get("components")
+    if not isinstance(components, list):
+        raise StepFailure("batch_get_schematic_pin_locations", f"unexpected result: {locations}")
+    for component in cast(list[Any], components):
+        if not isinstance(component, dict):
+            continue
+        item = cast(dict[str, Any], component)
+        reference = item.get("reference")
+        pins = item.get("pins")
+        x = item.get("x")
+        if not (
+            isinstance(reference, str) and isinstance(pins, list) and isinstance(x, (int, float))
+        ):
+            continue
+        ys: list[float] = []
+        for pin in cast(list[Any], pins):
+            if isinstance(pin, dict):
+                pin_y = cast(dict[str, Any], pin).get("y")
+                if isinstance(pin_y, (int, float)):
+                    ys.append(float(pin_y))
+        if not ys:
+            continue
+        arguments: dict[str, object] = {
+            "schematic": str(run.schematic),
+            "reference": reference,
+            "field_placements": {
+                "Reference": {"x": x, "y": min(ys) - _FIELD_CLEARANCE_MM},
+                "Value": {"x": x, "y": max(ys) + _FIELD_CLEARANCE_MM},
+            },
+        }
+        try:
+            run.session.call("edit_schematic_component", arguments)
+        except StepFailure:
+            # Multi-unit placements need an explicit unit; keep going when the
+            # op cannot move the fields — sch_lint judges the result.
+            with contextlib.suppress(StepFailure):
+                run.session.call("edit_schematic_component", {**arguments, "unit": 1})
+
+
+def _wire_schematic_nets(run: AuthoringRun) -> None:
+    """Draw real wires along each net's pin chain; labels still name the net."""
+    schematic = str(run.schematic)
+    pending: list[dict[str, str]] = []
+    for net_item in run.loaded_brief.nets:
+        endpoints = [token.split(".", 1) for token in net_item.pins]
+        for (ref1, pin1), (ref2, pin2) in pairwise(endpoints):
+            if ref1 == ref2:
+                continue  # a same-symbol shunt stays label-only
+            pending.append({"ref1": ref1, "pin1": pin1, "ref2": ref2, "pin2": pin2})
+    if not pending:
+        return
+    try:
+        run.session.call("batch_connect_pins", {"schematic": schematic, "connections": pending})
+        return
+    except StepFailure:
+        pass
+    for connection in pending:
+        # Fall back to one call per connection; whatever still fails keeps
+        # label-only connectivity for that path.
+        with contextlib.suppress(StepFailure):
+            run.session.call("connect_pins", {"schematic": schematic, **connection})
+
+
 def _stage_author_schematic(run: AuthoringRun) -> None:
     """Place symbols, wire nets, and dress the sheet (title block, label clamp)."""
     session = run.session
     loaded_brief = run.loaded_brief
     schematic = run.schematic
+    paper = titleblock.paper_for_part_count(len(loaded_brief.parts))
+    positions = _schematic_layout(loaded_brief, paper)
     components: list[dict[str, object]] = []
-    for index, part in enumerate(loaded_brief.parts):
-        placement = loaded_brief.board.placements.get(part.reference)
-        x = 50.8 + 38.1 * index
-        y = 50.8 + 38.1 * (index // 4)
+    for part in loaded_brief.parts:
+        x, y = positions[part.reference]
         component: dict[str, object] = {
             "lib_id": part.lib_id,
             "reference": part.reference,
@@ -835,15 +978,9 @@ def _stage_author_schematic(run: AuthoringRun) -> None:
         if part.value is not None:
             component["value"] = part.value
         components.append(component)
-        if placement is not None:
-            components[-1].update(
-                {
-                    "x": placement.x_mm,
-                    "y": placement.y_mm,
-                    "rotation": placement.rotation_deg,
-                }
-            )
     session.call("batch_place_components", {"schematic": str(schematic), "components": components})
+    _place_symbol_fields(run)
+    _wire_schematic_nets(run)
     for net_item in loaded_brief.nets:
         pins = [
             {"reference": token.split(".", 1)[0], "pin_number": token.split(".", 1)[1]}
@@ -969,6 +1106,24 @@ def _stage_schematic_advisories(run: AuthoringRun) -> None:
     run.advise_all("schematic", schematic_advisories, with_artifacts=True)
 
 
+# Readability findings that fail the authoring verdict even though sch_lint
+# reports them as warnings: an unreadable sheet fails, never relaxes.
+_READABILITY_FAILURE_TYPES = frozenset(
+    {
+        "property_on_symbol",
+        "sheet_underutilized",
+        "item_out_of_bounds",
+        "label_only_connectivity",
+    }
+)
+
+
+def _readability_failures(
+    report: sch_lint.SchLintReport,
+) -> list[sch_lint.SchLintFinding]:
+    return [finding for finding in report.findings if finding.type in _READABILITY_FAILURE_TYPES]
+
+
 def _stage_schematic_gate(run: AuthoringRun) -> SchematicGate:
     """Blocking schematic gates: sch_lint, netlist connectivity, kicad-cli ERC."""
     loaded_brief = run.loaded_brief
@@ -987,6 +1142,12 @@ def _stage_schematic_gate(run: AuthoringRun) -> SchematicGate:
     )
     if sch_lint_result.verdict != "pass":
         raise StepFailure("circuit.sch_lint", sch_lint_result.model_dump_json())
+    readability_failures = _readability_failures(sch_lint_result)
+    if readability_failures:
+        raise StepFailure(
+            "circuit.sch_lint.readability",
+            json.dumps([finding.model_dump(mode="json") for finding in readability_failures]),
+        )
 
     netlist_path = kicad_cli.export_netlist(schematic, reports_dir / f"{loaded_brief.name}.net")
     _record(
