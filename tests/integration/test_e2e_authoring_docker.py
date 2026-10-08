@@ -110,9 +110,7 @@ def test_e2e_authoring_in_tools_image(tmp_path: Path) -> None:
         "label_only_connectivity",
     }
     assert not [f for f in lint_report["findings"] if f["type"] in gated]
-    symbol_positions = re.findall(
-        r'\(symbol\s+\(lib_id "[^"]+"\)\s+\(at ([\d.]+) ([\d.]+)', text
-    )
+    symbol_positions = re.findall(r'\(symbol\s+\(lib_id "[^"]+"\)\s+\(at ([\d.]+) ([\d.]+)', text)
     assert len(symbol_positions) == 3
     assert len(set(symbol_positions)) == 3
     paper_match = re.search(r'\(paper "(\w+)"', text)
