@@ -12,7 +12,10 @@ permissions:
   attestations: read
 
 concurrency:
-  group: locked-image-check
+  # Scope the serialization to the ref: bot-branch digest dispatches
+  # otherwise take the single pending slot and cancel a queued main-push
+  # check (observed on dashboard-agent 2026-10-07).
+  group: locked-image-check-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
