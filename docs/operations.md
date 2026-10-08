@@ -1106,6 +1106,18 @@ build.
   pinned 0.75.0 is the latest release. `openhands-sdk`/`openhands-tools`
   rows in the report snapshot predate the 1.53.0 bump and were already
   current.
+- The report's `up to date` Action rows were stale in the same way:
+  `step-security/harden-runner` moved `e14015d5` (v2.21.1) to `ccd8616d`
+  (v2.22.1 — v2.22.0 adds Linux ARM64 community-tier, GHES self-hosted VM,
+  and macOS/Windows deny-list support, none applicable to the
+  GitHub-hosted linux runners here; v2.22.1 fixes GHES rule
+  initialization/connectivity), `actions/upload-artifact` `043fb46d`
+  (v7.0.1) to `cf430e03` (v7.0.2 — HTTP 429 retry honoring Retry-After,
+  `@actions/artifact` 6.3.1), and `actions/download-artifact` `3e5f45b2`
+  (v8.0.1) to `9000827c` (v8.0.2 — same 429-retry fix). All 47 pin pairs
+  across 15 workflows were updated as minimal sha+comment edits and the
+  six canon `EXPECTED` hashes in `scripts/check_shared_workflows.py`
+  refreshed in the same change.
 - Reason for adoption: scheduled dependency alignment; the `_cvpcb.kiface`
   ERC failure was re-tested on the rebuilt image (see the PR body).
 - Verification: see the PR for `verify_all --stage docs`/`--stage fast`,
