@@ -60,7 +60,7 @@ jobs:
       artifact-metadata: write # creates the attestation storage record
       security-events: write # uploads the Trivy SARIF scans to code scanning
     steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -230,7 +230,7 @@ jobs:
           category: trivy-circuit-tools
       - name: Upload tools Trivy JSON report
         if: ${{ always() && inputs.skip_tools != true && hashFiles('trivy-circuit-tools.json') != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: circuit-tools-trivy
           path: trivy-circuit-tools.json
@@ -344,7 +344,7 @@ jobs:
           push-to-registry: true
       - name: Upload full tools SPDX SBOM
         if: inputs.skip_tools != true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: circuit-tools-spdx-sbom
           path: ${{ runner.temp }}/circuit-tools.full.spdx.json
@@ -506,7 +506,7 @@ jobs:
           category: trivy-circuit-server
       - name: Upload server Trivy JSON report
         if: ${{ always() && hashFiles('trivy-circuit-server.json') != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: circuit-server-trivy
           path: trivy-circuit-server.json
@@ -582,7 +582,7 @@ jobs:
           sbom-path: ${{ runner.temp }}/circuit-server.spdx.json
           push-to-registry: true
       - name: Upload full server SPDX SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: circuit-server-spdx-sbom
           path: ${{ runner.temp }}/circuit-server.full.spdx.json

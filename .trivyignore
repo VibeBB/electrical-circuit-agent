@@ -9,8 +9,8 @@
 # hardening" for the full analysis.
 #
 # --- jackson inside freerouting.jar (circuit-tools AND circuit-server) -----
-# freerouting-2.4.1.jar is a sha256-pinned upstream fat jar; 2.4.1 is the
-# latest upstream release (2026-09-03) and carries jackson 2.22.1. No
+# freerouting-2.5.0.jar is a sha256-pinned upstream fat jar; 2.5.0 is the
+# latest upstream release (2026-10-05) and still carries jackson 2.22.1. No
 # upstream release with patched jackson exists. Freerouting parses local
 # project files and is not a network service. Re-evaluate at the next
 # freerouting release bump.

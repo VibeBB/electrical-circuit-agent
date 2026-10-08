@@ -1055,6 +1055,74 @@ build.
 - Verification: see the PR for `verify_all --stage fast`, plugin load,
   and shared-workflow results.
 
+### KiCad nightly, FreeRouting, and CERN library update review
+
+- Checked on: 2026-10-08
+- KiCad core moved from `202609302019+55110814ee~189~ubuntu26.04.1` to
+  `202610072102+dc102b0059~189~ubuntu26.04.1` (281 upstream commits, the
+  majority Weblate translations). Reviewed changes cover a `LIB_SYMBOL`
+  cache-architecture overhaul and related cache-invalidation fixes, the
+  new `API: Implement SaveDocumentAs` call, pcb design-block placement
+  and rule-area replacement fixes, a schematic move/drag mode-switching
+  fix, embedded-font checks on SCH_TEXTBOX/SCH_TABLECELL/SCH_FIELD, and
+  twisted-pair transmission-line loss corrections, plus the usual
+  nullptr/out-of-bounds/divide-by-zero hardening. The API surface is
+  consumed only through `kicad-cli` subprocess calls here, so no plugin
+  or fixture change is required.
+- Symbols moved to `202610052347+e1bb0a65c~12~ubuntu26.04.1` (6 commits:
+  CAT5171 digital potentiometer, an SN76489 NC pin-position fix, generic
+  light-pipe, SAMA7D65-4HB, CC1190 RF front-end, and a VINT power
+  symbol — additive entries plus one pin-position correction).
+- Footprints moved to `202610052315+51f8a59ed~14~ubuntu26.04.1` (2
+  commits: TE M.2 connectors, and a revert of the Schaffner RN112-04
+  choke courtyard fix adopted in the previous bump — upstream decided
+  the courtyard change was wrong, so our library returns to the prior
+  land pattern).
+- FreeRouting moved from `2.4.1` to `2.5.0` (221 commits). The release
+  unifies `BatchOptimizer` into a single canonical multi-threaded
+  deterministic routing engine, adds versioned router scoring and
+  telemetry, composite one-turn autorouting with multi-file I/O and a
+  diagnostic DRC summary on the API/MCP surface, dual-user analytics,
+  and a search-tree query/removal race fix. It is consumed only as an
+  unmodified `java -jar freerouting.jar` subprocess driven by Konnect's
+  Specctra tools; the fat-jar entry point and the `Freerouting v2.5.0`
+  banner are unchanged, so the Dockerfile version probe still applies.
+  The jar still bundles jackson 2.22.1, so the `.trivyignore` jackson
+  waivers stay in force with refreshed comments; the v2.5.0 LICENSE
+  asset was re-verified (GPL-3.0).
+- The CERN library submodule moved from
+  `eec34374e810d4253b6a2764687efbfbb8ad29a5` to
+  `5debc1bef23be0066d893e3ddabe0393d48cd679` (2026-10-08, two sync
+  commits past the checker-reported `e9d9c931`): upstream library
+  regeneration adding TRACO THN15N, WAGO 832-3623, and SAMTEC
+  ADF6/UCC8/UEC5 footprints plus Optocouplers and Standard Logic
+  symbols. LICENSE and LICENSES/ are unchanged.
+- `Python minor (pyproject.toml)` stays at the 3.12 floor: a deferral
+  was recorded in `scripts/dependency_update_deferrals.json` (target
+  `Python minor (pyproject.toml)`, version `3.x`, recheck 2027-01-08).
+  3.12/3.13 remain the supported floor while 3.14 runs in required CI
+  legs and 3.15 as the advisory canary per the promotion policy below.
+- The Trivy binary `unknown` rows were a transient fetch failure; the
+  pinned 0.75.0 is the latest release. `openhands-sdk`/`openhands-tools`
+  rows in the report snapshot predate the 1.53.0 bump and were already
+  current.
+- The report's `up to date` Action rows were stale in the same way:
+  `step-security/harden-runner` moved `e14015d5` (v2.21.1) to `ccd8616d`
+  (v2.22.1 — v2.22.0 adds Linux ARM64 community-tier, GHES self-hosted VM,
+  and macOS/Windows deny-list support, none applicable to the
+  GitHub-hosted linux runners here; v2.22.1 fixes GHES rule
+  initialization/connectivity), `actions/upload-artifact` `043fb46d`
+  (v7.0.1) to `cf430e03` (v7.0.2 — HTTP 429 retry honoring Retry-After,
+  `@actions/artifact` 6.3.1), and `actions/download-artifact` `3e5f45b2`
+  (v8.0.1) to `9000827c` (v8.0.2 — same 429-retry fix). All 47 pin pairs
+  across 15 workflows were updated as minimal sha+comment edits and the
+  six canon `EXPECTED` hashes in `scripts/check_shared_workflows.py`
+  refreshed in the same change.
+- Reason for adoption: scheduled dependency alignment; the `_cvpcb.kiface`
+  ERC failure was re-tested on the rebuilt image (see the PR body).
+- Verification: see the PR for `verify_all --stage docs`/`--stage fast`,
+  plugin load, image build, and the ERC re-test results.
+
 ### OpenHands runtime surfaces
 
 Runtime policy surfaces the plugin declares but the host executes:

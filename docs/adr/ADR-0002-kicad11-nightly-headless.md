@@ -70,3 +70,12 @@ symbols `202609221218+1565b6644~12~ubuntu26.04.1`, and footprints
 librarian and pinned by SHA-256. The `_cvpcb.kiface` ERC failure was re-tested
 on the built image: `kicad-cli sch erc` and the docker integration tests pass,
 so the update was adopted.
+
+### Addendum: 2026-10-08 pin update to the 10-07 build
+
+The pins moved to the 10-07 core `202610072102+dc102b0059~189~ubuntu26.04.1`,
+symbols `202610052347+e1bb0a65c~12~ubuntu26.04.1`, and footprints
+`202610052315+51f8a59ed~14~ubuntu26.04.1`, still fetched from the Launchpad
+librarian and pinned by SHA-256. The `_cvpcb.kiface` ERC failure was re-tested
+on the built image: `kicad-cli sch erc --format json` on the smoke fixture
+returns a clean report (0 violations), so the update was adopted.
