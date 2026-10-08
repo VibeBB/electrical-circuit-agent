@@ -45,6 +45,31 @@ def _run_authoring(
     return subprocess.run(command, capture_output=True, text=True, check=False)
 
 
+def _read_workdir_text(image: str, workdir: Path, name: str) -> str:
+    # Konnect writes some artifacts mode 0600 owned by the image's `circuit`
+    # user; the host test process runs under a different uid and cannot open
+    # them directly.
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--user",
+            "circuit",
+            "-v",
+            f"{workdir}:{workdir}:ro",
+            image,
+            "cat",
+            str(workdir / name),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
 def test_e2e_authoring_in_tools_image(tmp_path: Path) -> None:
     image = os.environ.get("CIRCUIT_TOOLS_IMAGE")
     if not image:
@@ -96,8 +121,7 @@ def test_e2e_authoring_in_tools_image(tmp_path: Path) -> None:
 
     # Signal-chain layout: symbols on-sheet at distinct positions, real wires
     # drawn, and none of the readability findings the gate now fails on.
-    schematic = workdir / "led_loop.kicad_sch"
-    text = schematic.read_text(encoding="utf-8")
+    text = _read_workdir_text(image, workdir, "led_loop.kicad_sch")
     assert "(wire" in text, "schematic carries no drawn wires"
     lint_report = json.loads(
         (workdir / "circuit-reports" / "led_loop.sch_lint.json").read_text(encoding="utf-8")
