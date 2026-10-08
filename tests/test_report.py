@@ -4,7 +4,7 @@ from circuit.advisory import AdvisoryResult, merge_detail
 from circuit.brief import load_brief
 from circuit.kicad_cli import JobsetResult, Report
 from circuit.netlist import check_connectivity, parse_netlist
-from circuit.report import build_design_report, write_report
+from circuit.report import VISION_RECORD_WITH, build_design_report, vision_points, write_report
 from circuit.sch_lint import SchLintReport
 
 ROOT = Path(__file__).parent
@@ -82,6 +82,50 @@ def test_design_report_passes_only_when_all_gates_pass(tmp_path: Path) -> None:
         sch_lint=_sch_lint(),
     )
     assert value.verdict == "pass"
+
+
+def test_vision_points_list_renders_with_checklist_and_record_hint() -> None:
+    renders = [
+        "circuit-reports/render/led-loop-top.png",
+        "circuit-reports/render/led-loop-bottom.png",
+        "circuit-reports/board-F_Cu.png",
+        "circuit-reports/led-loop.png",
+        "circuit-reports/diff.png",
+    ]
+    points = vision_points(renders)
+
+    assert [p.image_path for p in points] == renders
+    assert [p.checklist for p in points] == [
+        "board_top",
+        "board_bottom",
+        "board_layers",
+        "schematic",
+        "diff",
+    ]
+    assert all(p.record_with == VISION_RECORD_WITH for p in points)
+
+
+def test_design_report_carries_vision_points(tmp_path: Path) -> None:
+    brief_path = ROOT / "data" / "brief_led_loop.json"
+    renders = ["circuit-reports/render/led-loop-top.png"]
+    value = build_design_report(
+        load_brief(brief_path),
+        brief_path=brief_path,
+        kicad_version="10.99.0",
+        connectivity=_connectivity(),
+        erc=None,
+        drc=None,
+        exports={},
+        renders=renders,
+    )
+
+    assert value.renders == renders
+    assert [p.image_path for p in value.vision_points] == renders
+    assert value.vision_points[0].checklist == "board_top"
+
+    output = tmp_path / "design-report.json"
+    write_report(value, output)
+    assert '"vision_points"' in output.read_text(encoding="utf-8")
 
 
 def test_advisory_error_does_not_change_gate_verdict(tmp_path: Path) -> None:
