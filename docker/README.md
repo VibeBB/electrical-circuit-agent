@@ -15,12 +15,12 @@ upstream Specctra export limitation).
 | Content | Pin |
 |---|---|
 | Ubuntu | `26.04` |
-| KiCad | `202609290253+1dd7ad3604~189~ubuntu26.04.1` |
-| KiCad footprints | `202609270717+b5e7a752f~14~ubuntu26.04.1` |
-| KiCad symbols | `202609271717+716edc43f~12~ubuntu26.04.1` |
+| KiCad | `202610072102+dc102b0059~189~ubuntu26.04.1` |
+| KiCad footprints | `202610052315+51f8a59ed~14~ubuntu26.04.1` |
+| KiCad symbols | `202610052347+e1bb0a65c~12~ubuntu26.04.1` |
 | Konnect | `v0.13.0`, release commit and SHA-256 in the Dockerfile |
 | IBM Semeru Open JRE | `27.0.0.0`, release tarball SHA-256 in the Dockerfile |
-| FreeRouting | `v2.4.1`, release JAR SHA-256 in the Dockerfile |
+| FreeRouting | `v2.5.0`, release JAR SHA-256 in the Dockerfile |
 | CERN libraries | submodule commit of `libraries/cern-kicad-libs` (also recorded in `cern-kicad-libs.commit` inside the image and the OCI label `circuit.cern.commit`) |
 
 ## Build and smoke

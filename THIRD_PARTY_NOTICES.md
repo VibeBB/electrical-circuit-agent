@@ -23,9 +23,9 @@ legal advice.
 - License: GPL-3.0-or-later
 - Source: <https://ppa.launchpadcontent.net/kicad/kicad-dev-nightly/>
 - Package: `kicad-nightly`
-- Version: `202609302019+55110814ee~189~ubuntu26.04.1`
-- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202609302019+55110814ee~189~ubuntu26.04.1_amd64.deb)
-- Package SHA-256: `63e5e2b3b8a2b627e8a4a0b0c5fc33b0ac875cab1c796e3ef806df27cc620c8e`
+- Version: `202610072102+dc102b0059~189~ubuntu26.04.1`
+- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202610072102+dc102b0059~189~ubuntu26.04.1_amd64.deb)
+- Package SHA-256: `ac7a09d76d494464fb516d4a754886525bcc2ba0d7d72b624da76f4ba8805689`
 - Executable: `/usr/lib/kicad-nightly/bin/kicad-cli`
 
 ## KiCad official symbol / footprint libraries
@@ -37,8 +37,8 @@ legal advice.
   waives Section 3 of CC-BY-SA.
 - Packages: `kicad-nightly-symbols`, `kicad-nightly-footprints`
 - Versions:
-  - symbols `202609271717+716edc43f~12~ubuntu26.04.1`
-  - footprints `202609302018+9326b9efd~14~ubuntu26.04.1`
+  - symbols `202610052347+e1bb0a65c~12~ubuntu26.04.1`
+  - footprints `202610052315+51f8a59ed~14~ubuntu26.04.1`
 
 ## KiCad Library Convention checker
 
@@ -66,19 +66,19 @@ legal advice.
 
 - License: CERN-OHL-P-2.0
 - Source: <https://gitlab.com/ohwr/cern-kicad-libs>
-- Commit: `eec34374e810d4253b6a2764687efbfbb8ad29a5`
-- Commit date: 2026-10-03 UTC
+- Commit: `5debc1bef23be0066d893e3ddabe0393d48cd679`
+- Commit date: 2026-10-08 UTC
 - Location: `libraries/cern-kicad-libs`
 - The upstream LICENSE is preserved inside the submodule.
 
 ## FreeRouting
 
 - License: GPL-3.0
-- Version: v2.4.1
-- Asset: `freerouting-2.4.1.jar`
-- SHA-256: `251101c3eeac22d7e7dfcf6796603279e5d1000283eb82d8f093780f7afc6aa9`
-- Source: <https://github.com/freerouting/freerouting/releases/tag/v2.4.1>
-- LICENSE: <https://raw.githubusercontent.com/freerouting/freerouting/v2.4.1/LICENSE>
+- Version: v2.5.0
+- Asset: `freerouting-2.5.0.jar`
+- SHA-256: `f6f51bb02245e8e717f9359bd260cc9c5c0b1bc0acc8b7cb2cd5b8ffeb5de3c7`
+- Source: <https://github.com/freerouting/freerouting/releases/tag/v2.5.0>
+- LICENSE: <https://raw.githubusercontent.com/freerouting/freerouting/v2.5.0/LICENSE>
 - Redistribution: the release JAR is placed unmodified at
   `/opt/freerouting/freerouting.jar` and launched by Konnect as a separate
   `java -jar` process. It is not imported or linked into Python.
