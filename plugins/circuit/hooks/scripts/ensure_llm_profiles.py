@@ -5,9 +5,14 @@ Every wire sub-agent declares `model: vibebb-author` or `model:
 vibebb-review`, resolved through the SDK's LLMProfileStore
 (~/.openhands/profiles/<name>.json). A missing profile raises ValueError
 at task spawn and silently disables task delegation. This hook clones the
-conversation's `active_profile` into the two vibebb profile slots when
+conversation's `active_profile` into the three vibebb profile slots when
 they are absent so `task` works out of the box; operators can then edit
 the files to route each lane at a different model.
+
+When `settings.json` has no `active_profile` (GUI-configured hosts write
+the lane into `profiles/default.json` and `agent_settings.llm` instead),
+the hook falls back to `profiles/default.json`, then to the inline
+`agent_settings.llm` dict, so seeding still works there.
 
 Advisory only: reads settings, writes absent files, prints a JSON
 finding, always exits 0.
@@ -99,31 +104,56 @@ def _atomic_write(path: Path, payload: str) -> None:
         raise
 
 
+def _template(
+    settings: dict[str, object], store: Path, findings: list[str]
+) -> tuple[dict[str, object] | None, str | None]:
+    """LLM config dict to clone into the vibebb lanes, and its source label.
+
+    Order: settings.active_profile -> profiles/default.json (the lane the
+    AgentCanvas GUI writes when active_profile stays null) ->
+    settings.agent_settings.llm (inline config dict).
+    """
+    active = settings.get("active_profile")
+    if isinstance(active, str) and active:
+        src = store / f"{active}.json"
+        candidate = _read_profile(src)
+        if isinstance(candidate, dict):
+            return candidate, active
+        findings.append(f"active_profile {active!r} unreadable at {src}")
+    else:
+        findings.append("no active_profile in ~/.openhands/settings.json")
+    candidate = _read_profile(store / "default.json")
+    if isinstance(candidate, dict):
+        return candidate, "profiles/default.json"
+    agent_settings = settings.get("agent_settings")
+    if isinstance(agent_settings, dict):
+        llm = cast(
+            "dict[str, object] | None",
+            cast("dict[str, object]", agent_settings).get("llm"),
+        )
+        if llm is not None and llm.get("model"):
+            return dict(llm), "agent_settings.llm"
+    return None, None
+
+
 def main() -> int:
     settings = _settings()
-    active = settings.get("active_profile")
     findings: list[str] = []
     store = Path.home() / ".openhands" / "profiles"
 
-    if not isinstance(active, str) or not active:
-        findings.append("no active_profile in ~/.openhands/settings.json")
+    template, source = _template(settings, store, findings)
+    if template is None:
+        findings.append("no LLM profile source found to clone")
     else:
-        src = store / f"{active}.json"
-        try:
-            template = json.loads(src.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            template = None
-            findings.append(f"active_profile {active!r} unreadable at {src}")
-        if isinstance(template, dict):
-            for name in _PROFILES:
-                dest = store / f"{name}.json"
-                if dest.is_file():
-                    continue
-                try:
-                    _atomic_write(dest, json.dumps(template, indent=2) + "\n")
-                    findings.append(f"provisioned {name} from {active}")
-                except OSError as exc:
-                    findings.append(f"could not write {dest}: {exc}")
+        for name in _PROFILES:
+            dest = store / f"{name}.json"
+            if dest.is_file():
+                continue
+            try:
+                _atomic_write(dest, json.dumps(template, indent=2) + "\n")
+                findings.append(f"provisioned {name} from {source}")
+            except OSError as exc:
+                findings.append(f"could not write {dest}: {exc}")
 
     missing = [n for n in _PROFILES if not (store / f"{n}.json").is_file()]
     # Vision capability only gates the VibeBB review lane; `oracle` is a
