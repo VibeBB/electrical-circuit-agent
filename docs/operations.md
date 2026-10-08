@@ -1362,6 +1362,23 @@ symbol or wire positions are electrical and must be re-placed through
 Konnect ops. e2e authoring runs the clamp between title-block injection
 and the lint gate.
 
+e2e authoring escalates four lint findings to verdict failures even though
+sch_lint reports them at warning severity: `property_on_symbol`,
+`sheet_underutilized`, `item_out_of_bounds`, and `label_only_connectivity`
+(`_readability_failures` in `scripts/e2e_authoring.py`). An unreadable
+sheet fails — never relaxes. To satisfy the gate the deterministic flow
+places symbols on a schematic-only layout: `_schematic_part_order` walks
+the net list (connectors first, then net adjacency in brief order) and
+`_schematic_layout` waves that chain across the usable sheet area — board
+`placements` are PCB coordinates and are never reused as schematic
+positions. After placement, `edit_schematic_component` `field_placements`
+moves Reference/Value text above the topmost and below the bottom-most pin
+of each symbol (Konnect's canonical field positions can sit on the symbol
+body), `_wire_schematic_nets` draws real wires along each net's pin chain
+via `batch_connect_pins` (per-connection `connect_pins` retry, labels kept
+as the naming/fallback path via `batch_connect_to_net`), so connectivity
+is drawn, not just labelled.
+
 ### Canvas profile scoping
 
 Agent Canvas v1.19+ supports `mcp_server_refs` (an agent profile can restrict
