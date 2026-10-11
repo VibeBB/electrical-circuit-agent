@@ -67,6 +67,7 @@ Machine-readable design brief models and helpers.
 - `Part:`
 - `Net:`
 - `Board:`
+- `FabricationSpec:`
 - `DftSpec:`
 - `Alternate:`
 - `DeratingRule:`
@@ -224,6 +225,14 @@ Installation diagnostics for the circuit plugin.
 
 - `checks:`
 - `main:`
+
+## `fabrication.py`
+
+Bare-board fabrication spec checked against the authored KiCad PCB (`*.fabrication.json`).
+
+- `FabricationCheck:`
+- `FabricationReport:`
+- `check_fabrication:` — Compare the authored board with the brief fabrication requirements.
 
 ## `firmware.py`
 
