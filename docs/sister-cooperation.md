@@ -67,3 +67,24 @@ hashes, artifact hashes, gate verdicts, record refs, `responded_at`.
 Because several consumers validate with `extra="forbid"`, the interchange
 shapes cannot carry optional VRP fields (`decision_refs`, source sha256) —
 the reasoning binding lives in the liaison responses instead.
+
+## Change control (ECR/ECO)
+
+A change to a file that another agent pins by sha256 goes through
+UX-creator's change records, never a silent re-pin. There is no human
+approval step.
+
+1. Raise `<id>.ecr.json` with the reason, the proposal and each file to
+   change with its current sha256.
+2. After regenerating, write `<id>.eco.json` with each file's `before` and
+   `after` sha256, the gate report that passed it (verdict `pass`, citing
+   the `after` sha256) and the AI review findings with their dispositions.
+   A `blocker` closes only as `fixed`, and the author cannot review its own
+   change.
+3. `ux change <eco>` (MCP `ux_change_check`) finds every consumer that pins
+   a changed file. It fails if one still pins the old sha256, or re-pinned
+   without being listed in the ECO.
+
+AI review findings can only stop a change. This plugin's deterministic
+gates and the change check decide. The record formats are in
+[UX-creator-agent `docs/sister-cooperation.md`](https://github.com/VibeBB/UX-creator-agent/blob/main/docs/sister-cooperation.md#change-control-ecreco-and-design-review).
