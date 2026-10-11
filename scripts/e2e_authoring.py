@@ -27,6 +27,7 @@ from circuit import (
     derating,
     dft,
     drawing_sheet,
+    fabrication,
     fit_sheet,
     intake,
     kicad_cli,
@@ -1672,6 +1673,23 @@ def _stage_exports(run: AuthoringRun) -> None:
     board = run.board
     schematic = run.schematic
     exports_dir = run.workdir / "exports"
+    loaded_brief = brief.load_brief(run.brief_path)
+    if loaded_brief.fabrication is not None:
+        fab = fabrication.check_fabrication(loaded_brief, run.brief_path, board)
+        exports_dir.mkdir(parents=True, exist_ok=True)
+        (exports_dir / f"{loaded_brief.name}.fabrication.json").write_text(
+            fab.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        )
+        _record(
+            run.log,
+            {
+                "tool": "circuit.fabrication",
+                "payload": {"brief": str(run.brief_path), "pcb": str(board)},
+                "result": fab.model_dump(mode="json"),
+            },
+        )
+        if fab.verdict != "pass":
+            raise StepFailure("circuit.fabrication", fab.model_dump_json())
     for kind, source in (
         ("gerbers", board),
         ("drill", board),

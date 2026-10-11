@@ -37,6 +37,7 @@ from . import (
     derating,
     dft,
     doctor,
+    fabrication,
     firmware,
     fit_sheet,
     handling,
@@ -382,6 +383,20 @@ def cmd_handling(args: argparse.Namespace) -> int:
     return _emit(result.model_dump(mode="json"))
 
 
+def cmd_fabrication(args: argparse.Namespace) -> int:
+    try:
+        report = fabrication.check_fabrication(
+            _load_brief(args.brief), Path(args.brief), Path(args.pcb)
+        )
+    except (ValueError, OSError) as exc:
+        return _fail("fabrication", str(exc))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return _emit(report.model_dump(mode="json"))
+
+
 def cmd_dft(args: argparse.Namespace) -> int:
     try:
         brief_path = Path(args.brief)
@@ -647,6 +662,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     handling_parser.add_argument("--brief", required=True)
     handling_parser.add_argument("--out", default=None)
     handling_parser.set_defaults(handler=cmd_handling)
+
+    fabrication_parser = subparsers.add_parser(
+        "fabrication", help="check the board against the brief fabrication spec"
+    )
+    fabrication_parser.add_argument("--brief", required=True)
+    fabrication_parser.add_argument("--pcb", required=True)
+    fabrication_parser.add_argument("--out", default=None)
+    fabrication_parser.set_defaults(handler=cmd_fabrication)
 
     dft_parser = subparsers.add_parser(
         "dft", help="check factory-test nets carry test points (pinned prodeng spec)"
