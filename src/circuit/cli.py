@@ -33,6 +33,7 @@ from . import (
     board_geometry,
     brief,
     connectivity,
+    derating,
     doctor,
     firmware,
     fit_sheet,
@@ -379,6 +380,19 @@ def cmd_handling(args: argparse.Namespace) -> int:
     return _emit(result.model_dump(mode="json"))
 
 
+def cmd_derating(args: argparse.Namespace) -> int:
+    try:
+        brief_path = Path(args.brief)
+        report = derating.check_derating(_load_brief(args.brief), brief_path)
+    except (ValueError, OSError) as exc:
+        return _fail("derating", str(exc))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return _emit(report.model_dump(mode="json"))
+
+
 def cmd_firmware_check(args: argparse.Namespace) -> int:
     try:
         payload = _firmware_connectivity(args)
@@ -605,6 +619,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     handling_parser.add_argument("--brief", required=True)
     handling_parser.add_argument("--out", default=None)
     handling_parser.set_defaults(handler=cmd_handling)
+
+    derating_parser = subparsers.add_parser(
+        "derating", help="check part voltage/current stress against the brief derating rules"
+    )
+    derating_parser.add_argument("--brief", required=True)
+    derating_parser.add_argument("--out", default=None)
+    derating_parser.set_defaults(handler=cmd_derating)
 
     firmware_check_parser = subparsers.add_parser(
         "firmware-check", help="check a firmware-agent *.fw-pinmap.json against the circuit"

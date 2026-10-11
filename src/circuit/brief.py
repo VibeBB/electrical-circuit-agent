@@ -189,6 +189,31 @@ class LifetimeSpec(BaseModel):
     response_path: str | None = Field(default=None, min_length=1)
 
 
+class DeratingRule(BaseModel):
+    """Stress factors of a part group, cited from the project derating standard."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    references: list[str] = Field(min_length=1)
+    voltage_factor: float | None = Field(default=None, gt=0, le=1)
+    current_factor: float | None = Field(default=None, gt=0, le=1)
+    source: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_factors(self) -> DeratingRule:
+        if self.voltage_factor is None and self.current_factor is None:
+            raise ValueError("derating rule needs voltage_factor or current_factor")
+        return self
+
+
+class DeratingSpec(BaseModel):
+    """Derating policy checked by circuit.derating; factors are never defaulted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rules: list[DeratingRule] = Field(min_length=1)
+
+
 class DesignBrief(BaseModel):
     model_config = ConfigDict(extra="forbid")
     pin_pattern: ClassVar[re.Pattern[str]] = re.compile(r"^([A-Z][A-Z0-9]*[0-9]+)\.([^.\s]+)$")
@@ -201,6 +226,7 @@ class DesignBrief(BaseModel):
     drawing: DrawingInfo = Field(default_factory=DrawingInfo)
     thermal: ThermalSpec | None = None
     lifetime: LifetimeSpec | None = None
+    derating: DeratingSpec | None = None
 
     @model_validator(mode="after")
     def validate_references_and_connections(self) -> DesignBrief:
@@ -243,6 +269,13 @@ class DesignBrief(BaseModel):
             for reference in lifetime_refs:
                 if reference not in known_references:
                     raise ValueError(f"lifetime references unknown part: {reference}")
+        if self.derating is not None:
+            derated = [ref for rule in self.derating.rules for ref in rule.references]
+            if len(set(derated)) != len(derated):
+                raise ValueError("a part appears in more than one derating rule")
+            for reference in derated:
+                if reference not in known_references:
+                    raise ValueError(f"derating references unknown part: {reference}")
         return self
 
 
