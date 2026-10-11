@@ -73,6 +73,7 @@ Blind, hash-sealed dual authoring for datasheet-derived PartSpecs.
 Machine-readable design brief models and helpers.
 
 - `Placement:`
+- `PartHandling:` — Assembly handling facts of one part, cited from its datasheet.
 - `Part:`
 - `Net:`
 - `Board:`
@@ -289,6 +290,14 @@ Fail-closed parsers for the KiCad Gerber and Excellon subset used by export chec
 - `ExcellonFile:`
 - `parse_gerber:`
 - `parse_excellon:`
+
+## `handling.py`
+
+Per-part assembly handling export (MSL, peak reflow, ESD) for production-engineering (`*.circuit-handling.json`).
+
+- `HandledPart:`
+- `CircuitHandling:`
+- `export_handling:` — Project the brief part handling facts; parts without them are unknown.
 
 ## `humanrequest.py`
 
