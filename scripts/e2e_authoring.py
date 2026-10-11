@@ -25,6 +25,7 @@ from circuit import (
     apiserver,
     brief,
     derating,
+    dft,
     drawing_sheet,
     fit_sheet,
     intake,
@@ -1179,6 +1180,21 @@ def _stage_schematic_gate(run: AuthoringRun) -> SchematicGate:
     )
     if connectivity.verdict != "pass":
         raise StepFailure("circuit.connectivity_check", connectivity.model_dump_json())
+    if loaded_brief.dft is not None:
+        access = dft.check_dft(loaded_brief, run.brief_path)
+        (reports_dir / f"{loaded_brief.name}.dft.json").write_text(
+            access.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        )
+        _record(
+            run.log,
+            {
+                "tool": "circuit.dft",
+                "payload": {"brief": str(run.brief_path)},
+                "result": access.model_dump(mode="json"),
+            },
+        )
+        if access.verdict != "pass":
+            raise StepFailure("circuit.dft", access.model_dump_json())
     if any(part.alternates for part in loaded_brief.parts):
         second_sources = alternates.check_alternates(loaded_brief, run.brief_path)
         (reports_dir / f"{loaded_brief.name}.alternates.json").write_text(
