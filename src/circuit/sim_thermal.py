@@ -296,7 +296,14 @@ def thermal_findings(
     findings = _report_findings(report, response, kind)
     if findings[0][0] == "report":
         return findings
-    return [("response", "pass", None, f"{response.request_id} {response.status}"), *findings]
+    from ._envelope import check_envelope
+
+    provenance, provenance_detail = check_envelope(response_path, "sim", root)
+    return [
+        ("response", "pass", None, f"{response.request_id} {response.status}"),
+        *findings,
+        ("provenance", provenance, None, provenance_detail),
+    ]
 
 
 def thermal_check(

@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from circuit import cli
+from circuit._envelope import sidecar_path, write_envelope
 from circuit.brief import DesignBrief
 from circuit.dft import check_dft
 
@@ -28,6 +29,7 @@ def _setup(
 ) -> Path:
     raw = SPEC.read_bytes() if spec is None else spec
     (tmp_path / "factory-test-spec.json").write_bytes(raw)
+    write_envelope(tmp_path / "factory-test-spec.json", "prodeng", [], tmp_path)
     value: dict[str, Any] = json.loads(BRIEF.read_text(encoding="utf-8"))
     for net in value["nets"]:
         net["name"] = RENAME.get(net["name"], net["name"])
@@ -117,3 +119,15 @@ def test_cli_exit_follows_verdict(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert cli.main(["dft", "--brief", str(_setup(tmp_path, {}))]) == 1
     capsys.readouterr()
     assert cli.main(["dft", "--brief", str(BRIEF)]) == 1
+
+
+def test_spec_provenance_missing_or_foreign_is_not_a_pass(tmp_path: Path) -> None:
+    path = _setup(tmp_path, ALL)
+    sidecar = sidecar_path(tmp_path / "factory-test-spec.json")
+    body = json.loads(sidecar.read_text(encoding="utf-8"))
+    sidecar.write_text(json.dumps(body | {"producer": "firmware"}), encoding="utf-8")
+    report = _report(path)
+    assert report.verdict == "fail" and "provenance" in report.detail
+    sidecar.unlink()
+    report = _report(path)
+    assert report.verdict == "unknown" and "no envelope v3 provenance" in report.detail
