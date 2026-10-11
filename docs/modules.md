@@ -14,6 +14,15 @@ circuit-agent package.
 Package marker.
 
 
+## `_vrp.py`
+
+Vendored VRP v2 core shared with the family (same source as wire-agent):
+hash-chained append-only JSONL logs, chain verification, impression
+facet/claim/duplicate validation, reconcile/tiebreak semantics, insight
+lifecycle, read and song receipts, digest and search. `records.py` binds it to
+the circuit plugin; `plugins/circuit/hooks/scripts/_records.py` mirrors it with
+the stdlib only.
+
 ## `advisory.py`
 
 Advisory Konnect observations kept separate from deterministic gates.
@@ -716,7 +725,7 @@ Rasterize PDF/SVG intake files to PNG for the vision lane.
 
 ## `records.py`
 
-Typed writers for the VibeBB Record Protocol (VRP) v1.
+Typed writers for the VibeBB Record Protocol (VRP) v2, built on `_vrp.py`.
 
 - `sentence_count:`
 - `impression_is_prose` — Reject a terse status line where a long-form impression is required.

@@ -67,6 +67,18 @@ kicad-cli verdict. Results do not have to be identical from run to run;
 the reasoning must be recorded every run. `circuit_records_status` shows
 what is still owed.
 
+Blind second review: every `circuit-reports/*.png` render is a dual-review
+image. After your primary `circuit_record_vision_review`, delegate the image
+and brief path to `circuit-blind-review` (via `task`) for a `blind` review,
+then call `circuit_record_reconcile` with `[primary, blind]`. On a split, run
+one `tiebreak` round and reconcile `[primary, blind, tiebreak]`; a split that
+remains is `unknown`, never pass. Answer sister impressions you act on in
+`upstream` or with `circuit_record_read` (find them with
+`circuit_records_digest` / `circuit_records_search`), move insights with
+`circuit_record_insight`, and receive each bard song addressed to circuit
+once with `circuit_record_song_receipt` — a receipt never asks for another
+song.
+
 ## Vision points
 
 Look at every render through the inline image or `inspect_image_with_vision`,

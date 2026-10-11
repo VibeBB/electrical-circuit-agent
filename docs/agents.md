@@ -14,8 +14,10 @@ body; circuit-brief additionally carries the SLP section.
 | `circuit-part-author-b` | `vibebb-part-author-b` | same as lane a | circuit (lane b), konnect | pre: blind-author-lane-guard (lane b); post: record-authoring-commit | Blind datasheet→PartSpec lane | same blind-lane exception |
 | `circuit-schematic` | `vibebb-author` | terminal, file_editor, grep, glob, task_tracker | circuit, konnect | pre: protect-libraries, safety-rail | Schematic authoring + ERC | decisions for net naming/label strategy; stage impression; page-plot vision review |
 | `circuit-layout` | `vibebb-author` | terminal, file_editor, grep, glob, task_tracker | circuit, konnect | pre: protect-libraries, safety-rail | Placement, routing, DRC | stackup/profile/placement/routing decisions; DRC waiver refusals; stage impression |
+| `circuit-blind-review` | `vibebb-review` | terminal, file_editor, grep, glob, `VisionInspectTool` | circuit | pre: blind-guard (file/terminal/grep/glob), protect-libraries, safety-rail; post: record-vision-tool-event | Blind or tiebreak second vision review of one `circuit-reports/*.png` render | one `blind`/`tiebreak` vision review with claims and lookback; cannot read `observations/`, advisory records, design reports, liaison answers or songs |
 | `circuit-review` | `vibebb-review` | terminal, file_editor, grep, glob, task_tracker | circuit, konnect | pre: protect-libraries, safety-rail; post: record-vision-tool-event | Independent review of gate JSON + diffs | diff PNG vision reviews; stage impression; no verdict authority |
 
-All agents cap at `max_iteration_per_run` 30 (40 for circuit-library) and
-`max_budget_per_run` 3.0, and run `permission_mode: never_confirm` where
+All agents cap at `max_iteration_per_run` 30 (40 for circuit-library, 20 for
+circuit-blind-review) and `max_budget_per_run` 3.0 (1.5 for
+circuit-blind-review), and run `permission_mode: never_confirm` where
 declared.

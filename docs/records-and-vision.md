@@ -1,9 +1,9 @@
 # Records and vision (VRP for circuit)
 
-The VibeBB Record Protocol v1 makes design reasoning auditable: append-only
+The VibeBB Record Protocol v2 makes design reasoning auditable: append-only
 JSONL under `observations/circuit/`, written by `src/circuit/records.py`
 (MCP tools `circuit_record_*`, `circuit_records_status`, or
-`circuit_launcher.py record decision|impression|vision-review|status`),
+`circuit_launcher.py record decision|impression|vision-review|reconcile|insight|song-receipt|read|status|digest|search`),
 enforced by the shared hooks `require_records.py` (session-start hint +
 first Stop hook) and `_records.py` (stdlib mirror, canonical across the
 family — `scripts/check_shared_hooks.py` pins the AST hashes).
@@ -67,11 +67,53 @@ leak the other lane's or orchestrator's reasoning. Their commit impressions
 are enforced by `circuit_part_author_commit` itself; the circuit-library
 agent records the comparison decision and vision reviews afterwards.
 
-## review-record mirror
+## review-record and the VRP vision log
 
-`circuit_launcher.py review-record` writes the `vision_review` advisory, then
-mirrors it into `vision-reviews.jsonl` (workspace-relative `image_path`,
-`image_sha256`, `checklist` slug with `_`→`-`, findings as `severity` +
-`"<category>: <note>"`), and prints the vision `event_id`. If the image is
-outside the workspace the mirror is skipped — `"skipped: ..."` appears in the
-output so the gap is visible.
+`circuit_launcher.py review-record` writes only the typed `vision_review`
+advisory. It no longer mirrors into `vision-reviews.jsonl`: a VRP v2 vision
+review needs facets, grounded claims with a lookback and a reviewer role
+that the advisory does not carry, so the agent records it separately with
+`circuit_record_vision_review`.
+
+## VRP v2 logs
+
+`observations/circuit/` holds `decisions.jsonl`, `impressions.jsonl`,
+`vision-reviews.jsonl`, `reconciles.jsonl`, `insights.jsonl`, `reads.jsonl`
+and `song-receipts.jsonl`. Every line carries `schema_version` 2, `sequence`,
+`prev_event_id`, `writer` and `event_id` (the SHA-256 of the canonical
+record). The writer verifies the chain before appending and refuses a log
+that was edited, truncated or reordered; readers report such a log under
+`integrity_problems` and never resolve references into it. A log written
+entirely by VRP v1 is renamed to `<name>.v1.jsonl` on the first v2 write.
+
+Impressions carry facets (`observed`, `works`, `concerns`, maker/user
+`feelings`, `next_actions`), two or more claims quoting exact tokens from the
+bound artifacts, and a confidence; a near copy of an earlier impression is
+refused. `circuit_records_digest` lists open sister concerns, disputes,
+unanswered reads, insights, split reviews and undelivered songs;
+`circuit_records_search` filters every plugin's impressions. Answer each
+sister impression acted on in `upstream` (`adopted`, `deferred`, `disputed`
+or `noted`) or with `circuit_record_read`. A disputed concern cannot be
+raised again while the artifact bytes are unchanged, and a rejected insight
+returns only with `revisits` and a reason (`circuit_record_insight`).
+
+## Blind second review of renders
+
+`dual_review_globs` (`**/circuit-reports/*.png`) make every schematic page
+plot, board view, side elevation and layer plot a dual-review image. After
+the primary review, the `circuit-blind-review` sub-agent records a `blind`
+review behind the `blind-guard` hook, which hides earlier reviews, records,
+advisory reports, design reports, liaison answers and bard songs.
+`circuit_record_reconcile` compares `[primary, blind]`; a split gets one
+`tiebreak` round (at most two rounds) and stays `unknown` when unresolved.
+The Stop hook owes the blind review and the reconcile until both exist for
+the current image bytes. A blind review can only push toward stopping; it
+never changes an ERC, DRC or gate verdict.
+
+## Songs from bard
+
+bard may deliver `liaison/<id>.bard-song.json` addressed to `circuit`.
+circuit answers with `circuit_record_song_receipt`, once per delivery; the
+receipt binds the song bytes by SHA-256, is advisory, never feeds a gate and
+never asks bard for another song, so the exchange cannot loop. The
+`protect-libraries` hook denies hand edits to song deliveries.

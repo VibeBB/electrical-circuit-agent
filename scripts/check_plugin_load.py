@@ -23,6 +23,7 @@ EXPECTED_AGENTS = {
     "circuit-layout",
     "circuit-part-author-a",
     "circuit-part-author-b",
+    "circuit-blind-review",
     "circuit-review",
     "circuit-schematic",
 }
@@ -93,8 +94,10 @@ def _registered_tools() -> set[str]:
     import openhands.tools.glob.definition  # pyright: ignore[reportMissingImports,reportMissingModuleSource,reportUnusedImport]
     import openhands.tools.grep.definition  # pyright: ignore[reportMissingImports,reportMissingModuleSource,reportUnusedImport]
     import openhands.tools.task.definition  # pyright: ignore[reportMissingImports,reportMissingModuleSource,reportUnusedImport]
+    from openhands.sdk.tool.builtins import BUILT_IN_TOOL_CLASSES
 
-    return set(list_registered_tools())
+    # resolve_tool falls back to BUILT_IN_TOOL_CLASSES for unregistered names.
+    return set(list_registered_tools()) | set(BUILT_IN_TOOL_CLASSES)
 
 
 def check_plugin(plugin_dir: Path) -> list[str]:

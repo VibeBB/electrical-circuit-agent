@@ -48,19 +48,19 @@ strictness. "strict" = pydantic `extra="forbid"` (unknown fields rejected);
 
 | File | `artifact_kind` | Notes |
 |---|---|---|
-| `review-visual-*.advisory.json` | `vision_review` AdvisoryResult — image sha256, model, checklist, findings, impression | `review-record` CLI writes it; mirrored into vision-reviews.jsonl |
+| `review-visual-*.advisory.json` | `vision_review` AdvisoryResult — image sha256, model, checklist, findings, impression | `review-record` CLI writes it (not mirrored into the VRP v2 vision log) |
 | `review-*.advisory.json` | generic AdvisoryResult | Konnect advisory records, never a verdict |
 | `*.vision-read.json` | `circuit_vision_read_batch` / `_answers` | Tool-managed crop batches + answers |
 | HumanRequest dir | `circuit_human_request` | Immutable hash-bound request + Markdown packet |
 | `*.ux-request.json` / `*.ux-response.json` | SLP v2 (`schema_version: 2`, `system: "ux-creator"`) | UX-creator → circuit; response written only by `circuit_ux_respond`; strict (extra=forbid) locally mirrored in `liaison.py` |
 
-## Records (VRP v1)
+## Records (VRP v2)
 
 | File | Producer | Shape |
 |---|---|---|
 | `observations/circuit/decisions.jsonl` | `circuit_record_decision` / `record decision` | event_id, stage, question, principles, options, chosen, rationale ≥200 chars, evidence sha256, assumptions, unknowns, risks, revisit_when |
-| `observations/circuit/impressions.jsonl` | `circuit_record_impression` | event_id, stage, artifact sha256 bindings, impression ≥400 chars / ≥3 sentences |
-| `observations/circuit/vision-reviews.jsonl` | `circuit_record_vision_review` / review-record mirror | event_id, image_path sha256 or source_event_id, model, checklist, findings, impression ≥400 chars |
+| `observations/circuit/impressions.jsonl` | `circuit_record_impression` | VRP v2 chained record: event_id, prev_event_id, stage, artifact sha256 bindings, impression ≥400 chars / ≥3 sentences, facets, claims, upstream, confidence |
+| `observations/circuit/vision-reviews.jsonl` | `circuit_record_vision_review` | VRP v2 chained record: event_id, prev_event_id, image_path sha256 or source_event_id, reviewer (primary/blind/tiebreak), facets, claims, lookback, findings, impression ≥400 chars |
 | `observations/circuit/vision-tool-events.jsonl` | record-vision-tool-event hook | inspect_image_with_vision Q&A events |
 | `observations/circuit/image-observations.jsonl` | record-image-observation hook | image paths produced/viewed by IMAGE_TOOLS + file_editor |
 | `observations/circuit/records-status.json` | require_records.py stop hook | last Stop verdict + owed records |

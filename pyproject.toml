@@ -46,10 +46,23 @@ exclude = [
   "scripts/structural_coverage.py",
   "tests/test_mutation_probe.py",
   "tests/test_structural_coverage.py",
+  "plugins/circuit/hooks/scripts/_records.py",
+  "plugins/circuit/hooks/scripts/require_records.py",
+  "plugins/circuit/hooks/scripts/blind_guard.py",
+  "src/circuit/_vrp.py",
 ]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# VRP v2 files are byte-identical to the wire-agent canonical copies.
+"plugins/circuit/hooks/scripts/_records.py" = ["ALL"]
+"plugins/circuit/hooks/scripts/require_records.py" = ["ALL"]
+"plugins/circuit/hooks/scripts/blind_guard.py" = ["ALL"]
+"src/circuit/_vrp.py" = ["ALL"]
+# Ported from wire-agent tests/test_records.py; fixtures keep wire's line widths.
+"tests/test_records.py" = ["E501"]
 
 [tool.pyright]
 pythonVersion = "3.12"

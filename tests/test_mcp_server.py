@@ -107,6 +107,12 @@ def test_mcp_server_lists_expected_tools() -> None:
         "circuit_record_impression",
         "circuit_record_vision_review",
         "circuit_records_status",
+        "circuit_record_reconcile",
+        "circuit_record_insight",
+        "circuit_record_song_receipt",
+        "circuit_record_read",
+        "circuit_records_digest",
+        "circuit_records_search",
         "circuit_ux_inbox",
         "circuit_ux_respond",
     }
@@ -1714,7 +1720,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
         ):
             await session.initialize()
             tools = await session.list_tools()
-            assert len(tools.tools) == 63
+            assert len(tools.tools) == 69
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title

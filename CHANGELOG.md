@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Records move to VRP v2 (ADR-0037): hash-chained logs, grounded
+  impressions with facets and claims, near-duplicate and dispute re-raise
+  refusal, read receipts, insight lifecycle, blind review of
+  `circuit-reports/*.png` by the new `circuit-blind-review` sub-agent with
+  reconcile/tiebreak, bard song receipts, and `digest`/`search`.
+  `review-record` no longer mirrors into `vision-reviews.jsonl`.
+
 - Generated sheets fit their frame: `inject_title_block` wraps over-long
   `comments=` into consecutive `(comment N ...)` fields so no printed
   comment line overruns the sheet frame, and e2e authoring picks the
