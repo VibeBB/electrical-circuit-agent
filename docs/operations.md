@@ -289,6 +289,7 @@ python -m circuit board-geometry --pcb PCB --out PATH [--part-spec REF=SPEC ...]
 python -m circuit assembly --pcb PCB --out PATH
 python -m circuit sim-request --brief BRIEF [--out-dir DIR]
 python -m circuit sim-check --brief BRIEF
+python -m circuit fabrication --brief BRIEF --pcb PCB [--out PATH]
 python -m circuit author --brief BRIEF --workdir DIR [--intake INTAKE]
 python -m circuit library-review packet --part-spec SPEC --symbol-lib LIB \
   --symbol-name SYMBOL --footprint FOOTPRINT --library-dir LIBRARY

@@ -34,6 +34,7 @@ from . import (
     brief,
     connectivity,
     doctor,
+    fabrication,
     firmware,
     fit_sheet,
     intake,
@@ -365,6 +366,20 @@ def cmd_firmware_export(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_fabrication(args: argparse.Namespace) -> int:
+    try:
+        report = fabrication.check_fabrication(
+            _load_brief(args.brief), Path(args.brief), Path(args.pcb)
+        )
+    except (ValueError, OSError) as exc:
+        return _fail("fabrication", str(exc))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return _emit(report.model_dump(mode="json"))
+
+
 def cmd_firmware_check(args: argparse.Namespace) -> int:
     try:
         payload = _firmware_connectivity(args)
@@ -584,6 +599,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     firmware_export_parser.add_argument("--netlist", default=None)
     firmware_export_parser.add_argument("--out", required=True)
     firmware_export_parser.set_defaults(handler=cmd_firmware_export)
+
+    fabrication_parser = subparsers.add_parser(
+        "fabrication", help="check the board against the brief fabrication spec"
+    )
+    fabrication_parser.add_argument("--brief", required=True)
+    fabrication_parser.add_argument("--pcb", required=True)
+    fabrication_parser.add_argument("--out", default=None)
+    fabrication_parser.set_defaults(handler=cmd_fabrication)
 
     firmware_check_parser = subparsers.add_parser(
         "firmware-check", help="check a firmware-agent *.fw-pinmap.json against the circuit"

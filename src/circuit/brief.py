@@ -168,6 +168,21 @@ class LifetimePart(BaseModel):
         return self
 
 
+class FabricationSpec(BaseModel):
+    """Bare-board fabrication requirements; the authored PCB must match them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    copper_layers: int = Field(ge=1, le=32)
+    thickness_mm: float = Field(gt=0)
+    thickness_tolerance_mm: float = Field(gt=0)
+    material: str = Field(min_length=1)
+    finish: Literal["HASL", "LF-HASL", "ENIG", "ENEPIG", "OSP", "ImSn", "ImAg", "hard-gold"]
+    ipc6012_class: Literal[1, 2, 3]
+    soldermask: str = Field(min_length=1)
+    silkscreen: str = Field(min_length=1)
+
+
 class LifetimeSpec(BaseModel):
     """Arrhenius lifetime facts handed to simulation-agent; simulation owns the verdict."""
 
@@ -189,6 +204,7 @@ class DesignBrief(BaseModel):
     drawing: DrawingInfo = Field(default_factory=DrawingInfo)
     thermal: ThermalSpec | None = None
     lifetime: LifetimeSpec | None = None
+    fabrication: FabricationSpec | None = None
 
     @model_validator(mode="after")
     def validate_references_and_connections(self) -> DesignBrief:
