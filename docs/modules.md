@@ -114,6 +114,16 @@ Board geometry handoff for mechanical-agent (`*.board-geometry.json`, optional I
 - `write_board_geometry:`
 - `board_geometry_result:`
 
+## `assembly.py`
+
+PCB assembly handoff for production-engineering-agent (`*.circuit-assembly.json`).
+
+- `Assembly:`
+- `Placement:`
+- `assembly:`
+- `write_assembly:`
+- `assembly_result:`
+
 ## `connectivity.py`
 
 Emit the wire-agent ConnectivitySource contract (*.connectivity.json).
