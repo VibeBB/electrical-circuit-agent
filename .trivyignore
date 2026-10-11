@@ -100,11 +100,19 @@ GHSA-q2c6-c6pm-g3gh exp:2027-01-03
 GHSA-q42p-pg8m-cqh6 exp:2027-01-03
 #
 # --- Docker CLI plugins bundled by the agent-server image -----------------
-# rootlesskit and docker-buildx are shipped inside the upstream image for
-# in-container workspaces; versions track the upstream base, not this repo.
+# rootlesskit, gh, docker-buildx and docker-compose are shipped inside the
+# upstream image for in-container workspaces; versions track the upstream
+# base, not this repo. The 2026-10-11 Go stdlib / golang.org/x/net
+# findings (CVE-2026-78667/78669/97031) also hit /usr/bin/pebble in
+# circuit-tools: the Ubuntu 26.04 archive pebble 2.6.0+ds1-1build1 is built
+# with Go 1.26.7 and the archive has no rebuilt candidate yet. All clear
+# when the binaries are rebuilt with Go >= 1.26.9 / x/net >= 0.60.0.
 CVE-2026-17106 exp:2027-01-03
 CVE-2026-46600 exp:2027-01-03
 CVE-2026-56854 exp:2027-01-03
+CVE-2026-78667 exp:2027-01-11
+CVE-2026-78669 exp:2027-01-11
+CVE-2026-97031 exp:2027-01-11
 #
 # --- Dockerfiles embedded in the agent-server package (circuit-server) ----
 # Trivy flags DS-0029 (apt-get without --no-install-recommends) on the

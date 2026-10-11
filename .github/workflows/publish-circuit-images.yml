@@ -756,7 +756,7 @@ jobs:
           print("| step | elapsed |")
           print("|---|---|")
           for step in json.loads(out):
-              if not step.get("completed_at"):
+              if not (step.get("started_at") and step.get("completed_at")):
                   continue
               started = datetime.strptime(step["started_at"], fmt)
               completed = datetime.strptime(step["completed_at"], fmt)
