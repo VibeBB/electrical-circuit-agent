@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Interchange envelope v3: sister exports write a `<artifact>.provenance.json`
+  sidecar (artifact sha256, sources, citing decision refs), and
+  `circuit enclosure` checks mech's sidecar beside the pinned board
+  envelope (`import_provenance`; `unknown` without one).
 - SLP v2 responses carry `records_heads`, the chain head of every intact
   VRP log at answer time; UX-creator checks it on receipt. `done` is
   refused while any VRP log fails integrity.

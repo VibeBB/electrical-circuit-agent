@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from circuit import cli
+from circuit._envelope import sidecar_path, write_envelope
 from circuit.brief import DesignBrief
 from circuit.enclosure import check_enclosure
 
@@ -92,6 +93,7 @@ def _setup(
 ) -> tuple[DesignBrief, Path, Path]:
     raw = json.dumps(_envelope()).encode() if envelope is None else envelope
     (tmp_path / "demo.mech-board-envelope.json").write_bytes(raw)
+    write_envelope(tmp_path / "demo.mech-board-envelope.json", "mech", [], tmp_path)
     value: dict[str, Any] = json.loads(BRIEF.read_text(encoding="utf-8"))
     value["enclosure"] = {
         "envelope_path": "demo.mech-board-envelope.json",
@@ -213,3 +215,16 @@ def test_cli_writes_report_and_rejects_brief_without_enclosure(
     capsys.readouterr()
     cli.main(["enclosure", "--brief", str(BRIEF), "--geometry", str(geometry_path)])
     assert "no enclosure section" in capsys.readouterr().out
+
+
+def test_mech_envelope_provenance_fails_closed(tmp_path: Path) -> None:
+    design, brief_path, geometry_path = _setup(tmp_path)
+    sidecar = sidecar_path(tmp_path / "demo.mech-board-envelope.json")
+    body = json.loads(sidecar.read_text(encoding="utf-8"))
+    sidecar.write_text(json.dumps(body | {"producer": "wire"}), encoding="utf-8")
+    assert (
+        _statuses(check_enclosure(design, brief_path, geometry_path))["import_provenance"] == "fail"
+    )
+    sidecar.unlink()
+    report = check_enclosure(design, brief_path, geometry_path)
+    assert (_statuses(report)["import_provenance"], report.verdict) == ("unknown", "unknown")

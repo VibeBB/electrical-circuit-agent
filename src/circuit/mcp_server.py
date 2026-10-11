@@ -1305,6 +1305,14 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
 ]
 
 
+def _envelope_v3(artifact: Path, sources: list[Path]) -> None:
+    """Write the interchange envelope v3 sidecar beside a sister artifact."""
+    from ._envelope import write_envelope
+    from .workspace import workspace_root
+
+    write_envelope(artifact, "circuit", sources, workspace_root())
+
+
 def _sim_kind(value: Any) -> sim_thermal.Kind:
     if value is None:
         return "thermal"
@@ -2182,6 +2190,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 "connectivity-source",
             )
             connectivity.write_connectivity(design, output, parsed_netlist)
+            netlist_arg = [Path(str(args["netlist_path"]))] if args.get("netlist_path") else []
+            _envelope_v3(output, [brief_path, *netlist_arg])
             payload = connectivity.connectivity_source(design, parsed_netlist)
             result = connectivity.connectivity_result(design, payload, str(output))
         elif name == "circuit_board_geometry_export":
@@ -2204,6 +2214,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
             written = board_geometry.write_board_geometry(
                 geometry, output, design=pcb_path.stem, idf=bool(args.get("idf"))
             )
+            step_arg = [Path(step_value)] if step_value else []
+            _envelope_v3(output, [pcb_path, *map(Path, spec_paths.values()), *step_arg])
             result = board_geometry.board_geometry_result(geometry, written)
         elif name == "circuit_sim_thermal_request":
             from .workspace import workspace_path, workspace_root
@@ -2217,6 +2229,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 root=workspace_root(),
                 kind=_sim_kind(args.get("kind")),
             )
+            _envelope_v3(Path(str(result["request"])), [brief_path])
         elif name == "circuit_sim_thermal_check":
             from .workspace import workspace_path, workspace_root
 
@@ -2245,6 +2258,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                     brief_path, _optional_string(args.get("output_path")), "firmware"
                 )
                 firmware.write_firmware_connectivity(firmware_payload, output)
+                _envelope_v3(output, [brief_path, *([netlist_file] if netlist_file else [])])
                 result = {
                     "verdict": "pass",
                     "design": firmware_payload.design,

@@ -60,7 +60,22 @@ the `board_center_y_up_mm` frame `board-geometry` uses. Pin it in the brief
 `python -m circuit enclosure --brief BRIEF --geometry <name>.board-geometry.json`
 after placement. A tall part or an edge connector with no opening then fails
 here, before mech re-imports the board. To change the cavity, ask mech
-(ECR/ECO); never edit the envelope.
+(ECR/ECO); never edit the envelope. `circuit enclosure` also checks
+mech's interchange envelope v3 sidecar (`import_provenance`): `fail` when
+it is malformed, describes other bytes or another producer, a source changed
+or a decision ref is not in mech's intact log; `unknown` when it is missing.
+
+## Interchange envelope v3
+
+Every circuit export below that a sister reads (`connectivity`,
+`board-geometry`, `assembly`, `handling --out`, `sim-request`,
+`firmware-export`, CLI and MCP) also writes `<artifact>.provenance.json`
+(`src/circuit/_envelope.py`, shared with the family): `envelope_version: 3`,
+`producer: "circuit"`, `artifact{name, sha256}`, `sources[{path, sha256}]`
+(the brief, PCB, netlist, part specs or STEP that fed it) and
+`decision_refs` (circuit decisions whose evidence cites a source at its
+current sha256). A broken circuit decision chain refuses the export. The
+artifact body is unchanged, so sister strict mirrors keep reading it.
 
 ## Interchange files
 

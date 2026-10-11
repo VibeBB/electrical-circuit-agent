@@ -14,6 +14,19 @@ circuit-agent package.
 Package marker.
 
 
+## `_envelope.py`
+
+Interchange envelope v3 sidecars (same source as wire-agent): writes
+`<artifact>.provenance.json` beside each sister export (artifact and source
+sha256, decision refs citing current source hashes; a broken decision chain
+refuses it) and checks a sister sidecar as pass, fail or unknown.
+
+- `sidecar_path` — The sidecar path beside an artifact.
+- `decision_refs` — Decision ids whose evidence cites a source at its current sha256.
+- `write_envelope` — Write the v3 sidecar; a broken decision log refuses it.
+- `check_envelope` — (status, detail) for the sidecar beside an imported sister artifact.
+
+
 ## `_vrp.py`
 
 Vendored VRP v2 core shared with the family (same source as wire-agent):

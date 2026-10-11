@@ -219,6 +219,10 @@ def check_enclosure(design: DesignBrief, brief_path: Path, geometry_path: Path) 
         envelope = MechBoardEnvelope.model_validate(json.loads(raw.decode("utf-8")))
     except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
         return report([], "fail", f"mech board envelope is malformed: {exc}")
+    from ._envelope import check_envelope
+    from .workspace import workspace_root
+
+    provenance, provenance_detail = check_envelope(envelope_path, "mech", workspace_root(), pinned)
     try:
         geometry_raw = geometry_path.read_bytes()
         geometry_sha = hashlib.sha256(geometry_raw).hexdigest()
@@ -227,7 +231,11 @@ def check_enclosure(design: DesignBrief, brief_path: Path, geometry_path: Path) 
         return report([], "unknown", f"circuit board geometry unusable: {exc}")
     if geometry.verdict != "pass":
         return report([], "unknown", f"circuit board geometry incomplete: {geometry.unknown}")
-    checks = _board_checks(envelope, geometry) + _part_checks(envelope, geometry)
+    checks = [
+        EnclosureCheck(subject="import_provenance", status=provenance, detail=provenance_detail),
+        *_board_checks(envelope, geometry),
+        *_part_checks(envelope, geometry),
+    ]
     statuses = {check.status for check in checks}
     verdict: Status = (
         "fail" if "fail" in statuses else "unknown" if "unknown" in statuses else "pass"

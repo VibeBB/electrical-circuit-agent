@@ -240,12 +240,23 @@ def cmd_library_review(args: argparse.Namespace) -> int:
     return _emit(payload)
 
 
+def _envelope_v3(artifact: Path, sources: list[Path]) -> None:
+    """Write the interchange envelope v3 sidecar beside a sister artifact."""
+    from ._envelope import write_envelope
+    from .workspace import workspace_root
+
+    write_envelope(artifact, "circuit", sources, workspace_root())
+
+
 def cmd_connectivity(args: argparse.Namespace) -> int:
     try:
         design = _load_brief(args.brief)
         parsed = netlist.parse_netlist(Path(args.netlist)) if args.netlist else None
         payload = connectivity.connectivity_source(design, parsed)
         connectivity.write_connectivity(design, Path(args.out), parsed)
+        _envelope_v3(
+            Path(args.out), [Path(args.brief), *([Path(args.netlist)] if args.netlist else [])]
+        )
     except (ValueError, OSError) as exc:
         return _emit(connectivity.connectivity_failure(exc))
     return _emit(connectivity.connectivity_result(design, payload, args.out))
@@ -266,6 +277,8 @@ def cmd_board_geometry(args: argparse.Namespace) -> int:
         written = board_geometry.write_board_geometry(
             geometry, Path(args.out), design=pcb_path.stem, idf=args.idf
         )
+        step = [Path(args.step)] if args.step else []
+        _envelope_v3(Path(args.out), [pcb_path, *specs.values(), *step])
     except (ValueError, OSError) as exc:
         return _fail("board-geometry", str(exc))
     return _emit(board_geometry.board_geometry_result(geometry, written))
@@ -276,6 +289,7 @@ def cmd_assembly(args: argparse.Namespace) -> int:
         result = assembly.assembly(Path(args.pcb))
         out = Path(args.out)
         assembly.write_assembly(result, out)
+        _envelope_v3(out, [Path(args.pcb)])
     except (ValueError, OSError) as exc:
         return _fail("assembly", str(exc))
     return _emit(assembly.assembly_result(result, out))
@@ -294,6 +308,7 @@ def cmd_sim_request(args: argparse.Namespace) -> int:
         payload = sim_thermal.write_sim_request(
             design, out_dir, root=_sim_root(out_dir), kind=args.kind
         )
+        _envelope_v3(Path(str(payload["request"])), [Path(args.brief)])
     except (ValueError, OSError) as exc:
         return _fail("sim-request", str(exc))
     return _emit(payload)
@@ -324,6 +339,7 @@ def cmd_firmware_export(args: argparse.Namespace) -> int:
     try:
         payload = _firmware_connectivity(args)
         out = firmware.write_firmware_connectivity(payload, Path(args.out))
+        _envelope_v3(out, [Path(args.brief), *([Path(args.netlist)] if args.netlist else [])])
     except (ValueError, OSError) as exc:
         return _fail("firmware-export", str(exc))
     return _emit(
@@ -347,6 +363,10 @@ def cmd_handling(args: argparse.Namespace) -> int:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        try:
+            _envelope_v3(out, [brief_path])
+        except (ValueError, OSError) as exc:
+            return _fail("handling", str(exc))
     return _emit(result.model_dump(mode="json"))
 
 
