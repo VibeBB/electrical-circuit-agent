@@ -52,6 +52,7 @@ hashes, artifact hashes, gate verdicts, record refs, `responded_at`.
 |---|---|---|---|
 | `*.connectivity.json` | written by `circuit_connectivity_export` | wire-agent, simulation-agent | frozen — sim mirror is extra=forbid |
 | `*.board-geometry.json` (+ `.emn`/`.emp`) | written by `circuit_board_geometry_export` | mechanical-agent (board envelope, mount holes, connector faces) | strict; `unknown` heights fail the export verdict |
+| `*.circuit-assembly.json` | written by `python -m circuit assembly` | production-engineering-agent (`circuit-assembly` import, `circuit.assembly` gate) | strict; a populated footprint without a `smd`/`through_hole` attribute is `unknown` and fails the export |
 | `*.thermal.sim.json` + `*.thermal.sim-request.json` | written by `circuit_sim_thermal_request` from the brief `thermal` section | simulation-agent (`sim-liaison` answers with `*.sim-response.json`) | strict; hash-bound request id |
 | `*.thermal.sim-response.json` | read by `circuit_sim_thermal_check` (`thermal.response_path`) | simulation-agent produces | strict read; stale or tampered → `fail`, unanswered → `unknown` |
 | `*.lifetime.sim.json` + `*.lifetime.sim-request.json` / `*.lifetime.sim-response.json` | written/read with `kind: lifetime` from the brief `lifetime` section (`lifetime.response_path`) | simulation-agent (Arrhenius + Miner) | same hash binding; stale or tampered → `fail`, unanswered → `unknown` |
