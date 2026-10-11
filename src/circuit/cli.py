@@ -7,6 +7,7 @@ Subcommands:
   datasheet-revision-check  compare a PartSpec with its manufacturer source
   connectivity emit the wire-agent ConnectivitySource contract (JSON verdict)
   board-geometry   emit board outline/placement/heights for mechanical-agent (JSON verdict)
+  assembly         emit SMT/THT placements per side for production-engineering-agent
   firmware-export  emit MCU pin connectivity for firmware-agent (JSON verdict)
   firmware-check   check a firmware-agent pin map against the circuit (JSON verdict)
   author       run e2e authoring from a design brief (JSON verdict)
@@ -28,6 +29,7 @@ from pathlib import Path
 from typing import Any, Final, Literal, cast
 
 from . import (
+    assembly,
     board_geometry,
     brief,
     connectivity,
@@ -298,6 +300,16 @@ def cmd_board_geometry(args: argparse.Namespace) -> int:
     return _emit(board_geometry.board_geometry_result(geometry, written))
 
 
+def cmd_assembly(args: argparse.Namespace) -> int:
+    try:
+        result = assembly.assembly(Path(args.pcb))
+        out = Path(args.out)
+        assembly.write_assembly(result, out)
+    except (ValueError, OSError) as exc:
+        return _fail("assembly", str(exc))
+    return _emit(assembly.assembly_result(result, out))
+
+
 def _sim_root(path: Path) -> Path | None:
     root = workspace.workspace_root()
     resolved = path.resolve()
@@ -554,6 +566,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     geometry_parser.add_argument("--idf", action="store_true")
     geometry_parser.add_argument("--out", required=True)
     geometry_parser.set_defaults(handler=cmd_board_geometry)
+
+    assembly_parser = subparsers.add_parser(
+        "assembly",
+        help="emit SMT/THT placements per board side for production-engineering-agent",
+    )
+    assembly_parser.add_argument("--pcb", required=True)
+    assembly_parser.add_argument("--out", required=True)
+    assembly_parser.set_defaults(handler=cmd_assembly)
 
     sim_request_parser = subparsers.add_parser(
         "sim-request",

@@ -286,6 +286,7 @@ python -m circuit sch-lint SCHEMATIC [--output PATH]
 python -m circuit connectivity --brief BRIEF --out PATH [--netlist NETLIST]
 python -m circuit board-geometry --pcb PCB --out PATH [--part-spec REF=SPEC ...] \
   [--step BOARD_STEP] [--idf]
+python -m circuit assembly --pcb PCB --out PATH
 python -m circuit sim-request --brief BRIEF [--out-dir DIR]
 python -m circuit sim-check --brief BRIEF
 python -m circuit derating --brief BRIEF [--out PATH]
