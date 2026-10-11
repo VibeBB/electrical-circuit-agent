@@ -441,7 +441,10 @@ def cmd_firmware_check(args: argparse.Namespace) -> int:
         payload = _firmware_connectivity(args)
         pinmap_path = Path(args.pinmap)
         report = firmware.check_firmware_pinmap(
-            payload, firmware.load_pinmap(pinmap_path), firmware.sha256_file(pinmap_path)
+            payload,
+            firmware.load_pinmap(pinmap_path),
+            firmware.sha256_file(pinmap_path),
+            pinmap_path,
         )
     except (ValueError, OSError) as exc:
         return _fail("firmware-check", str(exc))

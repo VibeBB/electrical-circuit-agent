@@ -221,9 +221,19 @@ def _find(pins: list[McuPin], names: set[str], package_pin: str | None) -> McuPi
 
 
 def check_firmware_pinmap(
-    connectivity: CircuitFirmwareConnectivity, pinmap: FirmwarePinmap, pinmap_sha256: str
+    connectivity: CircuitFirmwareConnectivity,
+    pinmap: FirmwarePinmap,
+    pinmap_sha256: str,
+    pinmap_path: Path | None = None,
 ) -> FirmwareCheckReport:
     problems: list[str] = []
+    if pinmap_path is not None:
+        from ._envelope import check_envelope
+        from .workspace import workspace_root
+
+        status, detail = check_envelope(pinmap_path, "firmware", workspace_root(), pinmap_sha256)
+        if status != "pass":
+            problems.append(f"firmware pinmap provenance ({status}): {detail}")
     matched: list[str] = []
     mcu = connectivity.mcu(pinmap.mcu_ref)
     if mcu is None:
