@@ -36,6 +36,7 @@ from . import (
     doctor,
     firmware,
     fit_sheet,
+    handling,
     intake,
     libreview,
     netlist,
@@ -365,6 +366,19 @@ def cmd_firmware_export(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_handling(args: argparse.Namespace) -> int:
+    try:
+        brief_path = Path(args.brief)
+        result = handling.export_handling(_load_brief(args.brief), brief_path)
+    except (ValueError, OSError) as exc:
+        return _fail("handling", str(exc))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return _emit(result.model_dump(mode="json"))
+
+
 def cmd_firmware_check(args: argparse.Namespace) -> int:
     try:
         payload = _firmware_connectivity(args)
@@ -584,6 +598,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     firmware_export_parser.add_argument("--netlist", default=None)
     firmware_export_parser.add_argument("--out", required=True)
     firmware_export_parser.set_defaults(handler=cmd_firmware_export)
+
+    handling_parser = subparsers.add_parser(
+        "handling", help="export part MSL, peak reflow and ESD facts for prodeng"
+    )
+    handling_parser.add_argument("--brief", required=True)
+    handling_parser.add_argument("--out", default=None)
+    handling_parser.set_defaults(handler=cmd_handling)
 
     firmware_check_parser = subparsers.add_parser(
         "firmware-check", help="check a firmware-agent *.fw-pinmap.json against the circuit"

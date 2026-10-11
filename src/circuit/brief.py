@@ -23,6 +23,17 @@ class Placement(BaseModel):
 SIGNAL_CLASSES = ("power", "ground", "signal", "analog", "data", "highspeed", "shield")
 
 
+class PartHandling(BaseModel):
+    """Assembly handling facts of one part, cited from its datasheet."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    msl: Literal["1", "2", "2a", "3", "4", "5", "5a", "6"]
+    peak_reflow_c: float = Field(gt=0)
+    esd_sensitive: bool
+    source: str = Field(min_length=1)
+
+
 class Part(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -35,6 +46,7 @@ class Part(BaseModel):
     housing: str | None = None
     rated_current_a: float | None = Field(default=None, gt=0)
     rated_voltage_v: float | None = Field(default=None, gt=0)
+    handling: PartHandling | None = None
 
     @model_validator(mode="after")
     def validate_library_ids(self) -> Part:
