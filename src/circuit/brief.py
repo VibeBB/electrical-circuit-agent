@@ -231,6 +231,15 @@ class DftSpec(BaseModel):
     ftm_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class EnclosureSpec(BaseModel):
+    """Hash-pinned mechanical-agent board envelope checked by circuit.enclosure."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    envelope_path: str = Field(min_length=1)
+    envelope_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class LifetimeSpec(BaseModel):
     """Arrhenius lifetime facts handed to simulation-agent; simulation owns the verdict."""
 
@@ -279,6 +288,7 @@ class DesignBrief(BaseModel):
     lifetime: LifetimeSpec | None = None
     fabrication: FabricationSpec | None = None
     dft: DftSpec | None = None
+    enclosure: EnclosureSpec | None = None
     derating: DeratingSpec | None = None
 
     @model_validator(mode="after")

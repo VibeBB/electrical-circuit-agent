@@ -48,6 +48,20 @@ For non-done statuses missing inputs are simply omitted from `input_hashes`
 so a refusal can say "input missing". The response is hash-bound: input
 hashes, artifact hashes, gate verdicts, record refs, `responded_at`.
 
+## Mechanical board envelope
+
+mechanical-agent's `board-envelope` writes `<name>.mech-board-envelope.json`
+from its enclosure brief: the board size and mount holes its standoffs
+expect, the part height allowed above (`max_height_top_mm`) and below
+(`max_height_bottom_mm`) the board, and each side-face opening as a
+face-local `along_mm` span plus a `z_mm` span from the board top surface, in
+the `board_center_y_up_mm` frame `board-geometry` uses. Pin it in the brief
+`enclosure` block (`envelope_path`, `envelope_sha256`) and run
+`python -m circuit enclosure --brief BRIEF --geometry <name>.board-geometry.json`
+after placement. A tall part or an edge connector with no opening then fails
+here, before mech re-imports the board. To change the cavity, ask mech
+(ECR/ECO); never edit the envelope.
+
 ## Interchange files
 
 | File | Circuit role | Consumed by | Shape |
