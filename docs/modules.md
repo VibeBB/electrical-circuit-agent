@@ -59,6 +59,8 @@ Machine-readable design brief models and helpers.
 - `Net:`
 - `Board:`
 - `DftSpec:`
+- `DeratingRule:`
+- `DeratingSpec:`
 - `DesignBrief:`
 - `load_brief:`
 - `brief_sha256:`
@@ -197,6 +199,14 @@ Test-point access gate against the hash-pinned prodeng `factory-test-spec.json` 
 - `DftCheck:`
 - `DftReport:`
 - `check_dft:` — Check each factory-test net has a test point, against the pinned spec.
+
+## `derating.py`
+
+Voltage/current derating gate over the brief `derating` rules (`*.derating.json`).
+
+- `DeratingCheck:`
+- `DeratingReport:`
+- `check_derating:`
 
 ## `doctor.py`
 
