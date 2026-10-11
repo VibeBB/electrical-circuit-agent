@@ -24,6 +24,7 @@ from pydantic import (
     model_validator,
 )
 
+from . import _vrp
 from .records import records_dir, sha256_file, tree_sha256
 from .workspace import workspace_path, workspace_root
 
@@ -315,44 +316,28 @@ def ux_inbox(root: Path | None = None) -> UxInboxResult:
     )
 
 
+_LOG_KINDS = {
+    "decisions.jsonl": "decision",
+    "impressions.jsonl": "stage_impression",
+    "vision-reviews.jsonl": "vision_review",
+}
+
+
+def _intact_event_ids(log: Path) -> set[str]:
+    """Event ids from an intact VRP v2 log; a broken chain refuses every ref."""
+    kind = _LOG_KINDS[log.name]
+    records, problems = _vrp.verify_log(log, kind)
+    if problems:
+        raise ValueError(f"VRP {kind} log fails integrity: {problems[0]}")
+    return {str(record.get("event_id")) for record in records}
+
+
 def _record_event_ids(root: Path) -> tuple[set[str], set[str]]:
     """Known event_ids in the decisions and impressions/vision-review logs."""
     directory = records_dir(root)
-    decisions: set[str] = set()
-    impressions: set[str] = set()
-    for line in (
-        (directory / "decisions.jsonl").read_text(encoding="utf-8").splitlines()
-        if (directory / "decisions.jsonl").is_file()
-        else []
-    ):
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(record, dict):
-            continue
-        event_id = cast(dict[str, Any], record).get("event_id")
-        if isinstance(event_id, str):
-            decisions.add(event_id)
-    for name in ("impressions.jsonl", "vision-reviews.jsonl"):
-        path = directory / name
-        if not path.is_file():
-            continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(record, dict):
-                continue
-            event_id = cast(dict[str, Any], record).get("event_id")
-            if isinstance(event_id, str):
-                impressions.add(event_id)
-    return decisions, impressions
+    return _intact_event_ids(directory / "decisions.jsonl"), _intact_event_ids(
+        directory / "impressions.jsonl"
+    ) | _intact_event_ids(directory / "vision-reviews.jsonl")
 
 
 class UxRespondResult(_Strict):

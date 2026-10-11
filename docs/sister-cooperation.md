@@ -40,6 +40,8 @@ Statuses: `accepted`, `in_progress`, `done`, `rejected`, `deferred`,
 - `done` refused while a verdict is `fail`/`unknown`, when the request is
   stale, or when inputs are missing.
 - decision/impression refs must exist as event_ids in the VRP logs.
+  Refs resolve only against an intact VRP v2 chain: a log that fails
+  `verify_log` (forged, edited or truncated lines) refuses every ref into it.
 - artifact paths must exist (file → sha256, dir → tree hash).
 
 For non-done statuses missing inputs are simply omitted from `input_hashes`

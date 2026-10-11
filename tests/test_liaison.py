@@ -430,3 +430,14 @@ def test_cli_ux_inbox_and_respond(workspace: Path, capsys: pytest.CaptureFixture
     payload = json.loads(capsys.readouterr().out)
     assert payload["verdict"] == "pass"
     assert (workspace / "liaison" / "move-j2.ux-response.json").is_file()
+
+
+def test_respond_refuses_refs_into_broken_chain(workspace: Path) -> None:
+    _write_request(workspace, "move-j2")
+    payload = _done_payload(workspace)
+    log = records.records_dir(workspace) / "decisions.jsonl"
+    last = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(last | {"event_id": "f" * 64}) + "\n")
+    with pytest.raises(ValueError, match="fails integrity"):
+        liaison.ux_respond(payload, workspace)
