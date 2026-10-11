@@ -67,6 +67,7 @@ Machine-readable design brief models and helpers.
 - `Part:`
 - `Net:`
 - `Board:`
+- `DftSpec:`
 - `Alternate:`
 - `DeratingRule:`
 - `DeratingSpec:`
@@ -199,6 +200,15 @@ Dual-lane extraction of PDF datasheets and deterministic page artifacts.
 - `page_words` — Load successful lane words for a page in the requested lane order.
 - `page_tables` — Load extracted table rows for a page.
 - `check_received` — Check both text extraction lanes against a datasheet acquisition request.
+
+## `dft.py`
+
+Test-point access gate against the hash-pinned prodeng `factory-test-spec.json` (`*.dft.json`).
+
+- `ProdengFtmSpec:` — Strict mirror of production-engineering ``factory-test-spec.json`` (declared FTM).
+- `DftCheck:`
+- `DftReport:`
+- `check_dft:` — Check each factory-test net has a test point, against the pinned spec.
 
 ## `derating.py`
 

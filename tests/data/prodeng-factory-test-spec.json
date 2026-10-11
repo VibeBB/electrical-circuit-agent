@@ -1,0 +1,70 @@
+{
+  "command_timeout_budget_s": 3.5,
+  "commands": [
+    {
+      "covers": [
+        "CH-03"
+      ],
+      "destructive": false,
+      "id": "TC-01",
+      "measures_nets": [
+        "UART_RX",
+        "UART_TX"
+      ],
+      "name": "board-and-heater-sensor-check",
+      "request": "TEST SENSORS",
+      "response_pattern": "SENSORS PASS",
+      "timeout_ms": 2000
+    },
+    {
+      "covers": [
+        "CH-03"
+      ],
+      "destructive": false,
+      "id": "TC-02",
+      "measures_nets": [
+        "FTM_STRAP"
+      ],
+      "name": "provision-serial-and-calibration",
+      "request": "PROVISION <serial> <calibration>",
+      "response_pattern": "PROVISIONED <serial>",
+      "timeout_ms": 1500
+    }
+  ],
+  "declared": true,
+  "entry": {
+    "conditions": [
+      "FTM_STRAP asserted by the keyed fixture before reset.",
+      "UART magic token PRODENG-FTM-v1 received before the 2-second boot timeout."
+    ],
+    "detail": "A fixture-held strap on FTM_STRAP is sampled only during reset.",
+    "method": "gpio_strap"
+  },
+  "exit": "Issue EXIT, restore the strap, and power-cycle; confirm normal firmware boot.",
+  "field_lockout": {
+    "detail": "Provisioning sets a write-once production-complete NVM flag that disables factory entry.",
+    "method": "nvm_flag"
+  },
+  "interface": {
+    "nets": [
+      "FTM_STRAP",
+      "UART_RX",
+      "UART_TX"
+    ],
+    "settings": "115200 baud, 8 data bits, no parity, 1 stop bit; UTF-8 newline-delimited frames.",
+    "transport": "uart"
+  },
+  "max_duration_s": 6.0,
+  "provisioning": [
+    {
+      "item": "serial_number",
+      "source": "MES-issued unit serial",
+      "write_once": true
+    },
+    {
+      "item": "calibration",
+      "source": "Factory calibration fixture",
+      "write_once": true
+    }
+  ]
+}
