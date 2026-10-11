@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from circuit import cli
+from circuit._envelope import sidecar_path, write_envelope
 from circuit.brief import DesignBrief
 from circuit.sim_thermal import (
     expected_request,
@@ -98,6 +99,7 @@ def _answer(
     }
     path = root / "sim" / "led_loop.thermal.sim-response.json"
     path.write_text(json.dumps(response), encoding="utf-8")
+    write_envelope(path, "sim", [], root)
     return path
 
 
@@ -163,6 +165,7 @@ def test_accepted_response_reports_sim_checks(tmp_path: Path) -> None:
         ("response", "pass"),
         ("R1.tj", "pass"),
         ("D1.tj", "pass"),
+        ("provenance", "pass"),
     ]
     assert result["checks"][1]["measured"] == 90.0
     assert "limit ≤ 145 °C" in result["checks"][1]["detail"]
@@ -384,6 +387,7 @@ def _life_answer(root: Path, design: DesignBrief, verdict: str) -> Path:
     }
     path = root / "sim" / "led_loop.lifetime.sim-response.json"
     path.write_text(json.dumps(response), encoding="utf-8")
+    write_envelope(path, "sim", [], root)
     return path
 
 
@@ -414,7 +418,7 @@ def test_lifetime_round_trip_keeps_simulation_verdict(tmp_path: Path, verdict: s
     result = thermal_check(design, path, tmp_path, "lifetime")
     assert result["verdict"] == verdict
     subjects = [check["subject"] for check in result["checks"]]
-    assert subjects == ["response", "R1.life_h"]
+    assert subjects == ["response", "R1.life_h", "provenance"]
 
 
 def test_lifetime_stale_brief_and_missing_section(tmp_path: Path) -> None:
@@ -473,3 +477,14 @@ def test_cli_lifetime_round_trip(
     _life_answer(tmp_path, DesignBrief.model_validate({**data, "lifetime": LIFETIME}), "pass")
     assert cli.main(["sim-check", "--brief", str(brief_path), "--kind", "lifetime"]) == 0
     assert json.loads(capsys.readouterr().out)["verdict"] == "pass"
+
+
+def test_response_provenance_missing_or_foreign_is_not_a_pass(tmp_path: Path) -> None:
+    design = _brief()
+    path = _answer(tmp_path, design, PASSING)
+    sidecar = sidecar_path(path)
+    body = json.loads(sidecar.read_text(encoding="utf-8"))
+    sidecar.write_text(json.dumps(body | {"producer": "mech"}), encoding="utf-8")
+    assert _status(design, path, tmp_path)["provenance"] == "fail"
+    sidecar.unlink()
+    assert _status(design, path, tmp_path)["provenance"] == "unknown"

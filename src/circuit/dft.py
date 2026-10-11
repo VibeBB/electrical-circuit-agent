@@ -131,6 +131,12 @@ def check_dft(design: DesignBrief, brief_path: Path) -> DftReport:
         spec = _parse(raw)
     except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
         return report([], "fail", f"factory test spec is malformed: {exc}")
+    from ._envelope import check_envelope
+    from .workspace import workspace_root
+
+    provenance, provenance_detail = check_envelope(spec_path, "prodeng", workspace_root(), pinned)
+    if provenance != "pass":
+        return report([], provenance, f"factory test spec provenance: {provenance_detail}")
     if isinstance(spec, NoFtmSpec):
         return report([], "pass", "prodeng declares no factory test mode")
     nets = set(spec.interface.nets)
