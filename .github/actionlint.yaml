@@ -33,6 +33,9 @@ paths:
     ignore:
       - 'unexpected key "background" for step .+'
       - 'step must run script with "run" section or run action with "uses" section'
+  .github/workflows/mutation.yml:
+    ignore:
+      - 'unexpected key "cache-mode" for "job" section'
   .github/workflows/release.yml:
     ignore:
       - 'unexpected key "cache-mode" for "job" section'

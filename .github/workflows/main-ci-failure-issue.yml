@@ -11,6 +11,7 @@ on:
       - "Digest lock PR sweep"
       - "Check dependency updates"
       - "Locked image check"
+      - "Mutation probe"
       - "PR branch cleanup"
       - "Publish circuit images"
       - "Release"

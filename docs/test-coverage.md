@@ -117,3 +117,21 @@ set by wire-agent:
   densely sampled points;
 - equivalence classes for point-in-polygon (inside, outside, on an edge,
   convex and concave outlines).
+
+## Mutation probe (advisory)
+
+`scripts/mutation_probe.py` (stdlib only, canonical across the family)
+mutates one operator at a time in the deterministic gate modules listed in
+`[tool.vibebb-mutation]` of `pyproject.toml` and runs the targeted gate
+tests against each mutant. Operators: relational replacement (`<`/`<=`,
+`>`/`>=`, `==`/`!=`, `in`/`not in`, `is`/`is not`), logical connector
+replacement (`and`/`or`) and boolean return replacement. Mutants compile in
+memory through the `SourceFileLoader` hook, so the working tree is never
+written.
+
+The weekly `mutation.yml` workflow publishes the score and every surviving
+mutant to the job summary and a `mutation-probe` artifact. Survivors are
+evidence for the next boundary or decision-table test, never a gate: the
+run fails only when the unmutated tests fail, because then no score can be
+trusted. Run it locally with
+`uv run python scripts/mutation_probe.py run --json out/mutation.json`.

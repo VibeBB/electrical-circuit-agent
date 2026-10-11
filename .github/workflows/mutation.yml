@@ -1,0 +1,46 @@
+name: Mutation probe
+
+# Advisory: survivors never fail the run. A failing unmutated baseline
+# does, because no score can be trusted then (docs/test-coverage.md).
+on:
+  schedule:
+    - cron: "0 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    # No actions/cache usage: forbid restore and save entirely (setup-uv
+    # below already runs with enable-cache: false).
+    cache-mode: none
+    steps:
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+          disable-telemetry: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.14"
+          enable-cache: false
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Run the mutation probe
+        run: uv run python scripts/mutation_probe.py run --json out/mutation.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mutation-probe
+          path: out/mutation.json
+          retention-days: 30
+          if-no-files-found: ignore
