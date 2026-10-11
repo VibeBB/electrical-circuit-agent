@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- SLP v2 responses carry `records_heads`, the chain head of every intact
+  VRP log at answer time; UX-creator checks it on receipt. `done` is
+  refused while any VRP log fails integrity.
+
 ### Changed
 
 - Records move to VRP v2 (ADR-0037): hash-chained logs, grounded
