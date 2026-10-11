@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Final, Literal, cast
 
 from . import (
+    alternates,
     board_geometry,
     brief,
     connectivity,
@@ -353,6 +354,19 @@ def cmd_firmware_export(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_alternates(args: argparse.Namespace) -> int:
+    try:
+        brief_path = Path(args.brief)
+        report = alternates.check_alternates(_load_brief(args.brief), brief_path)
+    except (ValueError, OSError) as exc:
+        return _fail("alternates", str(exc))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return _emit(report.model_dump(mode="json"))
+
+
 def cmd_firmware_check(args: argparse.Namespace) -> int:
     try:
         payload = _firmware_connectivity(args)
@@ -564,6 +578,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     firmware_export_parser.add_argument("--netlist", default=None)
     firmware_export_parser.add_argument("--out", required=True)
     firmware_export_parser.set_defaults(handler=cmd_firmware_export)
+
+    alternates_parser = subparsers.add_parser(
+        "alternates", help="check the brief's second-source parts are drop-ins"
+    )
+    alternates_parser.add_argument("--brief", required=True)
+    alternates_parser.add_argument("--out", default=None)
+    alternates_parser.set_defaults(handler=cmd_alternates)
 
     firmware_check_parser = subparsers.add_parser(
         "firmware-check", help="check a firmware-agent *.fw-pinmap.json against the circuit"

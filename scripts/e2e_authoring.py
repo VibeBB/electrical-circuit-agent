@@ -21,6 +21,7 @@ from typing import Any, Literal, TextIO, cast
 
 from circuit import __version__ as _circuit_version
 from circuit import (
+    alternates,
     apiserver,
     brief,
     drawing_sheet,
@@ -1177,6 +1178,21 @@ def _stage_schematic_gate(run: AuthoringRun) -> SchematicGate:
     )
     if connectivity.verdict != "pass":
         raise StepFailure("circuit.connectivity_check", connectivity.model_dump_json())
+    if any(part.alternates for part in loaded_brief.parts):
+        second_sources = alternates.check_alternates(loaded_brief, run.brief_path)
+        (reports_dir / f"{loaded_brief.name}.alternates.json").write_text(
+            second_sources.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        )
+        _record(
+            run.log,
+            {
+                "tool": "circuit.alternates",
+                "payload": {"brief": str(run.brief_path)},
+                "result": second_sources.model_dump(mode="json"),
+            },
+        )
+        if second_sources.verdict != "pass":
+            raise StepFailure("circuit.alternates", second_sources.model_dump_json())
 
     erc_result = kicad_cli.erc(schematic, reports_dir / f"{loaded_brief.name}.erc.json")
     _advisory_detail(
