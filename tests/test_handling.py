@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from circuit import cli
+from circuit import _envelope, cli
 from circuit.brief import DesignBrief
 from circuit.handling import export_handling
 
@@ -69,3 +69,15 @@ def test_cli_exit_follows_verdict(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert json.loads(out.read_text(encoding="utf-8"))["artifact_kind"] == "circuit_handling"
     capsys.readouterr()
     assert cli.main(["handling", "--brief", str(BRIEF)]) == 1
+
+
+def test_cli_out_writes_a_checkable_v3_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    brief_path = _all(tmp_path)
+    out = tmp_path / "demo.circuit-handling.json"
+    assert cli.main(["handling", "--brief", str(brief_path), "--out", str(out)]) == 0
+    assert _envelope.check_envelope(out, "circuit", tmp_path)[0] == "pass"
+    brief_path.write_text(brief_path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    assert _envelope.check_envelope(out, "circuit", tmp_path)[0] == "fail"
