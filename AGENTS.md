@@ -107,15 +107,18 @@ across the family; change all 11 copies together and update EXPECTED.
 `record_vision_tool_event.py`, and `report_design_status.py` are intentionally
 repo-specific.
 
-## Records (VRP v1)
+## Records (VRP v2)
 
 Every non-trivial decision, stage impression, and vision review is appended to
-the append-only JSONL logs under `observations/circuit/` via
+the hash-chained, append-only JSONL logs under `observations/circuit/` via
 `circuit_record_decision`, `circuit_record_impression`, and
-`circuit_record_vision_review` (or the `record` CLI subcommand). Impressions
-need 400+ characters and 3+ sentences of substance. Records are advisory: they
+`circuit_record_vision_review` (or the `record` CLI subcommand); reconciles,
+insights, read receipts and bard song receipts have their own writers.
+Impressions need 400+ characters, 3+ sentences, facets and claims bound to
+exact artifact tokens; `circuit-reports/*.png` renders also need a blind
+review by `circuit-blind-review` and a reconcile. Records are advisory: they
 never gate request inputs and never change an ERC, DRC, or kicad-cli verdict.
-`_records.py` and `require_records.py` are shared hook files canonical across
+`_records.py`, `require_records.py` and `blind_guard.py` are shared hook files canonical across
 the family; never edit them locally — `scripts/check_shared_hooks.py` verifies
 their normalized AST hashes.
 

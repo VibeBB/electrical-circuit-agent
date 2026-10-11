@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -1196,6 +1197,54 @@ _TOOLS: list[tuple[str, str, dict[str, Any]]] = [
         records.VisionReviewInput.model_json_schema(),
     ),
     (
+        "circuit_record_reconcile",
+        "Compare independent reviews of one image: [primary, blind] (round 1) or "
+        "[primary, blind, tiebreak] (round 2, the last); a round-2 split stays unknown.",
+        records.ReconcileInput.model_json_schema(),
+    ),
+    (
+        "circuit_record_insight",
+        "Move an impression insight through tried/adopted/rejected/deferred/superseded; "
+        "a rejected insight returns only with revisits and new evidence.",
+        records.InsightStatusInput.model_json_schema(),
+    ),
+    (
+        "circuit_record_song_receipt",
+        "Receive a bard song addressed to circuit; a receipt never feeds a gate and "
+        "never asks bard for another song.",
+        records.SongReceiptInput.model_json_schema(),
+    ),
+    (
+        "circuit_record_read",
+        "Record that a sister artifact was taken in; resolves the impressions bound to it.",
+        records.ReadInput.model_json_schema(),
+    ),
+    (
+        "circuit_records_digest",
+        "Family-wide impression digest: integrity per plugin, open concerns, disputes, "
+        "unanswered reads, insights, split reviews and undelivered songs.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    ),
+    (
+        "circuit_records_search",
+        "Search every plugin's impressions by text, plugin, stage, artifact, severity or "
+        "open concerns; logs with broken integrity are listed separately.",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "system": {"type": "string"},
+                "kind": {"type": "string", "enum": ["stage_impression", "vision_review"]},
+                "stage": {"type": "string"},
+                "artifact": {"type": "string"},
+                "severity": {"type": "string", "enum": ["info", "warning", "error"]},
+                "open_only": {"type": "boolean"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    (
         "circuit_ux_inbox",
         "List UX-creator liaison requests targeting circuit with their state "
         "(new, answered, stale, blocked) plus malformed request/response files.",
@@ -1350,6 +1399,12 @@ _ANNOTATIONS: dict[str, ToolAnnotations] = {
     "circuit_record_impression": _anno("Record stage impression", write=True),
     "circuit_record_vision_review": _anno("Record vision review", write=True),
     "circuit_records_status": _anno("Records status", write=False),
+    "circuit_record_reconcile": _anno("Record review reconcile", write=True),
+    "circuit_record_insight": _anno("Record insight status", write=True),
+    "circuit_record_song_receipt": _anno("Record song receipt", write=True),
+    "circuit_record_read": _anno("Record read receipt", write=True),
+    "circuit_records_digest": _anno("Records digest", write=False),
+    "circuit_records_search": _anno("Records search", write=False),
     "circuit_ux_inbox": _anno("UX liaison inbox", write=False),
     "circuit_ux_respond": _anno("UX liaison respond", write=True),
     "circuit_kicad_version": _anno("KiCad version", write=False),
@@ -2031,6 +2086,20 @@ def _pin_source_inputs(args: dict[str, Any]) -> list[PinSourceInput] | None:
     return [PinSourceInput.model_validate(cast(dict[str, object], item)) for item in source_values]
 
 
+_RECORD_TOOLS: dict[str, Callable[[dict[str, Any]], Any]] = {
+    "circuit_record_decision": records.record_decision,
+    "circuit_record_impression": records.record_impression,
+    "circuit_record_vision_review": records.record_vision_review,
+    "circuit_record_reconcile": records.record_reconcile,
+    "circuit_record_insight": records.record_insight,
+    "circuit_record_song_receipt": records.record_song_receipt,
+    "circuit_record_read": records.record_read,
+    "circuit_records_status": lambda _payload: records.records_summary(),
+    "circuit_records_digest": lambda _payload: records.records_digest(),
+    "circuit_records_search": records.records_search,
+}
+
+
 async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResult:
     image_paths: list[Path] = []
     result: Any = None
@@ -2691,14 +2760,8 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                 rewrite_text_block_images=_rewrite_text_block_images,
                 rewrite_base64_images=_rewrite_base64_images,
             )
-        elif name == "circuit_record_decision":
-            result = records.record_decision(arguments or {})
-        elif name == "circuit_record_impression":
-            result = records.record_impression(arguments or {})
-        elif name == "circuit_record_vision_review":
-            result = records.record_vision_review(arguments or {})
-        elif name == "circuit_records_status":
-            result = records.records_summary()
+        elif name in _RECORD_TOOLS:
+            result = _RECORD_TOOLS[name](arguments or {})
         elif name == "circuit_ux_inbox":
             result = liaison.ux_inbox()
         elif name == "circuit_ux_respond":

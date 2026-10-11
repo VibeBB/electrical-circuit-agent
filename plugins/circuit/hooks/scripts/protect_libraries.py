@@ -33,11 +33,15 @@ CORPUS_PATH = re.compile(r"(?:^|/)library/corpus(?:/|$)", re.IGNORECASE)
 RECORDS_PATH = re.compile(
     r"(?:^|/)observations/circuit/(?:"
     r"decisions\.jsonl|impressions\.jsonl|vision-reviews\.jsonl|"
+    r"reconciles\.jsonl|insights\.jsonl|reads\.jsonl|song-receipts\.jsonl|"
+    r"[a-z-]+\.v1\.jsonl|"
     r"vision-tool-events\.jsonl|image-observations\.jsonl|"
     r"records-status\.json|\.sessions(?:/|$))",
     re.IGNORECASE,
 )
-UX_RESPONSE_PATH = re.compile(r"(?:^|/)liaison/[^/]+\.ux-response\.json$", re.IGNORECASE)
+UX_RESPONSE_PATH = re.compile(
+    r"(?:^|/)liaison/[^/]+\.(?:ux-response|bard-song)\.json$", re.IGNORECASE
+)
 WRITE_TOOLS = {"file_editor", "apply_patch"}
 VIEW_ACTIONS = {"view", "read", "undo_edit"}
 WRITE_ACTIONS = {"create", "str_replace", "insert", "edit", "write"}

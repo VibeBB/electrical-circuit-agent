@@ -194,13 +194,53 @@ def test_inbox_malformed_files_reported(workspace: Path) -> None:
     assert inbox.requests == []
 
 
+def _impression() -> dict[str, Any]:
+    return {
+        "stage": "layout",
+        "artifacts": ["out"],
+        "impression": IMPRESSION,
+        "facets": {
+            "observed": ["the board names the decision refs net", "input hashes is a net"],
+            "works": ["the connector clears the enclosure lip"],
+            "concerns": [
+                {
+                    "id": "c1",
+                    "text": "decision refs may go stale when a request is revised",
+                    "severity": "warning",
+                    "about": "self",
+                    "anchor": "decision refs",
+                }
+            ],
+            "feelings": {
+                "maker": "can place and solder the connector by hand",
+                "user": "reaches the plug without opening the case",
+            },
+            "next_actions": ["re-run DRC after the final pour"],
+        },
+        "claims": [
+            {
+                "text": "the moved connector is placed",
+                "anchor": "decision refs",
+                "artifact": "out/board.kicad_pcb",
+            },
+            {
+                "text": "the supply net reaches the connector",
+                "anchor": "input hashes",
+                "artifact": "out/board.kicad_pcb",
+            },
+        ],
+        "confidence": "medium",
+        "unknowns": [],
+    }
+
+
 def _make_refs(workspace: Path) -> tuple[str, str]:
     (workspace / "out").mkdir(exist_ok=True)
-    (workspace / "out" / "board.kicad_pcb").write_text("(kicad_pcb)\n", encoding="utf-8")
-    decision = records.record_decision(_decision("out/board.kicad_pcb"), workspace)
-    impression = records.record_impression(
-        {"stage": "layout", "artifacts": ["out"], "impression": IMPRESSION}, workspace
+    (workspace / "out" / "board.kicad_pcb").write_text(
+        "(kicad_pcb (net decision refs) (net input hashes))\n", encoding="utf-8"
     )
+    decision = records.record_decision(_decision("out/board.kicad_pcb"), workspace)
+    impression = records.record_impression(_impression(), workspace)
     return (
         cast(str, decision["record"]["event_id"]),
         cast(str, impression["record"]["event_id"]),

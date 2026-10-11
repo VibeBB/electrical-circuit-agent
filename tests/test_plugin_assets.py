@@ -13,12 +13,13 @@ PLUGIN = ROOT / "plugins" / "circuit"
 def test_plugin_loads_all_assets() -> None:
     plugin = Plugin.load(PLUGIN)
     assert plugin.name == "circuit"
-    assert len(plugin.agents) == 7
+    assert len(plugin.agents) == 8
     assert {agent.name for agent in plugin.agents} == {
         "circuit-brief",
         "circuit-schematic",
         "circuit-layout",
         "circuit-library",
+        "circuit-blind-review",
         "circuit-review",
         "circuit-part-author-a",
         "circuit-part-author-b",
@@ -45,7 +46,10 @@ def test_plugin_loads_all_assets() -> None:
     protect_command = plugin.hooks.pre_tool_use[0].hooks[0].command
     assert plugin.hooks.pre_tool_use[0].matcher == "*"
     assert plugin.hooks.stop[0].hooks[0].name == "require-records"
-    assert all(agent.max_budget_per_run == 3.0 for agent in plugin.agents)
+    assert all(
+        agent.max_budget_per_run == (1.5 if agent.name == "circuit-blind-review" else 3.0)
+        for agent in plugin.agents
+    )
     assert all(len(agent.when_to_use_examples) >= 2 for agent in plugin.agents)
     for agent in plugin.agents:
         assert agent.hooks is not None

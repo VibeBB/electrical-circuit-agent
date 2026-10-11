@@ -162,42 +162,7 @@ def cmd_review_record(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _fail("review-record", str(exc))
-    vision = _log_vision_review(path)
-    return _emit(
-        {
-            "verdict": PASS,
-            "record": str(path),
-            "vision_log": vision["path"],
-            "vision_event_id": vision["event_id"],
-        }
-    )
-
-
-def _log_vision_review(advisory_path: Path) -> dict[str, str]:
-    """Mirror the advisory into the VRP vision-review log when the image is in the workspace."""
-    from .records import record_vision_review
-
-    detail = json.loads(advisory_path.read_text(encoding="utf-8"))["detail"]
-    try:
-        logged = record_vision_review(
-            {
-                "image_path": detail["image_path"],
-                "model": detail["model"],
-                "checklist": detail["checklist"].replace("_", "-"),
-                "findings": [
-                    {
-                        "category": f["category"],
-                        "severity": f["severity"],
-                        "note": f"{f['category']}: {f['note']}",
-                    }
-                    for f in detail["findings"]
-                ],
-                "impression": detail["impression"],
-            }
-        )
-    except ValueError as exc:
-        return {"path": f"skipped: {exc}", "event_id": ""}
-    return {"path": str(logged["path"]), "event_id": str(logged["record"]["event_id"])}
+    return _emit({"verdict": PASS, "record": str(path)})
 
 
 def cmd_datasheet_revision_check(args: argparse.Namespace) -> int:
@@ -441,14 +406,20 @@ def cmd_firmware_check(args: argparse.Namespace) -> int:
 def cmd_record(args: argparse.Namespace) -> int:
     from pydantic import ValidationError
 
-    from .records import RECORDERS, records_summary
+    from .records import RECORDERS, records_digest, records_search, records_summary
 
-    if args.kind == "status":
-        return _emit(records_summary())
     try:
+        if args.kind == "status":
+            return _emit(records_summary())
+        if args.kind == "digest":
+            return _emit(records_digest())
+        if args.kind == "search" and args.json is None:
+            return _emit(records_search({}))
         raw: Any = json.loads(Path(args.json).read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("record JSON must be an object")
+        if args.kind == "search":
+            return _emit(records_search(cast(dict[str, Any], raw)))
         return _emit(RECORDERS[args.kind](cast(dict[str, Any], raw)))
     except (OSError, ValueError, ValidationError, json.JSONDecodeError) as exc:
         return _fail("record", str(exc))
@@ -682,7 +653,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     record_parser = subparsers.add_parser("record", help="append a VibeBB Record Protocol record")
     record_parser.add_argument(
-        "kind", choices=["decision", "impression", "vision-review", "status"]
+        "kind",
+        choices=[
+            "decision",
+            "impression",
+            "vision-review",
+            "reconcile",
+            "insight",
+            "song-receipt",
+            "read",
+            "status",
+            "digest",
+            "search",
+        ],
     )
     record_parser.add_argument(
         "--json", default=None, help="JSON object file with the record fields"
@@ -706,8 +689,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     author_parser.set_defaults(handler=cmd_author)
 
     args = parser.parse_args(argv)
-    if args.command == "record" and args.kind != "status" and not args.json:
-        parser.error("record decision|impression|vision-review requires --json")
+    if (
+        args.command == "record"
+        and args.kind not in {"status", "digest", "search"}
+        and not args.json
+    ):
+        parser.error(f"record {args.kind} requires --json")
     if args.command == "ux" and args.action == "respond" and not args.json:
         parser.error("ux respond requires --json")
     handler: Any = args.handler

@@ -29,10 +29,11 @@ and routing, and `circuit-review` owns checking the deterministic ERC/DRC
 output. Sub-agents are delegated via the SDK's `TaskToolSet` and
 `AgentDefinition`.
 
-## Records layer (VRP v1)
+## Records layer (VRP v2)
 
-Design reasoning is append-only JSONL under `observations/circuit/`:
+Design reasoning is hash-chained, append-only JSONL under `observations/circuit/`:
 `decisions.jsonl`, `impressions.jsonl`, `vision-reviews.jsonl`,
+`reconciles.jsonl`, `insights.jsonl`, `reads.jsonl`, `song-receipts.jsonl`,
 `vision-tool-events.jsonl`, `image-observations.jsonl`, plus
 `records-status.json` and `.sessions/` for hook state. Writers are
 `src/circuit/records.py` (MCP tools `circuit_record_*`, `circuit_records_status`

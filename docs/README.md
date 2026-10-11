@@ -63,6 +63,7 @@
 | [0034](adr/ADR-0034-records-liaison-docs.md) | VRP v1, SLP v2, and the documentation split |
 | [0035](adr/ADR-0035-iso7200-drawing-sheet.md) | ISO 7200 drawing sheet and title-block data from the brief |
 | [0036](adr/ADR-0036-structural-coverage.md) | Structural coverage gate (C0, C1, C2, MC/DC, boundaries) |
+| [0037](adr/ADR-0037-vrp-v2-records.md) | VRP v2 records, blind render review and song receipts |
 
 ## Research
 

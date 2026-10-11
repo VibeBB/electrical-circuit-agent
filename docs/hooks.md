@@ -27,7 +27,7 @@ are canonical across the family — never edit locally
 | user_prompt_submit | `*` | intake-attachments | Same attachment materialization per user message | intake/attachments/* |
 | user_prompt_submit | `*` | record-library-review | Mirrors trusted library-review user responses into the review journal | library review journal |
 | user_prompt_submit | `*` | record-human-response | Binds user answers to outstanding HumanRequests | human request responses |
-| pre_tool_use | `*` | protect-libraries | Denies file_editor/terminal writes to `libraries/` outside verified flows, and any write to `observations/circuit/*.jsonl`, `records-status.json`, `.sessions/`, `liaison/*.ux-response.json` (exit 2) | none |
+| pre_tool_use | `*` | protect-libraries | Denies file_editor/terminal writes to `libraries/` outside verified flows, and any write to `observations/circuit/*.jsonl`, `records-status.json`, `.sessions/`, `liaison/*.ux-response.json`, `liaison/*.bard-song.json` (exit 2) | none |
 | pre_tool_use | terminal | safety-rail | Denies destructive/risky terminal commands | none |
 | stop | `*` | require-records (`stop`) | FIRST stop hook: denies stop while artifact-bound records are still owed (max_stop_denials: 2 per `records-policy.json`) | records-status.json |
 | stop | `*` | report-design-status | Prints design status summary at session end | none |
@@ -45,4 +45,5 @@ are canonical across the family — never edit locally
 | same five | pre_tool_use `terminal` | safety-rail | same |
 | circuit-brief, circuit-review | post_tool_use `inspect_image_with_vision` | record-vision-tool-event | same |
 | circuit-part-author-a/-b | pre_tool_use `*` | blind-author-lane-guard (`guard_author_lane.py`, `CIRCUIT_AUTHORING_LANE=a|b`) | Denies (exit 2) other-lane run dirs, `observations/circuit/` paths, and `circuit_record_*`/`circuit_records_status`/`circuit_ux_*` tools so shared logs cannot leak reasoning across the blind lanes |
+| circuit-blind-review | pre_tool_use `file_editor\|apply_patch\|terminal\|grep\|glob` | blind-guard (`blind_guard.py`, canonical) | Denies (exit 2) reads of `observations/`, `*.advisory.json`, `review-visual-*`, design reports, liaison answers and bard songs so the second review is not anchored by the first |
 | circuit-part-author-a/-b | post_tool_use `circuit_part_author_commit` | record-authoring-commit | Seals each lane's commit impression |
