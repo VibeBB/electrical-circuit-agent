@@ -27,6 +27,15 @@ Advisory Konnect observations kept separate from deterministic gates.
 - `build_review_record` — Build the typed `vision_review` advisory record for one image.
 - `write_review_record` — Validate and write `review-visual-<slug>.advisory.json`; returns it.
 
+## `alternates.py`
+
+Drop-in check of the brief's second-source parts (`*.alternates.json`).
+
+- `AlternateCheck:`
+- `AlternateEntry:`
+- `AlternatesReport:`
+- `check_alternates:` — Check every declared alternate against its primary part.
+
 ## `apiserver.py`
 
 Lifecycle management for a headless KiCad API server.
@@ -58,6 +67,7 @@ Machine-readable design brief models and helpers.
 - `Part:`
 - `Net:`
 - `Board:`
+- `Alternate:`
 - `DeratingRule:`
 - `DeratingSpec:`
 - `DesignBrief:`
