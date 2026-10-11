@@ -34,6 +34,31 @@ class PartHandling(BaseModel):
     source: str = Field(min_length=1)
 
 
+def _check_library_id(value: str, field: str) -> None:
+    if value.count(":") != 1 or any(not part for part in value.split(":")):
+        raise ValueError(f"{field} must contain exactly one colon")
+
+
+class Alternate(BaseModel):
+    """A second-source part approved as a drop-in for one brief part."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mpn: str = Field(min_length=1)
+    manufacturer: str = Field(min_length=1)
+    lib_id: str
+    footprint: str
+    rated_current_a: float | None = Field(default=None, gt=0)
+    rated_voltage_v: float | None = Field(default=None, gt=0)
+    source: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_library_ids(self) -> Alternate:
+        _check_library_id(self.lib_id, "lib_id")
+        _check_library_id(self.footprint, "footprint")
+        return self
+
+
 class Part(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -47,13 +72,15 @@ class Part(BaseModel):
     rated_current_a: float | None = Field(default=None, gt=0)
     rated_voltage_v: float | None = Field(default=None, gt=0)
     handling: PartHandling | None = None
+    alternates: list[Alternate] = Field(default_factory=list[Alternate])
 
     @model_validator(mode="after")
     def validate_library_ids(self) -> Part:
-        if self.lib_id.count(":") != 1 or any(not part for part in self.lib_id.split(":")):
-            raise ValueError("lib_id must contain exactly one colon")
-        if self.footprint.count(":") != 1 or any(not part for part in self.footprint.split(":")):
-            raise ValueError("footprint must contain exactly one colon")
+        _check_library_id(self.lib_id, "lib_id")
+        _check_library_id(self.footprint, "footprint")
+        mpns = [alternate.mpn.casefold() for alternate in self.alternates]
+        if len(set(mpns)) != len(mpns):
+            raise ValueError(f"{self.reference}: alternate mpns must be unique")
         return self
 
 
