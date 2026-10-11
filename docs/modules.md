@@ -58,6 +58,8 @@ Machine-readable design brief models and helpers.
 - `Part:`
 - `Net:`
 - `Board:`
+- `DeratingRule:`
+- `DeratingSpec:`
 - `DesignBrief:`
 - `load_brief:`
 - `brief_sha256:`
@@ -187,6 +189,14 @@ Dual-lane extraction of PDF datasheets and deterministic page artifacts.
 - `page_words` — Load successful lane words for a page in the requested lane order.
 - `page_tables` — Load extracted table rows for a page.
 - `check_received` — Check both text extraction lanes against a datasheet acquisition request.
+
+## `derating.py`
+
+Voltage/current derating gate over the brief `derating` rules (`*.derating.json`).
+
+- `DeratingCheck:`
+- `DeratingReport:`
+- `check_derating:`
 
 ## `doctor.py`
 
