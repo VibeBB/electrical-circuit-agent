@@ -7,6 +7,7 @@ Subcommands:
   datasheet-revision-check  compare a PartSpec with its manufacturer source
   connectivity emit the wire-agent ConnectivitySource contract (JSON verdict)
   board-geometry   emit board outline/placement/heights for mechanical-agent (JSON verdict)
+  enclosure        gate part heights + edge connectors on the pinned mech board envelope
   assembly         emit SMT/THT placements per side for production-engineering-agent
   firmware-export  emit MCU pin connectivity for firmware-agent (JSON verdict)
   firmware-check   check a firmware-agent pin map against the circuit (JSON verdict)
@@ -37,6 +38,7 @@ from . import (
     derating,
     dft,
     doctor,
+    enclosure,
     fabrication,
     firmware,
     fit_sheet,
@@ -375,6 +377,19 @@ def cmd_dft(args: argparse.Namespace) -> int:
     return _emit(report.model_dump(mode="json"))
 
 
+def cmd_enclosure(args: argparse.Namespace) -> int:
+    try:
+        brief_path = Path(args.brief)
+        report = enclosure.check_enclosure(_load_brief(args.brief), brief_path, Path(args.geometry))
+    except (ValueError, OSError) as exc:
+        return _fail("enclosure", str(exc))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return _emit(report.model_dump(mode="json"))
+
+
 def cmd_alternates(args: argparse.Namespace) -> int:
     try:
         brief_path = Path(args.brief)
@@ -648,6 +663,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     dft_parser.add_argument("--brief", required=True)
     dft_parser.add_argument("--out", default=None)
     dft_parser.set_defaults(handler=cmd_dft)
+
+    enclosure_parser = subparsers.add_parser(
+        "enclosure",
+        help="check part heights and edge connectors against the pinned mech board envelope",
+    )
+    enclosure_parser.add_argument("--brief", required=True)
+    enclosure_parser.add_argument("--geometry", required=True)
+    enclosure_parser.add_argument("--out", default=None)
+    enclosure_parser.set_defaults(handler=cmd_enclosure)
 
     alternates_parser = subparsers.add_parser(
         "alternates", help="check the brief's second-source parts are drop-ins"

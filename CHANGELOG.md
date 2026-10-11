@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `circuit.enclosure` (`python -m circuit enclosure`): gate the board size,
+  mount holes, part heights and edge connectors against mechanical-agent's
+  hash-pinned `*.mech-board-envelope.json` (brief `enclosure` block).
 - Layered, hash-bound manufacturing rule profiles and footprint lineage;
   functional reuse ranking; pinned GPL-isolated KLC and KiCad test-board
   verification; hash-bound footprint/symbol vision comparisons and a

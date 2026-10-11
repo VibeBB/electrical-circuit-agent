@@ -292,6 +292,7 @@ python -m circuit sim-check --brief BRIEF
 python -m circuit handling --brief BRIEF [--out PATH]
 python -m circuit fabrication --brief BRIEF --pcb PCB [--out PATH]
 python -m circuit dft --brief BRIEF [--out PATH]
+python -m circuit enclosure --brief BRIEF --geometry BOARD_GEOMETRY [--out PATH]
 python -m circuit alternates --brief BRIEF [--out PATH]
 python -m circuit derating --brief BRIEF [--out PATH]
 python -m circuit author --brief BRIEF --workdir DIR [--intake INTAKE]

@@ -221,6 +221,15 @@ Test-point access gate against the hash-pinned prodeng `factory-test-spec.json` 
 - `DftReport:`
 - `check_dft:` — Check each factory-test net has a test point, against the pinned spec.
 
+## `enclosure.py`
+
+Part height and edge-connector gate against the hash-pinned mech `*.mech-board-envelope.json` (`*.enclosure.json`).
+
+- `MechBoardEnvelope:` — Strict mirror of mechanical-agent's ``mech_board_envelope`` v1.
+- `EnclosureCheck:`
+- `EnclosureReport:`
+- `check_enclosure:` — Check board, part heights and edge connectors against the pinned mech envelope.
+
 ## `derating.py`
 
 Voltage/current derating gate over the brief `derating` rules (`*.derating.json`).
