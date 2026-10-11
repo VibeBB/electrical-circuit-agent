@@ -88,7 +88,7 @@ artifact body is unchanged, so sister strict mirrors keep reading it.
 | `*.thermal.sim-response.json` | read by `circuit_sim_thermal_check` (`thermal.response_path`) | simulation-agent produces | strict read; stale or tampered → `fail`, unanswered → `unknown`; a `provenance` check verifies the envelope v3 sidecar (`*.sim-response.provenance.json`): tampered/foreign/broken sim log → `fail`, missing → `unknown` |
 | `*.lifetime.sim.json` + `*.lifetime.sim-request.json` / `*.lifetime.sim-response.json` | written/read with `kind: lifetime` from the brief `lifetime` section (`lifetime.response_path`) | simulation-agent (Arrhenius + Miner) | same hash binding; stale or tampered → `fail`, unanswered → `unknown` |
 | `*.firmware.json` | written by `circuit_firmware_export` | firmware-agent | frozen — firmware strict mirror |
-| `*.fw-pinmap.json` | read by `circuit_firmware_check` | firmware-agent produces | strict read |
+| `*.fw-pinmap.json` | read by `circuit_firmware_check` | firmware-agent produces | strict read; the `*.fw-pinmap.provenance.json` envelope v3 sidecar must pass (tampered, foreign, broken firmware log or missing sidecar fails the check) |
 | `*.envelope.json` | not written by circuit | mech → wire/sim | frozen upstream |
 | `*.design-report.json` | written by `circuit_design_report` | doc/prodeng, UX-creator | strict, circuit-owned |
 | `liaison/*.ux-*.json` | read + written | UX-creator | SLP v2 strict mirror |

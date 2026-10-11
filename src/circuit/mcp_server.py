@@ -2272,6 +2272,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
                     firmware_payload,
                     firmware.load_pinmap(pinmap_path),
                     firmware.sha256_file(pinmap_path),
+                    pinmap_path,
                 )
                 output = _output_path(
                     brief_path, _optional_string(args.get("output_path")), "firmware-check"

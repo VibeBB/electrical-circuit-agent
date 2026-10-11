@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from circuit import cli
+from circuit._envelope import sidecar_path, write_envelope
 from circuit.brief import DesignBrief, load_brief
 from circuit.firmware import (
     CircuitFirmwareConnectivity,
@@ -228,6 +229,7 @@ def test_cli_export_and_check(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 
     pinmap = tmp_path / "desk-lamp.fw-pinmap.json"
     pinmap.write_text(json.dumps(_pinmap()), encoding="utf-8")
+    write_envelope(pinmap, "firmware", [], tmp_path)
     report = tmp_path / "check.json"
     argv = ["firmware-check", "--brief", str(BRIEF), "--netlist", str(NETLIST)]
     code = cli.main([*argv, "--pinmap", str(pinmap), "--out", str(report)])
@@ -241,6 +243,25 @@ def test_cli_export_and_check(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     pinmap.write_text(json.dumps(bad), encoding="utf-8")
     assert cli.main([*argv, "--pinmap", str(pinmap)]) == 1
     assert json.loads(capsys.readouterr().out)["verdict"] == "fail"
+
+
+def test_cli_check_pinmap_provenance_missing_or_foreign_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pinmap = tmp_path / "desk-lamp.fw-pinmap.json"
+    pinmap.write_text(json.dumps(_pinmap()), encoding="utf-8")
+    write_envelope(pinmap, "firmware", [], tmp_path)
+    sidecar = sidecar_path(pinmap)
+    body = json.loads(sidecar.read_text(encoding="utf-8"))
+    sidecar.write_text(json.dumps(body | {"producer": "fpga"}), encoding="utf-8")
+    argv = ["firmware-check", "--brief", str(BRIEF), "--netlist", str(NETLIST)]
+    assert cli.main([*argv, "--pinmap", str(pinmap)]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert any("provenance (fail)" in p for p in payload["problems"])
+    sidecar.unlink()
+    assert cli.main([*argv, "--pinmap", str(pinmap)]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert any("provenance (unknown)" in p for p in payload["problems"])
 
 
 def test_cli_check_malformed_pinmap_fails_closed(
