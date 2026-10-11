@@ -290,6 +290,7 @@ python -m circuit assembly --pcb PCB --out PATH
 python -m circuit sim-request --brief BRIEF [--out-dir DIR]
 python -m circuit sim-check --brief BRIEF
 python -m circuit fabrication --brief BRIEF --pcb PCB [--out PATH]
+python -m circuit dft --brief BRIEF [--out PATH]
 python -m circuit alternates --brief BRIEF [--out PATH]
 python -m circuit derating --brief BRIEF [--out PATH]
 python -m circuit author --brief BRIEF --workdir DIR [--intake INTAKE]

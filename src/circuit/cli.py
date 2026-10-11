@@ -35,6 +35,7 @@ from . import (
     brief,
     connectivity,
     derating,
+    dft,
     doctor,
     fabrication,
     firmware,
@@ -382,6 +383,19 @@ def cmd_fabrication(args: argparse.Namespace) -> int:
     return _emit(report.model_dump(mode="json"))
 
 
+def cmd_dft(args: argparse.Namespace) -> int:
+    try:
+        brief_path = Path(args.brief)
+        report = dft.check_dft(_load_brief(args.brief), brief_path)
+    except (ValueError, OSError) as exc:
+        return _fail("dft", str(exc))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return _emit(report.model_dump(mode="json"))
+
+
 def cmd_alternates(args: argparse.Namespace) -> int:
     try:
         brief_path = Path(args.brief)
@@ -635,6 +649,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     fabrication_parser.add_argument("--pcb", required=True)
     fabrication_parser.add_argument("--out", default=None)
     fabrication_parser.set_defaults(handler=cmd_fabrication)
+
+    dft_parser = subparsers.add_parser(
+        "dft", help="check factory-test nets carry test points (pinned prodeng spec)"
+    )
+    dft_parser.add_argument("--brief", required=True)
+    dft_parser.add_argument("--out", default=None)
+    dft_parser.set_defaults(handler=cmd_dft)
 
     alternates_parser = subparsers.add_parser(
         "alternates", help="check the brief's second-source parts are drop-ins"
