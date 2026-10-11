@@ -24,6 +24,7 @@ from circuit import (
     alternates,
     apiserver,
     brief,
+    derating,
     drawing_sheet,
     fit_sheet,
     intake,
@@ -1193,6 +1194,21 @@ def _stage_schematic_gate(run: AuthoringRun) -> SchematicGate:
         )
         if second_sources.verdict != "pass":
             raise StepFailure("circuit.alternates", second_sources.model_dump_json())
+    if loaded_brief.derating is not None:
+        stress = derating.check_derating(loaded_brief, run.brief_path)
+        (reports_dir / f"{loaded_brief.name}.derating.json").write_text(
+            stress.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        )
+        _record(
+            run.log,
+            {
+                "tool": "circuit.derating",
+                "payload": {"brief": str(run.brief_path)},
+                "result": stress.model_dump(mode="json"),
+            },
+        )
+        if stress.verdict != "pass":
+            raise StepFailure("circuit.derating", stress.model_dump_json())
 
     erc_result = kicad_cli.erc(schematic, reports_dir / f"{loaded_brief.name}.erc.json")
     _advisory_detail(
