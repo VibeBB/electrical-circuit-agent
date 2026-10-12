@@ -148,7 +148,15 @@ jobs:
                   # empty payload every attempt, so wipe and re-seed per try.
                   rm -rf "$TRIVY_CACHE_DIR"
                   mkdir -p "$TRIVY_CACHE_DIR"
-                  cp -a "$RUNNER_TEMP/trivy-cache/." "$TRIVY_CACHE_DIR/"
+                    # The cache-restore target differs between repos; re-seed from
+                    # whichever snapshot this file's cache step populated, else let
+                    # trivy re-fetch the checks bundle itself.
+                    seed=""
+                    for cand in "$RUNNER_TEMP/trivy-cache" "$HOME/.cache/trivy" \
+                        "$GITHUB_WORKSPACE/.cache/trivy"; do
+                      if [ -d "$cand" ]; then seed="$cand"; break; fi
+                    done
+                    if [ -n "$seed" ]; then cp -a "$seed/." "$TRIVY_CACHE_DIR/"; fi
                   # Trivy exits 0 even on the empty-results anomaly, so the
                   # retry keys on the MisconfSummary payload, not the exit
                   # code. The aggregation step stays fail-closed on empty.
