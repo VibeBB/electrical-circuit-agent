@@ -7,10 +7,10 @@ from pathlib import Path
 
 EXPECTED: dict[str, str] = {
     ".github/workflows/pr-branch-cleanup.yml": (
-        "5effde6015c39a88c4c83d11130ba9af9c1177ed174eb5772efc5b0ebaa5023c"
+        "05f760fe728dd14dc734a0764fe98c6eb129ef70080dedd0f38ed4efb810ef40"
     ),
     ".github/workflows/workflow-lint.yml": (
-        "fe3d152f8890823540becd90a36b896f80fcfc88bf6176361799b23a3e679891"
+        "c351b07455ccbb481de52b2e6f40492bce4cc84be4681f44ab304a9ba722e05f"
     ),
     ".github/workflows/main-ci-failure-issue.yml#jobs": (
         "35a55de9132d869d7330de912d90a7e89982b4fbce88eaf5ff11fd83d1eb6f77"
@@ -19,10 +19,10 @@ EXPECTED: dict[str, str] = {
         "8574255851308ddc4fe61892b74c681e5dada10e1c0b7fe83c5cff5e7b59deb8"
     ),
     ".github/workflows/scorecard.yml": (
-        "b66a7ccf2e49f973c35c010f96797b41d25fc6c6322bc9e808549c00a3af744e"
+        "067b786c95c213b2d2106de16059cd0293a3fa8f80b900f9bcbf862351017a88"
     ),
     ".github/workflows/codeql.yml": (
-        "b18ce1af0924b46543d5dae05161297a51894dc8e5911851c9a86c64f259976e"
+        "79776d978b19eb0d33cfaeb3c8a3adfa9996a6b71db32b2c45d95675897150fb"
     ),
 }
 UNITS: dict[str, tuple[str, bytes | None]] = {

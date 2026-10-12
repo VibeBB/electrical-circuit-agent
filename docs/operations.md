@@ -10,6 +10,15 @@ an absent URL warns and continues. SBOM steps for the tools image are skipped
 when `skip_tools` is active.
 The attested SBOM omits file entries and relationships involving files to
 stay below the 16 MiB limit.
+## 2026-10-12 dependency sweep (sdk 1.54.0, uv 0.13.0)
+
+| Component | From -> to | Changelog review decision |
+| --- | --- | --- |
+| openhands-sdk / openhands-tools | 1.53.0 -> 1.54.0 | See `docs/research/sdk-v1.54.0-feature-evaluation.md`. |
+| uv | 0.12.23 -> 0.13.0 | Breaking-change review in the same document; `[tool.uv] required-version` and Dockerfile ARG updated. |
+| python-version (all surfaces) | deferred | 3.15 blocked solely by `openhands-sdk->litellm->fastuuid 0.14.0` (sdist-only, bundled PyO3 fails to build on 3.15; pydantic-core 2.50.1 already ships cp315 wheels). Wildcard deferral `python-version/*`, review_by 2027-01-08. |
+| KiCad nightly / FreeRouting / CERN submodule | unchanged | Checker-verified pins still match upstream (PPA index, release feed, submodule HEAD). |
+
 
 ## Launcher-side verification
 

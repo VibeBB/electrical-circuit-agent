@@ -198,13 +198,13 @@ jobs:
                 "${index:-unknown}" "${warnings:-0}" >> "$GITHUB_OUTPUT"
       - name: Upload tools Trivy SARIF
         if: always() && hashFiles('trivy-circuit-tools.sarif') != ''
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        uses: github/codeql-action/upload-sarif@cee97f86b972a3ded3c58d04148362b193ddc518 # v4.38.3
         with:
           sarif_file: trivy-circuit-tools.sarif
           category: trivy-circuit-tools-audit
       - name: Upload server Trivy SARIF
         if: always() && hashFiles('trivy-circuit-server.sarif') != ''
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        uses: github/codeql-action/upload-sarif@cee97f86b972a3ded3c58d04148362b193ddc518 # v4.38.3
         with:
           sarif_file: trivy-circuit-server.sarif
           category: trivy-circuit-server-audit
