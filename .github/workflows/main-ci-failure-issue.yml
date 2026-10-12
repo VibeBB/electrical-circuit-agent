@@ -58,23 +58,33 @@ jobs:
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
         run: |
           set -euo pipefail
+          gh_retry() {
+            # gh calls occasionally hit transient gateway errors (5xx);
+            # retry with backoff so a flake cannot kill the tracker.
+            local attempt
+            for attempt in 1 2 3; do
+              if "$@"; then return 0; fi
+              sleep $((attempt * 5))
+            done
+            return 1
+          }
           gh label create ci-main-failure --repo "$GITHUB_REPOSITORY" --color B60205 \
             --description "a main-branch workflow is failing" --force || true
           title="main CI failure: $WORKFLOW_NAME"
           issue_for() {
-            gh issue list --repo "$GITHUB_REPOSITORY" --state open --label ci-main-failure \
+            gh_retry gh issue list --repo "$GITHUB_REPOSITORY" --state open --label ci-main-failure \
               --limit 100 --json number,title \
               --jq "[.[] | select(.title == \"$1\")] | .[0].number // empty"
           }
           if [ "$CONCLUSION" = success ]; then
             issue=$(issue_for "$title")
             if [ -n "$issue" ]; then
-              gh issue close "$issue" --repo "$GITHUB_REPOSITORY" \
+              gh_retry gh issue close "$issue" --repo "$GITHUB_REPOSITORY" \
                 --comment "Back to green: $RUN_URL"
             fi
             issue=$(issue_for "main CI failure report")
             if [ -n "$issue" ]; then
-              gh issue close "$issue" --repo "$GITHUB_REPOSITORY" \
+              gh_retry gh issue close "$issue" --repo "$GITHUB_REPOSITORY" \
                 --comment "Back to green: $RUN_URL"
             fi
             exit 0
@@ -82,14 +92,14 @@ jobs:
           if [ "$CONCLUSION" = cancelled ] || [ "$CONCLUSION" = skipped ]; then
             exit 0
           fi
-          jobs=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+          jobs=$(gh_retry gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
             --jq '[.jobs[] | select(.conclusion=="failure") | .name] | join(", ")')
           body=$(printf '%s\n\n- workflow: %s\n- run: %s\n- failed jobs: %s\n' "A main-branch workflow failed." "$WORKFLOW_NAME" "$RUN_URL" "${jobs:-unknown}")
           issue=$(issue_for "$title")
           if [ -n "$issue" ]; then
-            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"
+            gh_retry gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label ci-main-failure --body "$body"
+            gh_retry gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label ci-main-failure --body "$body"
           fi
 
   reconcile:
@@ -111,7 +121,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+          gh_retry gh issue list --repo "$GITHUB_REPOSITORY" --state open \
             --label ci-main-failure --limit 100 --json number,title \
             --jq '.[] | "\(.number)\t\(.title)"' > "$RUNNER_TEMP/issues.txt"
           while IFS=$'\t' read -r number title; do
@@ -119,11 +129,11 @@ jobs:
               "main CI failure: "*) workflow=${title#main CI failure: } ;;
               *) continue ;;
             esac
-            conclusion=$(gh run list --repo "$GITHUB_REPOSITORY" \
+            conclusion=$(gh_retry gh run list --repo "$GITHUB_REPOSITORY" \
               --workflow "$workflow" --branch main --limit 1 \
               --json conclusion --jq '.[0].conclusion // empty' || true)
             if [ "$conclusion" = "success" ]; then
-              gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+              gh_retry gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
                 --comment "Back to green on main: the latest '$workflow' run succeeded."
             fi
           done < "$RUNNER_TEMP/issues.txt"

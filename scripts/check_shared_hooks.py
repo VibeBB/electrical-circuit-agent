@@ -80,6 +80,18 @@ def _digest(path: Path, plugin_name: str) -> str:
 
 
 def main() -> int:
+    # ast.dump's serialization schema is interpreter-version-bound; the EXPECTED
+    # digests are generated on the supported 3.12-3.14 series, so comparisons
+    # only run on those interpreters (the required CI legs). Newer canary
+    # interpreters report a skip instead of a false mismatch.
+    if sys.version_info[:2] not in {(3, 12), (3, 13), (3, 14)}:
+        print(
+            "check_shared_hooks: normalized AST digests are version-bound; "
+            f"skipping on Python {sys.version_info.major}.{sys.version_info.minor} "
+            "(enforced on the 3.12-3.14 legs)",
+            file=sys.stderr,
+        )
+        return 0
     root = Path(__file__).resolve().parents[1]
     hook_paths = (root / "plugins").glob("*/hooks/scripts")
     hook_dirs = sorted(path for path in hook_paths if path.is_dir())
