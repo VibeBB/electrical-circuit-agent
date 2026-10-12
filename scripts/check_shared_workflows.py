@@ -13,7 +13,7 @@ EXPECTED: dict[str, str] = {
         "3e805b31dce9f786c8fcb3d34fa0938803ae848516233f077e25cb8db98b6d2f"
     ),
     ".github/workflows/main-ci-failure-issue.yml#jobs": (
-        "35a55de9132d869d7330de912d90a7e89982b4fbce88eaf5ff11fd83d1eb6f77"
+        "ff0de0e6c50d904f8a5b675dd070283fded176a9395df8ad24793782e0a545ca"
     ),
     ".github/workflows/dependency-review.yml": (
         "8574255851308ddc4fe61892b74c681e5dada10e1c0b7fe83c5cff5e7b59deb8"
