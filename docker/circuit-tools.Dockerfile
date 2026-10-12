@@ -77,17 +77,17 @@ RUN grep -q "^URIs: http://security\.ubuntu\.com/ubuntu" \
        done \
     && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update \
     && curl --fail --location --silent --show-error \
-        --retry 5 --retry-delay 10 --retry-all-errors \
+        --retry 8 --retry-delay 20 --retry-max-time 600 --retry-all-errors \
         --output /tmp/kicad-nightly.deb \
         "${KICAD_NIGHTLY_DEB_URL}" \
     && echo "${KICAD_NIGHTLY_DEB_SHA256}  /tmp/kicad-nightly.deb" | sha256sum --check \
     && curl --fail --location --silent --show-error \
-        --retry 5 --retry-delay 10 --retry-all-errors \
+        --retry 8 --retry-delay 20 --retry-max-time 600 --retry-all-errors \
         --output /tmp/kicad-nightly-symbols.deb \
         "${KICAD_NIGHTLY_SYMBOLS_DEB_URL}" \
     && echo "${KICAD_NIGHTLY_SYMBOLS_DEB_SHA256}  /tmp/kicad-nightly-symbols.deb" | sha256sum --check \
     && curl --fail --location --silent --show-error \
-        --retry 5 --retry-delay 10 --retry-all-errors \
+        --retry 8 --retry-delay 20 --retry-max-time 600 --retry-all-errors \
         --output /tmp/kicad-nightly-footprints.deb \
         "${KICAD_NIGHTLY_FOOTPRINTS_DEB_URL}" \
     && echo "${KICAD_NIGHTLY_FOOTPRINTS_DEB_SHA256}  /tmp/kicad-nightly-footprints.deb" | sha256sum --check \
@@ -100,7 +100,7 @@ RUN grep -q "^URIs: http://security\.ubuntu\.com/ubuntu" \
 
 RUN mkdir -p /opt/circuit/bin /opt/circuit/libraries \
     && curl --fail --location --silent --show-error \
-        --retry 5 --retry-delay 10 --retry-all-errors \
+        --retry 8 --retry-delay 20 --retry-max-time 600 --retry-all-errors \
         --output /tmp/konnect.tar.gz \
         "https://github.com/mixelpixx/Konnect/releases/download/v${KONNECT_VERSION}/konnect-v${KONNECT_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
     && echo "${KONNECT_SHA256}  /tmp/konnect.tar.gz" | sha256sum --check \
@@ -109,7 +109,7 @@ RUN mkdir -p /opt/circuit/bin /opt/circuit/libraries \
     && rm -f /tmp/konnect.tar.gz /tmp/konnect \
     && mkdir -p /usr/share/doc/konnect \
     && curl --fail --location --silent --show-error \
-        --retry 5 --retry-delay 10 --retry-all-errors \
+        --retry 8 --retry-delay 20 --retry-max-time 600 --retry-all-errors \
         --output /usr/share/doc/konnect/LICENSE \
         "https://raw.githubusercontent.com/mixelpixx/Konnect/${KONNECT_COMMIT}/LICENSE" \
     && printf '%s\n' \
@@ -120,7 +120,7 @@ RUN mkdir -p /opt/circuit/bin /opt/circuit/libraries \
 
 RUN mkdir -p /opt/jre /opt/freerouting \
     && curl --fail --location --silent --show-error \
-        --retry 5 --retry-delay 10 --retry-all-errors \
+        --retry 8 --retry-delay 20 --retry-max-time 600 --retry-all-errors \
         --output /tmp/semeru-jre.tar.gz \
         "https://github.com/ibmruntimes/semeru27-binaries/releases/download/jdk-${SEMERU_JRE_VERSION}/ibm-semeru-open-jre_x64_linux_${SEMERU_JRE_VERSION}.tar.gz" \
     && echo "${SEMERU_JRE_SHA256}  /tmp/semeru-jre.tar.gz" | sha256sum --check \
@@ -130,7 +130,7 @@ RUN mkdir -p /opt/jre /opt/freerouting \
     && java -version 2>&1 | grep -F 'Eclipse OpenJ9 VM' >/dev/null \
     && java -version 2>&1 | grep -F "IBM Semeru Runtime Open Edition ${SEMERU_JRE_VERSION}" \
     && curl --fail --location --silent --show-error \
-        --retry 5 --retry-delay 10 --retry-all-errors \
+        --retry 8 --retry-delay 20 --retry-max-time 600 --retry-all-errors \
         --output /opt/freerouting/freerouting.jar \
         "https://github.com/freerouting/freerouting/releases/download/v${FREEROUTING_VERSION}/freerouting-${FREEROUTING_VERSION}.jar" \
     && echo "${FREEROUTING_SHA256}  /opt/freerouting/freerouting.jar" | sha256sum --check \
@@ -138,7 +138,7 @@ RUN mkdir -p /opt/jre /opt/freerouting \
         || true; } | grep -F "Freerouting v${FREEROUTING_VERSION}" \
     && mkdir -p /usr/share/doc/freerouting /usr/share/doc/semeru-jre \
     && curl --fail --location --silent --show-error \
-        --retry 5 --retry-delay 10 --retry-all-errors \
+        --retry 8 --retry-delay 20 --retry-max-time 600 --retry-all-errors \
         --output /usr/share/doc/freerouting/LICENSE \
         "https://raw.githubusercontent.com/freerouting/freerouting/v${FREEROUTING_VERSION}/LICENSE" \
     && printf '%s\n' \
@@ -182,7 +182,7 @@ RUN if [ -f /usr/share/doc/kicad-nightly-symbols/LICENSE.md ]; then \
           /opt/circuit/libraries/kicad-official-LICENSE.md; \
     else \
         curl --fail --location --silent --show-error \
-          --retry 5 --retry-delay 10 --retry-all-errors \
+          --retry 8 --retry-delay 20 --retry-max-time 600 --retry-all-errors \
           --output /opt/circuit/libraries/kicad-official-LICENSE.md \
           https://gitlab.com/kicad/libraries/kicad-symbols/-/raw/master/LICENSE.md; \
     fi \
