@@ -3,10 +3,11 @@ name: PR branch cleanup
 # Deletes automation-owned head branches when their pull request closes, and
 # sweeps leftovers daily. The publish and release workflows merge their
 # digest-lock / version-bump pull requests via `gh pr merge --auto --squash
-# --delete-branch`; when the merge is only *armed* and lands after the
-# workflow run exits, nothing deletes the head branch (the repository's
-# "delete head branches on merge" setting stays off). This covers that gap
-# without touching human-owned branches.
+# --delete-branch`; "delete head branches on merge" is on, but armed
+# auto-merge landing after the run exits, merges that fail to delete the
+# ref, and bot branches whose pull request was closed without merging still
+# leave heads behind. This covers that gap without touching human-owned
+# branches.
 
 on:
   pull_request:
@@ -69,8 +70,12 @@ jobs:
             # opened; skip branches whose tip commit is younger than 10 min.
             ts=$(gh api "repos/$GITHUB_REPOSITORY/commits/$branch" \
               --jq '.commit.committer.date' 2>/dev/null || echo "")
-            if [ -n "$ts" ] \
-                && [ "$(( $(date +%s) - $(date -d "$ts" +%s) ))" -lt 600 ]; then
+            # date -d on an empty/unparseable stamp exits non-zero and would
+            # leave an operand hole in the arithmetic below; default to 0
+            # (treated as "old") instead so the sweep still proceeds.
+            bt=$(date -d "$ts" +%s 2>/dev/null || echo 0)
+            if [ "$bt" != "0" ] \
+                && [ "$(( $(date +%s) - bt ))" -lt 600 ]; then
               echo "skipping new branch $branch"
               continue
             fi

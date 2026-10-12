@@ -68,7 +68,7 @@ jobs:
         with:
           submodules: true
           persist-credentials: true
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           python-version: "3.14"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -224,7 +224,7 @@ jobs:
       - name: Upload tools Trivy SARIF
         # A rehearsal must not file code-scanning alerts.
         if: ${{ always() && inputs.skip_tools != true && inputs.dry_run != true && hashFiles('trivy-circuit-tools.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: trivy-circuit-tools.sarif
           category: trivy-circuit-tools
@@ -500,7 +500,7 @@ jobs:
       - name: Upload server Trivy SARIF
         # A rehearsal must not file code-scanning alerts.
         if: ${{ always() && inputs.dry_run != true && hashFiles('trivy-circuit-server.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: trivy-circuit-server.sarif
           category: trivy-circuit-server
