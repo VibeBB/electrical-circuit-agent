@@ -121,6 +121,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          gh_retry() {
+            # gh calls occasionally hit transient gateway errors (5xx);
+            # retry with backoff so a flake cannot kill the tracker.
+            local attempt
+            for attempt in 1 2 3; do
+              if "$@"; then return 0; fi
+              sleep $((attempt * 5))
+            done
+            return 1
+          }
           gh_retry gh issue list --repo "$GITHUB_REPOSITORY" --state open \
             --label ci-main-failure --limit 100 --json number,title \
             --jq '.[] | "\(.number)\t\(.title)"' > "$RUNNER_TEMP/issues.txt"
