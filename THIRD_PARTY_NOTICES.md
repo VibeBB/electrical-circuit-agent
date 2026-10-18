@@ -23,8 +23,8 @@ legal advice.
 - License: GPL-3.0-or-later
 - Source: <https://ppa.launchpadcontent.net/kicad/kicad-dev-nightly/>
 - Package: `kicad-nightly`
-- Version: `202610072102+dc102b0059~189~ubuntu26.04.1`
-- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202610072102+dc102b0059~189~ubuntu26.04.1_amd64.deb)
+- Version: `202610142039+ccb19070e9~190~ubuntu26.04.1`
+- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202610142039+ccb19070e9~190~ubuntu26.04.1_amd64.deb)
 - Package SHA-256: `ac7a09d76d494464fb516d4a754886525bcc2ba0d7d72b624da76f4ba8805689`
 - Executable: `/usr/lib/kicad-nightly/bin/kicad-cli`
 
@@ -37,8 +37,8 @@ legal advice.
   waives Section 3 of CC-BY-SA.
 - Packages: `kicad-nightly-symbols`, `kicad-nightly-footprints`
 - Versions:
-  - symbols `202610052347+e1bb0a65c~12~ubuntu26.04.1`
-  - footprints `202610052315+51f8a59ed~14~ubuntu26.04.1`
+  - symbols `202610151017+9280a9379~12~ubuntu26.04.1`
+  - footprints `202610112010+f8440fa61~14~ubuntu26.04.1`
 
 ## KiCad Library Convention checker
 
@@ -66,7 +66,7 @@ legal advice.
 
 - License: CERN-OHL-P-2.0
 - Source: <https://gitlab.com/ohwr/cern-kicad-libs>
-- Commit: `5debc1bef23be0066d893e3ddabe0393d48cd679`
+- Commit: `fe4025fa6478ed0bb9e836f66bc547baa4c1c9e6`
 - Commit date: 2026-10-08 UTC
 - Location: `libraries/cern-kicad-libs`
 - The upstream LICENSE is preserved inside the submodule.

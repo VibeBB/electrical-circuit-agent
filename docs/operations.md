@@ -1026,6 +1026,18 @@ build.
 - Verification: see the PR for `verify_all --stage fast`, plugin load,
   and shared-workflow results.
 
+### OpenHands SDK v1.55.1 and KiCad nightly update review
+
+- Checked on: 2026-10-18
+- `openhands-sdk`/`openhands-tools` `==1.54.0` → `==1.55.1`; uv `0.13.0` →
+  `0.13.1`; zizmor `1.30.1` → `1.31.1`; trivy `v0.75.0` → `v0.76.0`;
+  codeql-action v4.38.3 → v4.39.0. Full changelog review:
+  `docs/research/sdk-v1.55.1-feature-evaluation.md`.
+- KiCad nightly `202610142039+ccb19070e9~190`, symbols
+  `202610151017+9280a9379~12`, footprints `202610112010+f8440fa61~14`
+  (deb sha256 re-verified); CERN KiCad libs `fe4025fa`.
+- Deferrals unchanged (mcp 2.x, Python 3.15 default); reasons refreshed.
+
 ### OpenHands SDK v1.53.0 update review
 
 - Checked on: 2026-10-07
