@@ -1767,3 +1767,17 @@ here so audits do not re-flag them:
   without creating a GitHub release. `publish-circuit-images.yml` likewise
   accepts a `dry_run=true` dispatch that rehearses the pipeline without
   pushing or locking images.
+
+## Dependency update sweep procedure
+
+When sweeping dependencies to latest releases:
+
+1. Refresh `EXPECTED` hashes from the repo's actual canonical files
+   (`sha256sum`); never copy a value from another repo.
+2. Regenerate every lockfile (`uv.lock` plus language-specific locks).
+3. Grep the whole repo for the previous version literals to catch a
+   second hardcoded copy outside the checker's covered files.
+4. Verify heavyweight pins end-to-end (download the artifact and run it);
+   "latest" is not always adoptable.
+5. Newly fixable Debian CVEs can land between PR CI and the publish
+   gate; done means post-merge publish and CI runs are green.

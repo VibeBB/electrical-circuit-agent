@@ -43,6 +43,9 @@ library gate, netlist gate, and design report contracts.
 - Never import-bind GPL/AGPL code into Python. Konnect runs as an unmodified
   binary via subprocess.
 - Never write API keys, tokens, or secrets to logs, inputs, or commits.
+- Version expectations and pins in source code must derive from files
+  the dependency-update checker covers (pyproject pins, lockfiles,
+  Dockerfiles, workflow pins); do not hardcode a second copy.
 - Preserve the LICENSE, attribution, and provenance of externally sourced code,
   and document change history and pins.
 
