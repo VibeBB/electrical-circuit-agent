@@ -160,6 +160,25 @@ jobs:
           subject-name: ghcr.io/vibebb/circuit-tools
           subject-digest: ${{ steps.tools.outputs.digest }}
           push-to-registry: true
+      # Pre-pull the vulnerability and java DBs through a retry loop:
+      # a transient stream error mid-scan is fatal inside trivy-action
+      # and cannot be retried there, so warm the shared cache-dir first
+      # (the java DB is cached for 3 days once downloaded).
+      - name: Warm Trivy DB caches
+        run: |
+          set -euo pipefail
+          for dir in trivy-cache; do
+            mkdir -p "$RUNNER_TEMP/$dir"
+            for attempt in 1 2 3; do
+              if docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.0 \
+                  --cache-dir /cache image --download-db-only --download-java-db-only; then
+                break
+              fi
+              [ "$attempt" = 3 ] && exit 1
+              echo "::warning::trivy DB warm-up attempt $attempt failed; retrying"
+              sleep $((attempt * 20))
+            done
+          done
       - name: Scan tools image (Trivy SARIF)
         id: trivy-scan-tools
         if: inputs.skip_tools != true
@@ -200,6 +219,9 @@ jobs:
         # Runs even when the SARIF gate failed so the diagnostic report and
         # the blocking-CVE summary still have data; guarded on the build
         # digest so a failed build produces no malformed scan ref.
+        # Diagnostic leg, not a gate: an infra-level scan failure must not
+        # fail the publish while the SARIF gate is green.
+        continue-on-error: true
         if: ${{ always() && inputs.skip_tools != true && steps.tools.outputs.digest != '' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
