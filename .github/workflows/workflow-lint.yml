@@ -55,8 +55,8 @@ jobs:
         run: |
           set -euo pipefail
           # The sha256 is the published value for
-          # zizmor-1.30.1-py3-none-manylinux_2_28_x86_64.whl on PyPI.
-          wheel="zizmor-1.30.1-py3-none-manylinux_2_28_x86_64.whl"
+          # zizmor-1.31.1-py3-none-manylinux_2_28_x86_64.whl on PyPI.
+          wheel="zizmor-1.31.1-py3-none-manylinux_2_28_x86_64.whl"
           curl --fail --location --silent --show-error --retry 5 --retry-delay 10 \
             --output "$RUNNER_TEMP/$wheel" \
             "https://files.pythonhosted.org/packages/63/55/1900b53d34dcebc207cf3ceb7957b3748e8bb40958f062e3853ab72f2395/$wheel"
@@ -72,9 +72,9 @@ jobs:
         run: |
           flags=""
           case "$HEAD_REF" in bot/update-image-digests-*) flags="--offline";; esac
-          uvx --from "$RUNNER_TEMP/zizmor-1.30.1-py3-none-manylinux_2_28_x86_64.whl" \
+          uvx --from "$RUNNER_TEMP/zizmor-1.31.1-py3-none-manylinux_2_28_x86_64.whl" \
             zizmor $flags --format sarif .github/workflows > results.sarif
-      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+      - uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         # Bot digest-lock branches are deleted on auto-merge, so their SARIF
         # cannot be uploaded; the plain zizmor run below still gates them.
         if: always() && hashFiles('results.sarif') != '' && !startsWith(github.head_ref || github.ref_name, 'bot/update-image-digests-')

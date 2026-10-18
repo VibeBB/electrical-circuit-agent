@@ -178,7 +178,7 @@ jobs:
           # cwd, which races the same way. TRIVY_CACHE_DIR env does NOT
           # override the action's cache-dir input.
           cache-dir: ${{ runner.temp }}/trivy-cache
-          version: v0.75.0
+          version: v0.76.0
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
           ignore-unfixed: true
@@ -206,7 +206,7 @@ jobs:
           scan-type: image
           scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
           cache-dir: ${{ runner.temp }}/trivy-cache
-          version: v0.75.0
+          version: v0.76.0
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
           list-all-pkgs: 'true'
@@ -224,7 +224,7 @@ jobs:
       - name: Upload tools Trivy SARIF
         # A rehearsal must not file code-scanning alerts.
         if: ${{ always() && inputs.skip_tools != true && inputs.dry_run != true && hashFiles('trivy-circuit-tools.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           sarif_file: trivy-circuit-tools.sarif
           category: trivy-circuit-tools
@@ -460,7 +460,7 @@ jobs:
           # daemon-local tag under dry runs.
           scan-ref: ${{ env.SERVER_REF }}
           cache-dir: ${{ runner.temp }}/trivy-cache
-          version: v0.75.0
+          version: v0.76.0
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
           ignore-unfixed: true
@@ -484,7 +484,7 @@ jobs:
           scan-type: image
           scan-ref: ${{ env.SERVER_REF }}
           cache-dir: ${{ runner.temp }}/trivy-cache
-          version: v0.75.0
+          version: v0.76.0
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
           list-all-pkgs: 'true'
@@ -500,7 +500,7 @@ jobs:
       - name: Upload server Trivy SARIF
         # A rehearsal must not file code-scanning alerts.
         if: ${{ always() && inputs.dry_run != true && hashFiles('trivy-circuit-server.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           sarif_file: trivy-circuit-server.sarif
           category: trivy-circuit-server

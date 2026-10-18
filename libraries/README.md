@@ -11,7 +11,7 @@ CC-BY-SA-4.0 with the KiCad library exception; see
 ## CERN KiCad libraries
 
 - Source: <https://gitlab.com/ohwr/cern-kicad-libs>
-- Commit: `5debc1bef23be0066d893e3ddabe0393d48cd679`
+- Commit: `fe4025fa6478ed0bb9e836f66bc547baa4c1c9e6`
 - Commit date: 2026-10-08 UTC
 - License: CERN-OHL-P-2.0
 - Location: `libraries/cern-kicad-libs`
