@@ -170,8 +170,12 @@ jobs:
           for dir in trivy-cache; do
             mkdir -p "$RUNNER_TEMP/$dir"
             for attempt in 1 2 3; do
+              # The two download-only flags are mutually exclusive, so the
+              # DBs are fetched in two runs inside the same attempt.
               if docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.0 \
-                  --cache-dir /cache image --download-db-only --download-java-db-only; then
+                  --cache-dir /cache image --download-db-only \
+              && docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.0 \
+                  --cache-dir /cache image --download-java-db-only; then
                 break
               fi
               [ "$attempt" = 3 ] && exit 1
