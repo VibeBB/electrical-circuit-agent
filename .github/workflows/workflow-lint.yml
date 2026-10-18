@@ -59,8 +59,8 @@ jobs:
           wheel="zizmor-1.31.1-py3-none-manylinux_2_28_x86_64.whl"
           curl --fail --location --silent --show-error --retry 5 --retry-delay 10 \
             --output "$RUNNER_TEMP/$wheel" \
-            "https://files.pythonhosted.org/packages/63/55/1900b53d34dcebc207cf3ceb7957b3748e8bb40958f062e3853ab72f2395/$wheel"
-          echo "eee12266b793cb87ad4a7e3af2e72404f8a63e3de5eb099b80bf7b1cfd232a8e  $RUNNER_TEMP/$wheel" \
+            "https://files.pythonhosted.org/packages/7c/f7/ee2c8eedc7bf07f443a41aa12f828c7846fd17bab184c22403afd0cbb137/$wheel"
+          echo "58e878eb2dbd2c6183c105e1ac28c14f7dd1eca44a783f1fe2a69647d012c410  $RUNNER_TEMP/$wheel" \
             | sha256sum -c -
       - name: Zizmor
         env:
