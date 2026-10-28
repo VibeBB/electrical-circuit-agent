@@ -25,7 +25,7 @@ jobs:
       actions: read # reads workflow runs for the CI-tests check
       id-token: write # publishes results to the OpenSSF API
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -52,7 +52,7 @@ jobs:
       actions: read # downloads the analysis artifact
       security-events: write # uploads the SARIF report to code scanning
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -95,6 +95,6 @@ jobs:
           os.replace(tmp, "results.sarif")
           print(f"dropped {count} location-less scorecard result(s)")
           PY
-      - uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: results.sarif
