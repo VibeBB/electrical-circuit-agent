@@ -1816,3 +1816,14 @@ When sweeping dependencies to latest releases:
    "latest" is not always adoptable.
 5. Newly fixable Debian CVEs can land between PR CI and the publish
    gate; done means post-merge publish and CI runs are green.
+
+- 2026-10-29: Added a `pull_request`
+  dry-run rehearsal to `publish-circuit-images.yml` and
+  `scripts/trivy_gate_triage.py`. Extended the dependency checker with
+  SDK lock checks: `sdk-litellm-pin` detects a changed upstream litellm
+  constraint shape (the publish Re-resolve needles may be stale) and
+  `sdk-lock-resolution` flags when the upstream uv.lock already fixes
+  every floored package so the step can be reduced or dropped.
+- 2026-10-29: Added `scripts/lint_workflows_local.sh`, which runs
+  the same pinned actionlint + zizmor checks as workflow-lint.yml locally
+  before pushing workflow edits.

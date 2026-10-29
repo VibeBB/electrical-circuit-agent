@@ -1074,6 +1074,142 @@ def check_git_commit_pins(repo_root: Path) -> list[Status]:
     return statuses
 
 
+
+def _pkg_version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+_SDK_RAW = "https://raw.githubusercontent.com/OpenHands/software-agent-sdk"
+_SDK_LOCK_FLOORS = {
+    "fsspec": (2026, 6, 0),
+    "litellm": (1, 100, 4),
+    "pillow": (13, 0, 0),
+    "pypdf": (6, 21, 2),
+    "aiohttp": (3, 14, 4),
+    "authlib": (1, 9, 1),
+    "oauthlib": (4, 0, 0),
+    "dnspython": (2, 9, 0),
+    "virtualenv": (21, 14, 9),
+    "filelock": (4, 2, 1),
+}
+_SDK_PIN = re.compile(r'openhands-sdk==([0-9]+\.[0-9]+\.[0-9]+)')
+
+
+def _lock_version(lock_text: str, pkg: str) -> str:
+    match = re.search(
+        rf'name = "{re.escape(pkg)}"\s*\nversion = "([^"]+)"', lock_text
+    )
+    return match.group(1) if match else ""
+
+
+def check_sdk_lock_resolution(
+    repo_root: Path,
+    *,
+    fetch: Fetch = _default_fetch,
+) -> list[Status]:
+    """Upstream SDK lock vs. the publish Re-resolve step's version floors.
+
+    The publish workflow relaxes the SDK's litellm pins and re-resolves the
+    cloned uv.lock so the agent-server venv clears the Trivy gate. This
+    check watches two upstream signals:
+      * sdk-litellm-pin: the SDK's litellm constraints the step sed-edits;
+        a changed shape means the step's needles may go stale (fail-closed).
+      * sdk-lock-resolution: resolved versions for every package the step
+        upgrades; when upstream already fixes all of them the step can be
+        reduced or dropped.
+    """
+    statuses: list[Status] = []
+    source = "pyproject.toml"
+    sdk_version = ""
+    pyproject = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+    match = _SDK_PIN.search(pyproject)
+    if match is not None:
+        sdk_version = match.group(1)
+    if not sdk_version:
+        return statuses
+
+    upstream_py = ""
+    lock = ""
+    try:
+        upstream_py = fetch(f"{_SDK_RAW}/v{sdk_version}/pyproject.toml").decode("utf-8")
+        lock = fetch(f"{_SDK_RAW}/v{sdk_version}/uv.lock").decode("utf-8")
+    except (OSError, ValueError):
+        upstream_py = ""
+        lock = ""
+
+    if not upstream_py:
+        statuses.append(
+            Status(
+                "sdk-litellm-pin",
+                "==1.93.0 assumed by publish",
+                "?",
+                source,
+                False,
+                "fetch failed",
+                fetch_failed=True,
+            )
+        )
+    else:
+        pin = re.search(r'"litellm==([^"]+)"', upstream_py)
+        pin_text = f"=={pin.group(1)}" if pin else "absent"
+        statuses.append(
+            Status(
+                "sdk-litellm-pin",
+                "==1.93.0 assumed by publish",
+                pin_text,
+                source,
+                pin_text != "==1.93.0",
+                (
+                    "upstream litellm pin changed - re-verify the Re-resolve "
+                    "step's sed needles against the upstream pyproject"
+                    if pin_text != "==1.93.0"
+                    else ""
+                ),
+            )
+        )
+
+    if not lock:
+        statuses.append(
+            Status(
+                "sdk-lock-resolution",
+                f"SDK v{sdk_version}",
+                "?",
+                source,
+                False,
+                "fetch failed",
+                fetch_failed=True,
+            )
+        )
+    else:
+        below: list[str] = []
+        detail: list[str] = []
+        for pkg, floor in _SDK_LOCK_FLOORS.items():
+            resolved = _lock_version(lock, pkg)
+            detail.append(f"{pkg} {resolved or '?'}")
+            try:
+                ok = bool(resolved) and _pkg_version_tuple(resolved) >= floor
+            except ValueError:
+                ok = False
+            if not ok:
+                below.append(pkg)
+        statuses.append(
+            Status(
+                "sdk-lock-resolution",
+                f"SDK v{sdk_version}",
+                f"{len(_SDK_LOCK_FLOORS) - len(below)}/{len(_SDK_LOCK_FLOORS)} "
+                "at publish floors",
+                source,
+                not below,
+                (
+                    "all flagged packages fixed upstream - the publish "
+                    "Re-resolve step can be reduced or dropped"
+                    if not below
+                    else "still below floors: " + ", ".join(below)
+                ),
+            )
+        )
+    return statuses
+
 def check_dependency_updates(
     repo_root: Path,
     *,
@@ -1106,6 +1242,7 @@ def check_dependency_updates(
         *check_workflow_downloads(repo_root, fetch_json=fetch_json),
         *check_sdk_build_layout(repo_root, fetch=fetch),
         *check_docker_base(repo_root, fetch_json=fetch_json),
+        *check_sdk_lock_resolution(repo_root, fetch=fetch),
     ]
     return apply_deferrals(statuses, deferrals)
 
