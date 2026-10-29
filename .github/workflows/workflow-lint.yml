@@ -27,7 +27,7 @@ jobs:
       # Uploads the zizmor SARIF report to code scanning.
       security-events: write
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -47,7 +47,7 @@ jobs:
             | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" actionlint
           "$RUNNER_TEMP/actionlint" -oneline
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.14"
           cache-suffix: workflow-lint
@@ -74,7 +74,7 @@ jobs:
           case "$HEAD_REF" in bot/update-image-digests-*) flags="--offline";; esac
           uvx --from "$RUNNER_TEMP/zizmor-1.31.1-py3-none-manylinux_2_28_x86_64.whl" \
             zizmor $flags --format sarif .github/workflows > results.sarif
-      - uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         # Bot digest-lock branches are deleted on auto-merge, so their SARIF
         # cannot be uploaded; the plain zizmor run below still gates them.
         if: always() && hashFiles('results.sarif') != '' && !startsWith(github.head_ref || github.ref_name, 'bot/update-image-digests-')

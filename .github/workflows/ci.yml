@@ -40,7 +40,7 @@ jobs:
     outputs:
       docker: ${{ steps.scope.outputs.docker }}
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -73,7 +73,7 @@ jobs:
     # No actions/cache usage: forbid restore and save entirely.
     cache-mode: none
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -106,7 +106,7 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -117,7 +117,7 @@ jobs:
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y poppler-utils
         id: step
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         id: setup-uv
         with:
           python-version: ${{ matrix.python-version }}
@@ -156,7 +156,7 @@ jobs:
       # time.
       PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -168,7 +168,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y poppler-utils
         id: step
         continue-on-error: true
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         id: setup-uv
         continue-on-error: true
         with:
@@ -200,7 +200,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -209,7 +209,7 @@ jobs:
           ref: ${{ inputs.ref }}
           submodules: true
           persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.14"
           enable-cache: true
@@ -223,7 +223,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -233,7 +233,7 @@ jobs:
           submodules: true
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y poppler-utils
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.14"
           enable-cache: true
@@ -256,7 +256,7 @@ jobs:
       # tokens are clamped to read-only regardless.
       packages: write
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -282,7 +282,7 @@ jobs:
       # skipped for fork PRs (their token cannot read packages).
       - name: Log in to GHCR for the registry build cache
         id: ghcr-login
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         continue-on-error: true
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         with:
@@ -337,7 +337,7 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3]
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -347,7 +347,7 @@ jobs:
           submodules: true
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y poppler-utils librsvg2-bin
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.14"
           enable-cache: true
@@ -369,7 +369,7 @@ jobs:
       # skipped for fork PRs (their token cannot read packages).
       - name: Log in to GHCR for the registry build cache
         id: ghcr-login
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         continue-on-error: true
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         with:
@@ -413,7 +413,7 @@ jobs:
     # Aggregation only: no checkout and no actions/cache usage.
     cache-mode: none
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -461,7 +461,7 @@ jobs:
       matrix:
         shard: [0, 1, 2]
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -471,7 +471,7 @@ jobs:
           submodules: true
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y poppler-utils
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.14"
           enable-cache: true
@@ -512,7 +512,7 @@ jobs:
       # skipped for fork PRs (their token cannot read packages).
       - name: Log in to GHCR for the registry build cache
         id: ghcr-login
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         continue-on-error: true
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         with:
@@ -584,7 +584,7 @@ jobs:
     # Aggregation only: no checkout and no actions/cache usage.
     cache-mode: none
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -615,7 +615,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -623,7 +623,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.14"
           cache-suffix: plugin-load
