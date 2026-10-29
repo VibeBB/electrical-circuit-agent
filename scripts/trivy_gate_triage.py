@@ -1,146 +1,138 @@
 #!/usr/bin/env python3
-"""Classify Trivy gate findings for the publish <image> Trivy step.
+"""Triage Trivy image-gate findings for the publish workflows.
 
-Reads a Trivy JSON report (the `*-trivy` run artifact or a local
-`trivy image --format json` output) and groups the findings the publish
-gate would fail on — HIGH/CRITICAL vulnerabilities with a non-empty
-FixedVersion, i.e. `severity: CRITICAL,HIGH` + `ignore-unfixed: true` —
-into the disposition classes this family uses:
+Reads a Trivy JSON report (from ``trivy image --format json``) and groups
+HIGH/CRITICAL findings into the handling buckets the family uses:
 
-  re-resolve   Python packages installed by `uv sync --frozen` from a
-               lock (agent-server .venv): bump in the lock build step.
-  dockerfile   OS packages and other image layers: fix with a Dockerfile
-               layer (apt upgrade, vendored-tool patch).
-  waiver       Upstream vendored payload no released artifact fixes
-               (node_modules inside nodejs_wheel/acp-node/openvscode,
-               ensurepip bundles, shaded jars, Go binaries): needs a
-               `.trivyignore` `exp:` entry plus a docs/operations.md note.
-  review       Everything else: decide case by case.
+- ``re-resolve``: packages inside the OpenHands SDK virtualenv or lock —
+  handle by re-resolving the SDK uv.lock floor pins in the publish step.
+- ``dockerfile``: OS/language packages fixable by rebuilding the image
+  with updated pins (apt, uv, npm trees patched in the Dockerfile).
+- ``vendored``: content shipped inside an upstream release tarball
+  (nodejs_wheel, acp-node, openvscode, emsdk node trees) — cannot be
+  fixed locally; needs a `.trivyignore` waiver with an `exp:` date and an
+  ops note.
+- ``ensurepip``/``shaded``: bundled wheels or shaded JAR classes — also
+  waiver-only, but called out separately for review.
 
-Usage: scripts/trivy_gate_triage.py report.json [--exp YYYY-MM-DD]
+Usage:
+
+    python3 scripts/trivy_gate_triage.py trivy-image.json
+
+Prints a markdown table per bucket plus a suggested `.trivyignore` block.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-
-SEVERITIES = {"CRITICAL", "HIGH"}
+from typing import Any, cast
 
 _RE_RESOLVE = re.compile(r"\.venv/(lib|Lib)/|uv\.lock|agent-server/.*/site-packages", re.I)
-_VENDORED_NPM = re.compile(
-    r"nodejs_wheel|acp-node|openvscode|emsdk|/opt/.*/node_modules", re.I
-)
-_ENSUREPIP = re.compile(r"ensurepip", re.I)
-_SHADED = re.compile(r"\.jar$|\.t?gz$|tsgo|compiler\.jar", re.I)
+_VENDORED_NPM = re.compile(r"nodejs_wheel|acp-node|openvscode|emsdk|/opt/.*/node_modules", re.I)
+_ENSUREPIP = re.compile(r"ensurepip|pkg_resources|_distutils_hack|bundled.*whl", re.I)
+_SHADED = re.compile(r"\.jar!|shaded|compiler\.jar|closure", re.I)
+
+Vuln = dict[str, Any]
+Bucket = str
 
 
-def classify(result_target: str, vuln: dict) -> tuple[str, str]:
-    path = " ".join(
-        str(vuln.get(k, "")) for k in ("PkgPath", "PkgName", "Target")
-    ) + " " + result_target
-    if _RE_RESOLVE.search(path):
-        return "re-resolve", "lock-resolved python package (agent-server .venv)"
-    if _ENSUREPIP.search(path):
-        return "waiver", "ensurepip bundled wheel (upstream release content)"
-    if _VENDORED_NPM.search(path):
-        return "waiver", "vendored node_modules tree (no upstream fix yet)"
-    if _SHADED.search(path):
-        return "waiver", "shaded/bundled payload inside a vendored binary"
-    if vuln.get("PkgType", "").startswith(("debian", "apk", "ubuntu")):
-        return "dockerfile", "OS package — Dockerfile apt upgrade layer covers"
-    return "review", "no matching disposition class"
+def _str_field(mapping: dict[str, Any], key: str) -> str:
+    value = mapping.get(key, "")
+    return value if isinstance(value, str) else str(value)
 
 
-def iter_findings(report: dict):
-    for result in report.get("Results", []):
-        target = str(result.get("Target", ""))
-        cls = result.get("Class", "")
-        for v in result.get("Vulnerabilities") or []:
-            yield target, cls, v
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("report", help="Trivy JSON report path (- for stdin)")
-    ap.add_argument("--exp", default=None, help="Expiry date for suggested waivers")
-    ap.add_argument(
-        "--all", action="store_true",
-        help="also list unfixed findings (normally ignored by the gate)",
-    )
-    args = ap.parse_args()
-
-    text = sys.stdin.read() if args.report == "-" else Path(args.report).read_text(
-        encoding="utf-8"
-    )
-    report = json.loads(text)
-
-    rows = []
-    for target, cls, v in iter_findings(report):
-        if v.get("Severity") not in SEVERITIES:
-            continue
-        fixed = v.get("FixedVersion") or ""
-        if not args.all and not fixed:
-            continue
-        disposition, why = classify(target, v)
-        if not fixed:
-            disposition = "unfixed"
-            why = "no fixed version — gate ignores; keep listed for awareness"
-        rows.append(
-            {
-                "id": v.get("VulnerabilityID", "?"),
-                "pkg": v.get("PkgName", "?"),
-                "installed": v.get("InstalledVersion", "?"),
-                "fixed": fixed or "-",
-                "sev": v.get("Severity", "?"),
-                "where": v.get("PkgPath") or target,
-                "class": cls,
-                "disposition": disposition,
-                "why": why,
-            }
+def classify(result_target: str, vuln: Vuln) -> tuple[Bucket, str]:
+    """Return (bucket, reason) for one finding."""
+    haystack = (
+        " ".join(
+            _str_field(vuln, k) for k in ("PkgPath", "PkgName", "Target", "Class", "PkgIdentifier")
         )
+        + " "
+        + result_target
+    )
+    if _ENSUREPIP.search(haystack):
+        return "ensurepip", "bundled pip/setuptools wheel inside a Python install"
+    if _SHADED.search(haystack):
+        return "shaded", "class inside a shaded JAR or bundled archive"
+    if _RE_RESOLVE.search(haystack):
+        return "re-resolve", "path inside the SDK .venv/uv.lock — fix by lock re-resolution"
+    if _VENDORED_NPM.search(haystack):
+        return "vendored", "inside an upstream-vendored node tree — waiver candidate"
+    if _str_field(vuln, "Class") in ("os-pkgs", "lang-pkgs") or _str_field(vuln, "PkgName"):
+        return "dockerfile", "package fixable via image rebuild with an updated pin"
+    return "review", "unclassified — manual review"
 
-    rows.sort(key=lambda r: (r["disposition"], r["id"]))
-    by = {}
-    for r in rows:
-        by.setdefault(r["disposition"], []).append(r)
 
-    print(f"# Trivy gate triage — {len(rows)} gate-relevant findings")
-    print()
-    for disp in ("re-resolve", "dockerfile", "waiver", "review", "unfixed"):
-        group = by.get(disp, [])
-        if not group:
+def iter_findings(report: dict[str, Any]) -> Iterator[tuple[str, Vuln]]:
+    """Yield (target, vuln) for every HIGH/CRITICAL vulnerability."""
+    results = report.get("Results")
+    if not isinstance(results, list):
+        return
+    for entry in cast("list[dict[str, Any]]", results):
+        vulns = entry.get("Vulnerabilities")
+        if not isinstance(vulns, list):
             continue
-        print(f"## {disp} ({len(group)})")
-        print()
-        print("| id | package | installed | fixed | where |")
-        print("| --- | --- | --- | --- | --- |")
-        for r in group:
+        target = _str_field(entry, "Target")
+        for vuln in cast("list[Vuln]", vulns):
+            if _str_field(vuln, "Severity").upper() in ("HIGH", "CRITICAL"):
+                yield target, vuln
+
+
+def _cell(value: Any) -> str:
+    return str(value).replace("|", "\\|") if value is not None else ""
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2:
+        print(__doc__, file=sys.stderr)
+        return 2
+    report = cast("dict[str, Any]", json.loads(Path(argv[1]).read_text(encoding="utf-8")))
+    buckets: dict[Bucket, list[tuple[str, Vuln, str]]] = {}
+    for target, vuln in iter_findings(report):
+        bucket, reason = classify(target, vuln)
+        buckets.setdefault(bucket, []).append((target, vuln, reason))
+
+    for bucket in ("re-resolve", "dockerfile", "vendored", "ensurepip", "shaded", "review"):
+        rows = buckets.get(bucket)
+        if not rows:
+            continue
+        print(f"\n## {bucket} ({len(rows)})\n")
+        print("| package | installed | fixed | severity | target | reason |")
+        print("| --- | --- | --- | --- | --- | --- |")
+        for target, vuln, reason in rows:
             print(
-                f"| {r['id']} | {r['pkg']} | {r['installed']} | "
-                f"{r['fixed']} | {r['where']} |"
+                "| {pkg} | {inst} | {fix} | {sev} | {tgt} | {rs} |".format(
+                    pkg=_cell(vuln.get("PkgName")),
+                    inst=_cell(vuln.get("InstalledVersion")),
+                    fix=_cell(vuln.get("FixedVersion") or "-"),
+                    sev=_cell(vuln.get("Severity")),
+                    tgt=_cell(target),
+                    rs=_cell(reason),
+                )
             )
-        print()
 
-    waiver_ids = sorted({r["id"] for r in by.get("waiver", [])})
-    if waiver_ids:
-        exp = args.exp or "YYYY-MM-DD"
-        print("## Suggested .trivyignore block")
-        print()
+    waiver_rows = (
+        buckets.get("vendored", []) + buckets.get("ensurepip", []) + buckets.get("shaded", [])
+    )
+    ids = sorted(
+        {
+            _str_field(vuln, "VulnerabilityID")
+            for _, vuln, _ in waiver_rows
+            if _str_field(vuln, "VulnerabilityID")
+        }
+    )
+    if ids:
+        print("\n## suggested .trivyignore block\n")
         print("```")
-        for vid in waiver_ids:
-            print(f"{vid} exp:{exp}")
+        for vid in ids:
+            print(f"{vid}  # exp:YYYY-MM-DD — upstream-vendored; see docs/operations.md")
         print("```")
-        print()
-        print(
-            "Record the rationale in docs/operations.md next to the existing "
-            "hardening entries, and re-verify on the next upstream bump."
-        )
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv))
