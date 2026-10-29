@@ -69,3 +69,4 @@
 
 - [SDK v1.54.0 feature evaluation](research/sdk-v1.54.0-feature-evaluation.md) — OpenHands SDK/tools adoption decisions
 - [SDK v1.55.1 feature evaluation](research/sdk-v1.55.1-feature-evaluation.md) — OpenHands SDK/tools adoption decisions
+- [SDK v1.59.0 feature evaluation](research/sdk-v1.59.0-feature-evaluation.md) — OpenHands SDK/tools adoption decisions

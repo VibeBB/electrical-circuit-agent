@@ -1026,6 +1026,25 @@ build.
 - Verification: see the PR for `verify_all --stage fast`, plugin load,
   and shared-workflow results.
 
+### OpenHands SDK v1.59.0 and KiCad nightly update review
+
+- Checked on: 2026-10-29
+- `openhands-sdk`/`openhands-tools` `==1.55.1` → `==1.59.0`; uv `0.13.1` →
+  `0.13.6`; pytest `9.1.1` → `9.2.0`, ruff `0.17.0` → `0.17.3` (lock);
+  trivy `v0.76.0` → `v0.76.1`; codeql-action v4.39.0 → v4.39.1;
+  harden-runner v2.22.1 → v2.22.3; setup-uv v10.3.0 → v10.3.3;
+  docker/login-action v4.6.0 → v4.7.0. Full changelog review:
+  `docs/research/sdk-v1.59.0-feature-evaluation.md`.
+- KiCad nightly footprints `202610112010+f8440fa61~14` →
+  `202610272317+a337146e0~14`, symbols `202610151017+9280a9379~12` →
+  `202610290319+45efbd93b~12` (deb sha256 re-verified by download);
+  CERN KiCad libs `fe4025fa` → `0b41c59f` (submodule).
+- uv base image `0.13.1` → `0.13.6` (digest re-pinned); `ubuntu:26.04`
+  digest re-pinned.
+- Deferrals unchanged (mcp 2.x, Python 3.15 default); the Python-minor
+  deferral now covers every `Python minor (*)` surface and the mcp reason
+  cites SDK 1.59.0.
+
 ### OpenHands SDK v1.55.1 and KiCad nightly update review
 
 - Checked on: 2026-10-18
