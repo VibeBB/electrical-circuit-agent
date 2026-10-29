@@ -188,9 +188,9 @@ def test_parse_excellon_tool_table_and_hits(tmp_path: Path) -> None:
     result = parse_excellon(source)
 
     assert result.unit == "mm"
-    assert [
-        v for hit in result.hits for v in (hit.x, hit.y, hit.diameter)
-    ] == pytest.approx([1.0, 2.0, 0.6, 3.0, 4.0, 0.8])
+    assert [v for hit in result.hits for v in (hit.x, hit.y, hit.diameter)] == pytest.approx(
+        [1.0, 2.0, 0.6, 3.0, 4.0, 0.8]
+    )
 
 
 def test_parse_excellon_rejects_unknown_routing(tmp_path: Path) -> None:
