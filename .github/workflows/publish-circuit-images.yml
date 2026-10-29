@@ -425,6 +425,15 @@ jobs:
           grep -q 'name = "litellm", specifier = ">=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
           sed -i 's/litellm = "2026-07-20T00:00:00Z", //' "$RUNNER_TEMP/sdk/pyproject.toml"
           grep -q 'litellm = "2026-07-20T00:00:00Z"' "$RUNNER_TEMP/sdk/pyproject.toml" && exit 1 || true
+          # litellm caps filelock<4.0; add an override so the lock can take
+          # the fixed 4.x line (mirrors the repos' own pyproject overrides).
+          if grep -q 'override-dependencies' "$RUNNER_TEMP/sdk/pyproject.toml"; then
+            grep -q 'override-dependencies = \[[^]]*filelock' "$RUNNER_TEMP/sdk/pyproject.toml" || \
+              sed -i 's/override-dependencies = \[/override-dependencies = ["filelock>=4.2.1", /' "$RUNNER_TEMP/sdk/pyproject.toml"
+          else
+            sed -i '/^\[tool\.uv\]/a override-dependencies = ["filelock>=4.2.1"]' "$RUNNER_TEMP/sdk/pyproject.toml"
+          fi
+          grep -q '"filelock>=4.2.1"' "$RUNNER_TEMP/sdk/pyproject.toml"
           uv lock --project "$RUNNER_TEMP/sdk" \
             --upgrade-package fsspec --upgrade-package litellm \
             --upgrade-package pillow --upgrade-package pypdf \
