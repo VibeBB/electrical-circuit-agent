@@ -1827,3 +1827,7 @@ When sweeping dependencies to latest releases:
 - 2026-10-29: Added `scripts/lint_workflows_local.sh`, which runs
   the same pinned actionlint + zizmor checks as workflow-lint.yml locally
   before pushing workflow edits.
+- 2026-10-29: Added a `CVE-2026-102554` waiver (exp 2027-01-28) for guava
+  33.6.0-jre shaded inside `freerouting-2.5.0.jar`; upstream has no fixed
+  release (verified `freerouting/freerouting` latest = v2.5.0), so the
+  finding is unfixable-vendored like the existing jackson waivers.
