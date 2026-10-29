@@ -398,7 +398,7 @@ jobs:
           sed -i 's/{ name = "litellm", specifier = "==1\.93\.0" }/{ name = "litellm", specifier = ">=1.104,<1.106" }/' "$RUNNER_TEMP/sdk/pyproject.toml"
           grep -q 'name = "litellm", specifier = ">=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
           sed -i 's/litellm = "2026-07-20T00:00:00Z", //' "$RUNNER_TEMP/sdk/pyproject.toml"
-          ! grep -q 'litellm = "2026-07-20T00:00:00Z"' "$RUNNER_TEMP/sdk/pyproject.toml"
+          grep -q 'litellm = "2026-07-20T00:00:00Z"' "$RUNNER_TEMP/sdk/pyproject.toml" && exit 1 || true
           uv lock --project "$RUNNER_TEMP/sdk" \
             --upgrade-package fsspec --upgrade-package litellm \
             --upgrade-package pillow --upgrade-package pypdf \
