@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2",
     "pdfplumber==0.11.10",
-    "pillow==12.3.0",
+    "pillow==13.0.0",
     "cadquery-ocp-novtk==8.0.1.0.0",
     "mcp>=1.29,<2",
     "openhands-sdk==1.59.0",
@@ -33,6 +33,10 @@ packages = ["src/circuit"]
 
 [tool.uv]
 required-version = "==0.13.6"
+# litellm>=1.104 pins filelock<4.0, which keeps the image-publish Trivy gate
+# on CVE-2026-112940. filelock's locking API is unchanged in 4.x, so the
+# override is safe; drop it once litellm relaxes the cap.
+override-dependencies = ["filelock>=4.2.1"]
 
 [tool.ruff]
 line-length = 100
