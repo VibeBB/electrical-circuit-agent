@@ -135,3 +135,17 @@ DS-0029 exp:2027-01-03
 # "Container hardening -> CIS baseline".
 AVD-DS-0002 exp:2027-01-04
 AVD-DS-0026 exp:2027-01-04
+# 2026-10-29 publish-gate additions (circuit-server image):
+# - undici vendored inside three upstream trees: nodejs_wheel's bundled
+#   npm (6.26.0), the acp-node stage's npm (6.28.0) and the
+#   openvscode-server payload (7.19.0). npm 12.2.1 itself still vendors
+#   undici 6.29.0, so no released upstream artifact fixes these yet.
+# - msgpack 1.1.2 inside the managed CPython's ensurepip bundled wheel:
+#   the SDK Dockerfile already revendors the installed pip to 1.2.1, but
+#   the ensurepip wheel payload is upstream release content.
+# Same deferral as the vendored-node_modules/.venv findings above.
+CVE-2026-109383 exp:2027-01-28
+CVE-2026-109829 exp:2027-01-28
+CVE-2026-109869 exp:2027-01-28
+CVE-2026-87018 exp:2027-01-28
+CVE-2026-114613 exp:2027-01-28

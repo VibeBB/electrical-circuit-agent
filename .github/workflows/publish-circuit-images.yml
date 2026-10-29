@@ -378,18 +378,39 @@ jobs:
           if-no-files-found: error
       - name: Clone OpenHands SDK
         run: git clone --depth 1 --branch "v${SDK_VERSION}" https://github.com/OpenHands/software-agent-sdk "$RUNNER_TEMP/sdk"
-      - name: Bump SDK fsspec for CVE-2026-104851
-        # SDK v${SDK_VERSION}'s root uv.lock pins fsspec 2025.9.0, which the
-        # agent-server build installs via `uv sync --frozen` and the Trivy
-        # gate flags as a fixable HIGH (fixed upstream in 2026.6.0).
-        # Re-resolve just that package in the cloned lockfile before the
-        # build. Fail-closed: the lock must move to >= 2026.6.0.
+      - name: Re-resolve flagged SDK lock packages
+        # SDK v${SDK_VERSION}'s root uv.lock pins versions the agent-server
+        # build installs via `uv sync --frozen` and the Trivy gate flags as
+        # fixable: fsspec 2025.9.0 (CVE-2026-104851, fixed in 2026.6.0),
+        # litellm 1.93.0 (fixed in >=1.100.4), pillow 12.3.0 (fixed in
+        # 13.0.0), pypdf 6.14.2, aiohttp 3.14.3, Authlib 1.6.12, oauthlib
+        # 3.3.1, dnspython 2.8.0, virtualenv 20.36.1, filelock 3.20.3.
+        # Re-resolve each in the cloned lockfile before the build.
+        # litellm is doubly blocked in the SDK root pyproject: the workspace
+        # dependency pins ==1.93.0 and exclude-newer-package caps it at
+        # 2026-07-20. Relax both to >=1.104,<1.106 (upstream caps at <1.106
+        # for the mcp-2 boundary) so the resolver can reach the fix.
+        # Fail-closed: every pin must reach its fixed version.
         run: |
           set -euo pipefail
-          uv lock --project "$RUNNER_TEMP/sdk" --upgrade-package fsspec
-          newver=$(grep -A2 'name = "fsspec"' "$RUNNER_TEMP/sdk/uv.lock" | grep 'version =' | head -1 | cut -d'"' -f2)
-          echo "fsspec in SDK lock: $newver"
-          python3 -c "import sys; sys.exit(0 if tuple(map(int, '$newver'.split('.'))) >= (2026, 6, 0) else 'fsspec still vulnerable')"
+          sed -i 's/"litellm==1\.93\.0",/"litellm>=1.104,<1.106",/' "$RUNNER_TEMP/sdk/pyproject.toml"
+          grep -q '"litellm>=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
+          sed -i 's/{ name = "litellm", specifier = "==1\.93\.0" }/{ name = "litellm", specifier = ">=1.104,<1.106" }/' "$RUNNER_TEMP/sdk/pyproject.toml"
+          grep -q 'name = "litellm", specifier = ">=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
+          sed -i 's/litellm = "2026-07-20T00:00:00Z", //' "$RUNNER_TEMP/sdk/pyproject.toml"
+          grep -q 'litellm = "2026-07-20T00:00:00Z"' "$RUNNER_TEMP/sdk/pyproject.toml" && exit 1 || true
+          uv lock --project "$RUNNER_TEMP/sdk" \
+            --upgrade-package fsspec --upgrade-package litellm \
+            --upgrade-package pillow --upgrade-package pypdf \
+            --upgrade-package aiohttp --upgrade-package authlib \
+            --upgrade-package oauthlib --upgrade-package dnspython \
+            --upgrade-package virtualenv --upgrade-package filelock
+          for want in fsspec:2026.6.0 litellm:1.100.4 pillow:13.0.0 pypdf:6.21.2 aiohttp:3.14.4 authlib:1.9.1 oauthlib:4.0.0 dnspython:2.9.0 virtualenv:21.14.9 filelock:4.2.1; do \
+            pkg="${want%%:*}"; floor="${want##*:}"; \
+            newver=$(grep -A2 "name = \"$pkg\"" "$RUNNER_TEMP/sdk/uv.lock" | grep 'version =' | head -1 | cut -d'"' -f2); \
+            echo "$pkg in SDK lock: $newver (need >= $floor)"; \
+            python3 -c "import sys; sys.exit(0 if tuple(map(int, '$newver'.split('.'))) >= tuple(map(int, '$floor'.split('.'))) else f'$pkg still vulnerable')"; \
+          done
       - name: Stabilize server build cache tag
         # Upstream keys the registry cache tag on the base-image digest, so
         # every new tools digest opens a fresh (empty) cache namespace and
