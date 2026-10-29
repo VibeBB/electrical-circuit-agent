@@ -1708,6 +1708,22 @@ Enumerating the first gate run against the published digests
   `scripts/dependency_update_deferrals.json` — after it lands, re-scan
   and drop the cleared waivers. Waivers are per-CVE, so any *new*
   finding still fails the gate.
+- 2026-10-29: the refreshed Trivy DB flagged newly fixable SDK `.venv`
+  packages on `circuit-server` — litellm 1.93.0 (CVE-2026-114612),
+  pillow 12.3.0, pypdf 6.14.2, aiohttp 3.14.3, Authlib 1.6.12, oauthlib
+  3.3.1, dnspython 2.8.0, virtualenv 20.36.1 and filelock 3.20.3. The
+  publish workflow now re-resolves each in the cloned SDK `uv.lock`
+  before the `uv sync --frozen` server build (extending the fsspec
+  patch pattern); litellm needed the SDK's `==1.93.0` workspace pin and
+  its `exclude-newer-package` cutoff relaxed to `>=1.104,<1.106` —
+  still below the documented mcp-2 boundary. On the tools side the
+  circuit lock moves pillow to 13.0.0 and filelock to 4.2.4 via
+  `override-dependencies` (litellm>=1.104 caps `filelock<4.0`).
+  Unfixable vendored copies — undici inside the nodejs_wheel/acp-node/
+  openvscode-server npm trees (CVE-2026-109383/109829/109869/87018; npm
+  12.2.1 still vendors 6.29.0) and msgpack 1.1.2 inside the managed
+  CPython's ensurepip wheel (CVE-2026-114613) — join `.trivyignore`
+  with `exp:2027-01-28` and re-verify on the next SDK bump.
 - The first publish after that fix surfaced six `DS-0029`
   misconfigurations (`apt-get` without `--no-install-recommends`) on
   the Dockerfiles shipped as package resources inside the upstream
