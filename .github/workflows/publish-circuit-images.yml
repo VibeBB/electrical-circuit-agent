@@ -395,8 +395,12 @@ jobs:
           set -euo pipefail
           sed -i 's/"litellm==1\.93\.0",/"litellm>=1.104,<1.106",/' "$RUNNER_TEMP/sdk/pyproject.toml"
           grep -q '"litellm>=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
-          sed -i 's/{ name = "litellm", specifier = "==1\.93\.0" }/{ name = "litellm", specifier = ">=1.104,<1.106" }/' "$RUNNER_TEMP/sdk/pyproject.toml"
-          grep -q 'name = "litellm", specifier = ">=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
+          # Some SDK versions also carry a constraints pin; relax it when
+          # present, but do not fail when it is absent.
+          if grep -q 'name = "litellm", specifier = "==' "$RUNNER_TEMP/sdk/pyproject.toml"; then
+            sed -i 's/{ name = "litellm", specifier = "==1\.93\.0" }/{ name = "litellm", specifier = ">=1.104,<1.106" }/' "$RUNNER_TEMP/sdk/pyproject.toml"
+            grep -q 'name = "litellm", specifier = ">=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
+          fi
           sed -i 's/litellm = "2026-07-20T00:00:00Z", //' "$RUNNER_TEMP/sdk/pyproject.toml"
           grep -q 'litellm = "2026-07-20T00:00:00Z"' "$RUNNER_TEMP/sdk/pyproject.toml" && exit 1 || true
           uv lock --project "$RUNNER_TEMP/sdk" \
