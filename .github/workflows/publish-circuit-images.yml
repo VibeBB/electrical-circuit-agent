@@ -26,6 +26,32 @@ on:
       # merged pin PR does not trigger another publish.
       - "!plugins/circuit/skills/circuit-workflow/tools-image.json"
       - "!docker/README.md"
+  pull_request:
+    # Dry-run rehearsal: build --load + Trivy gates only; every irreversible
+    # step below is normalized to skip on pull_request events.
+    paths:
+      - "docker/**"
+      - ".dockerignore"
+      - "src/**"
+      - "plugins/circuit/**"
+      - "libraries/**"
+      - "scripts/e2e_authoring.py"
+      - "scripts/konnect_client.py"
+      - "scripts/measure_image_tools.py"
+      - "scripts/print_locked_image.py"
+      - "scripts/pull_locked_image.py"
+      - "scripts/update_image_digest_lock.py"
+      - "scripts/smoke_*"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/publish-circuit-images.yml"
+      - "scripts/publish_image_pin_pr.sh"
+      - "scripts/package_level_sbom.py"
+      - "!docker/image-digests.json"
+      # The plugin pin is written by this workflow itself; exclude it so a
+      # merged pin PR does not trigger another publish.
+      - "!plugins/circuit/skills/circuit-workflow/tools-image.json"
+      - "!docker/README.md"
   workflow_dispatch:
     inputs:
       skip_tools:
@@ -142,8 +168,8 @@ jobs:
           # Trivy gate passes so a failing image never serves it. Dry runs
           # load the image into the local daemon for the scans instead of
           # pushing.
-          push: ${{ inputs.dry_run != true }}
-          load: ${{ inputs.dry_run == true }}
+          push: ${{ (inputs.dry_run != true && github.event_name != 'pull_request') }}
+          load: ${{ (inputs.dry_run == true || github.event_name == 'pull_request') }}
           tags: |
             ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
           cache-from: type=gha
@@ -153,7 +179,7 @@ jobs:
       # digest-lock update that reads its attestation-url output.
       - name: Attest tools image provenance
         id: attest
-        if: inputs.skip_tools != true && inputs.dry_run != true
+        if: inputs.skip_tools != true && (inputs.dry_run != true && github.event_name != 'pull_request')
         background: true
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -210,7 +236,7 @@ jobs:
           output: trivy-circuit-tools.sarif
           limit-severities-for-sarif: true
       - name: Promote tools :latest
-        if: inputs.skip_tools != true && inputs.dry_run != true
+        if: inputs.skip_tools != true && (inputs.dry_run != true && github.event_name != 'pull_request')
         env:
           TOOLS_DIGEST: ${{ steps.tools.outputs.digest }}
         run: |
@@ -249,7 +275,7 @@ jobs:
             trivy-circuit-tools.json circuit-tools >> "$GITHUB_STEP_SUMMARY"
       - name: Upload tools Trivy SARIF
         # A rehearsal must not file code-scanning alerts.
-        if: ${{ always() && inputs.skip_tools != true && inputs.dry_run != true && hashFiles('trivy-circuit-tools.sarif') != '' }}
+        if: ${{ always() && inputs.skip_tools != true && (inputs.dry_run != true && github.event_name != 'pull_request') && hashFiles('trivy-circuit-tools.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: trivy-circuit-tools.sarif
@@ -265,7 +291,7 @@ jobs:
         env:
           BUILT_DIGEST: ${{ steps.tools.outputs.digest }}
           SKIP_TOOLS: ${{ inputs.skip_tools }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN: ${{ (inputs.dry_run == true || github.event_name == 'pull_request') }}
         run: |
           set -euo pipefail
           if [ "$SKIP_TOOLS" = true ]; then
@@ -297,7 +323,7 @@ jobs:
             env:
               # Dry runs read the daemon-loaded image; real runs pull the
               # pushed digest from the registry.
-              SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: ${{ inputs.dry_run == true && 'docker' || 'registry' }}
+              SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: ${{ (inputs.dry_run == true || github.event_name == 'pull_request') && 'docker' || 'registry' }}
               TMPDIR: ${{ runner.temp }}
               SYFT_FILE_METADATA_SELECTION: none
             with:
@@ -313,7 +339,7 @@ jobs:
           - name: Verify published tools smoke
             env:
               TOOLS_REF: ${{ env.TOOLS_REF }}
-              DRY_RUN: ${{ inputs.dry_run }}
+              DRY_RUN: ${{ (inputs.dry_run == true || github.event_name == 'pull_request') }}
             run: |
               set -euo pipefail
               # Dry-run images are already in the local daemon (built with
@@ -359,7 +385,7 @@ jobs:
       # update; run it as a background leg overlapping the server build
       # and join it with the other attestations before the lock update.
       - name: Attest tools SBOM
-        if: inputs.skip_tools != true && inputs.dry_run != true
+        if: inputs.skip_tools != true && (inputs.dry_run != true && github.event_name != 'pull_request')
         id: attest_sbom
         background: true
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -403,6 +429,15 @@ jobs:
           fi
           sed -i 's/litellm = "2026-07-20T00:00:00Z", //' "$RUNNER_TEMP/sdk/pyproject.toml"
           grep -q 'litellm = "2026-07-20T00:00:00Z"' "$RUNNER_TEMP/sdk/pyproject.toml" && exit 1 || true
+          # litellm caps filelock<4.0; add an override so the lock can take
+          # the fixed 4.x line (mirrors the repos' own pyproject overrides).
+          if grep -q 'override-dependencies' "$RUNNER_TEMP/sdk/pyproject.toml"; then
+            grep -q 'override-dependencies = \[[^]]*filelock' "$RUNNER_TEMP/sdk/pyproject.toml" || \
+              sed -i 's/override-dependencies = \[/override-dependencies = ["filelock>=4.2.1", /' "$RUNNER_TEMP/sdk/pyproject.toml"
+          else
+            sed -i '/^\[tool\.uv\]/a override-dependencies = ["filelock>=4.2.1"]' "$RUNNER_TEMP/sdk/pyproject.toml"
+          fi
+          grep -q '"filelock>=4.2.1"' "$RUNNER_TEMP/sdk/pyproject.toml"
           uv lock --project "$RUNNER_TEMP/sdk" \
             --upgrade-package fsspec --upgrade-package litellm \
             --upgrade-package pillow --upgrade-package pypdf \
@@ -452,7 +487,7 @@ jobs:
           # cache-from buildcache-*-main ref 404s on every publish and each
           # server build runs cold.
           OPENHANDS_BUILDKIT_CACHE_MODE: max
-          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN: ${{ (inputs.dry_run == true || github.event_name == 'pull_request') }}
         run: |
           set -euo pipefail
           publish_flag="--push"
@@ -461,13 +496,19 @@ jobs:
             # instead of pushing.
             publish_flag="--load"
           fi
+          if [ "$DRY_RUN" = true ]; then
+            # The tools image only exists in the local daemon under --load;
+            # the docker-container builder cannot resolve it, so run the
+            # server build against the daemon's own image store.
+            docker buildx use default
+          fi
           uv run --project "$RUNNER_TEMP/sdk" python \
             "$RUNNER_TEMP/sdk/openhands-agent-server/openhands/agent_server/docker/build.py" \
             --base-image "$TOOLS_REF" --image "ghcr.io/${IMAGE_OWNER}/circuit-server" \
             --target source --platforms linux/amd64 "$publish_flag" --sdk-project-root "$RUNNER_TEMP/sdk"
       - name: Strip pip payload from server image
         env:
-          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN: ${{ (inputs.dry_run == true || github.event_name == 'pull_request') }}
         run: |
           set -euo pipefail
           # Repackage the just-pushed tag: drop the unused pip payload (module,
@@ -484,7 +525,7 @@ jobs:
             -f docker/circuit-server-strip.Dockerfile .
       - name: Resolve server digest
         env:
-          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN: ${{ (inputs.dry_run == true || github.event_name == 'pull_request') }}
         run: |
           set -euo pipefail
           SERVER_TAG="${SOURCE_SHA}-latest-source"
@@ -520,7 +561,7 @@ jobs:
           output: trivy-circuit-server.sarif
           limit-severities-for-sarif: true
       - name: Promote server :latest
-        if: inputs.dry_run != true
+        if: (inputs.dry_run != true && github.event_name != 'pull_request')
         run: |
           docker buildx imagetools create \
             --tag "ghcr.io/${IMAGE_OWNER}/circuit-server:latest" \
@@ -550,7 +591,7 @@ jobs:
             trivy-circuit-server.json circuit-server >> "$GITHUB_STEP_SUMMARY"
       - name: Upload server Trivy SARIF
         # A rehearsal must not file code-scanning alerts.
-        if: ${{ always() && inputs.dry_run != true && hashFiles('trivy-circuit-server.sarif') != '' }}
+        if: ${{ always() && (inputs.dry_run != true && github.event_name != 'pull_request') && hashFiles('trivy-circuit-server.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: trivy-circuit-server.sarif
@@ -564,7 +605,7 @@ jobs:
           retention-days: 90
       - name: Attest server image provenance
         id: attest_server
-        if: inputs.dry_run != true
+        if: (inputs.dry_run != true && github.event_name != 'pull_request')
         background: true
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -580,7 +621,7 @@ jobs:
             env:
               # Dry runs read the daemon-loaded image; real runs pull the
               # pushed digest from the registry.
-              SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: ${{ inputs.dry_run == true && 'docker' || 'registry' }}
+              SYFT_SOURCE_IMAGE_DEFAULT_PULL_SOURCE: ${{ (inputs.dry_run == true || github.event_name == 'pull_request') && 'docker' || 'registry' }}
               TMPDIR: ${{ runner.temp }}
               SYFT_FILE_METADATA_SELECTION: none
             with:
@@ -624,7 +665,7 @@ jobs:
           PY
       - name: Attest server SBOM
         id: attest_server_sbom
-        if: inputs.dry_run != true
+        if: (inputs.dry_run != true && github.event_name != 'pull_request')
         background: true
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -662,7 +703,7 @@ jobs:
       - name: Wait for attestations
         wait: [attest, attest_sbom, attest_server, attest_server_sbom]
       - name: Update digest lock and merge PR
-        if: inputs.dry_run != true
+        if: (inputs.dry_run != true && github.event_name != 'pull_request')
         env:
           GH_TOKEN: ${{ github.token }}
           SKIP_TOOLS: ${{ inputs.skip_tools }}
@@ -757,7 +798,7 @@ jobs:
           echo "pin PR: $pr_url" >> "$GITHUB_STEP_SUMMARY"
           bash scripts/publish_image_pin_pr.sh "$pr_url" "$branch" "${base_sha:-}" "ci.yml locked-image-check.yml workflow-lint.yml"
       - name: Report dry run
-        if: inputs.dry_run == true
+        if: (inputs.dry_run == true || github.event_name == 'pull_request')
         run: |
           {
             echo "## Publish dry run"

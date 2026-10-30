@@ -18,6 +18,12 @@ CVE-2026-68497 exp:2027-01-03
 CVE-2026-89407 exp:2027-01-03
 CVE-2026-89425 exp:2027-01-03
 CVE-2026-91776 exp:2027-01-03
+# --- guava inside freerouting.jar -------------------------------------------------
+# freerouting-2.5.0.jar also shades guava 33.6.0-jre; no upstream release with
+# patched guava exists (2.5.0 remains latest as of 2026-10-29). Same exposure
+# rationale as the jackson waivers above. Re-evaluate at the next freerouting
+# release bump.
+CVE-2026-102554 exp:2027-01-28
 CVE-2026-91777 exp:2027-01-03
 #
 # --- SDK-borne Python packages in /agent-server/.venv (circuit-server) -----
