@@ -492,6 +492,12 @@ jobs:
             # instead of pushing.
             publish_flag="--load"
           fi
+          if [ "$DRY_RUN" = true ]; then
+            # The tools image only exists in the local daemon under --load;
+            # the docker-container builder cannot resolve it, so run the
+            # server build against the daemon's own image store.
+            docker buildx use default
+          fi
           uv run --project "$RUNNER_TEMP/sdk" python \
             "$RUNNER_TEMP/sdk/openhands-agent-server/openhands/agent_server/docker/build.py" \
             --base-image "$TOOLS_REF" --image "ghcr.io/${IMAGE_OWNER}/circuit-server" \
