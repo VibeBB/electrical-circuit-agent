@@ -267,9 +267,16 @@ jobs:
               IMAGE: ${{ needs.check-lock.outputs.image }}
               DIGEST: ${{ needs.check-lock.outputs.digest }}
             run: |
-              gh attestation verify "oci://${IMAGE}@${DIGEST}" \
-                --repo "$GITHUB_REPOSITORY" \
-                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
+              # `gh attestation verify` intermittently fails to initialize
+              # the public-good Sigstore verifier; retry before failing.
+              for attempt in 1 2 3; do
+                if gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"; then
+                  break
+                fi
+                [ "$attempt" -lt 3 ] && sleep 15 || exit 1
+              done
           - name: Fail when tools image has no SBOM attestation
             if: needs.check-lock.outputs.sbom_attestation == ''
             run: |
@@ -282,10 +289,17 @@ jobs:
               IMAGE: ${{ needs.check-lock.outputs.image }}
               DIGEST: ${{ needs.check-lock.outputs.digest }}
             run: |
-              gh attestation verify "oci://${IMAGE}@${DIGEST}" \
-                --repo "$GITHUB_REPOSITORY" \
-                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
-                --predicate-type https://spdx.dev/Document/v2.3
+              # `gh attestation verify` intermittently fails to initialize
+              # the public-good Sigstore verifier; retry before failing.
+              for attempt in 1 2 3; do
+                if gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
+                  --predicate-type https://spdx.dev/Document/v2.3; then
+                  break
+                fi
+                [ "$attempt" -lt 3 ] && sleep 15 || exit 1
+              done
           - name: Fail when server image has no attestation metadata
             if: needs.check-lock.outputs.server_attestation == ''
             run: |
@@ -298,9 +312,16 @@ jobs:
               IMAGE: ${{ needs.check-lock.outputs.server_image }}
               DIGEST: ${{ needs.check-lock.outputs.server_digest }}
             run: |
-              gh attestation verify "oci://${IMAGE}@${DIGEST}" \
-                --repo "$GITHUB_REPOSITORY" \
-                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"
+              # `gh attestation verify` intermittently fails to initialize
+              # the public-good Sigstore verifier; retry before failing.
+              for attempt in 1 2 3; do
+                if gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml"; then
+                  break
+                fi
+                [ "$attempt" -lt 3 ] && sleep 15 || exit 1
+              done
           - name: Fail when server image has no SBOM attestation
             if: needs.check-lock.outputs.server_sbom_attestation == ''
             run: |
@@ -313,10 +334,17 @@ jobs:
               IMAGE: ${{ needs.check-lock.outputs.server_image }}
               DIGEST: ${{ needs.check-lock.outputs.server_digest }}
             run: |
-              gh attestation verify "oci://${IMAGE}@${DIGEST}" \
-                --repo "$GITHUB_REPOSITORY" \
-                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
-                --predicate-type https://spdx.dev/Document/v2.3
+              # `gh attestation verify` intermittently fails to initialize
+              # the public-good Sigstore verifier; retry before failing.
+              for attempt in 1 2 3; do
+                if gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-circuit-images.yml" \
+                  --predicate-type https://spdx.dev/Document/v2.3; then
+                  break
+                fi
+                [ "$attempt" -lt 3 ] && sleep 15 || exit 1
+              done
   check-smoke:
     needs: check-lock
     if: needs.check-lock.outputs.present == 'true'
