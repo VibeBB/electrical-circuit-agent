@@ -1,6 +1,7 @@
 # Hooks
 
-Hook commands resolve the plugin root (`CIRCUIT_PLUGIN_ROOT`, the project
+Hook commands resolve the plugin root (`CIRCUIT_PLUGIN_ROOT`, the
+SDK-exported `PLUGIN_ROOT`, the project
 `plugins/circuit`, `~/.agents/plugins/circuit`,
 `~/.openhands/plugins/installed/circuit`, `${HOME}/plugins/installed/circuit`
 or `${OH_PERSISTENCE_DIR}/plugins/installed/circuit`) then exec the script.
