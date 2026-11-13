@@ -86,7 +86,7 @@ jobs:
       artifact-metadata: write # creates the attestation storage record
       security-events: write # uploads the Trivy SARIF scans to code scanning
     steps:
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -98,7 +98,7 @@ jobs:
         with:
           python-version: "3.14"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -198,9 +198,9 @@ jobs:
             for attempt in 1 2 3; do
               # The two download-only flags are mutually exclusive, so the
               # DBs are fetched in two runs inside the same attempt.
-              if docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.1 \
+              if docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.2 \
                   --cache-dir /cache image --download-db-only \
-              && docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.1 \
+              && docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.2 \
                   --cache-dir /cache image --download-java-db-only; then
                 break
               fi
@@ -227,7 +227,7 @@ jobs:
           # cwd, which races the same way. TRIVY_CACHE_DIR env does NOT
           # override the action's cache-dir input.
           cache-dir: ${{ runner.temp }}/trivy-cache
-          version: v0.76.1
+          version: v0.76.2
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
           ignore-unfixed: true
@@ -258,7 +258,7 @@ jobs:
           scan-type: image
           scan-ref: ghcr.io/${{ env.IMAGE_OWNER }}/circuit-tools:${{ github.sha }}-tools
           cache-dir: ${{ runner.temp }}/trivy-cache
-          version: v0.76.1
+          version: v0.76.2
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
           list-all-pkgs: 'true'
@@ -276,7 +276,7 @@ jobs:
       - name: Upload tools Trivy SARIF
         # A rehearsal must not file code-scanning alerts.
         if: ${{ always() && inputs.skip_tools != true && (inputs.dry_run != true && github.event_name != 'pull_request') && hashFiles('trivy-circuit-tools.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: trivy-circuit-tools.sarif
           category: trivy-circuit-tools
@@ -408,23 +408,24 @@ jobs:
         # SDK v${SDK_VERSION}'s root uv.lock pins versions the agent-server
         # build installs via `uv sync --frozen` and the Trivy gate flags as
         # fixable: fsspec 2025.9.0 (CVE-2026-104851, fixed in 2026.6.0),
-        # litellm 1.93.0 (fixed in >=1.100.4), pillow 12.3.0 (fixed in
-        # 13.0.0), pypdf 6.14.2, aiohttp 3.14.3, Authlib 1.6.12, oauthlib
-        # 3.3.1, dnspython 2.8.0, virtualenv 20.36.1, filelock 3.20.3.
+        # litellm 1.105.1 (keep >=1.100.4 for the CVE fix), pillow 12.3.0
+        # (fixed in 13.0.0), pypdf 6.14.2, aiohttp 3.14.3, Authlib 1.6.12,
+        # oauthlib 3.3.1, dnspython 2.8.0, virtualenv 20.36.1,
+        # filelock 3.20.3.
         # Re-resolve each in the cloned lockfile before the build.
-        # litellm is doubly blocked in the SDK root pyproject: the workspace
-        # dependency pins ==1.93.0 and exclude-newer-package caps it at
-        # 2026-07-20. Relax both to >=1.104,<1.106 (upstream caps at <1.106
-        # for the mcp-2 boundary) so the resolver can reach the fix.
-        # Fail-closed: every pin must reach its fixed version.
+        # litellm is pinned in the SDK root pyproject's constraint-
+        # dependencies as ==1.105.1; relax it to >=1.104,<1.106 (upstream
+        # caps at <1.106 for the mcp-2 boundary) so the resolver can take
+        # the newest fix line. Fail-closed: every pin must reach its
+        # fixed version.
         run: |
           set -euo pipefail
-          sed -i 's/"litellm==1\.93\.0",/"litellm>=1.104,<1.106",/' "$RUNNER_TEMP/sdk/pyproject.toml"
+          sed -i 's/"litellm==1\.105\.1",/"litellm>=1.104,<1.106",/' "$RUNNER_TEMP/sdk/pyproject.toml"
           grep -q '"litellm>=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
-          # Some SDK versions also carry a constraints pin; relax it when
-          # present, but do not fail when it is absent.
+          # Some SDK versions also carry a constraints pin in dict form;
+          # relax it when present, but do not fail when it is absent.
           if grep -q 'name = "litellm", specifier = "==' "$RUNNER_TEMP/sdk/pyproject.toml"; then
-            sed -i 's/{ name = "litellm", specifier = "==1\.93\.0" }/{ name = "litellm", specifier = ">=1.104,<1.106" }/' "$RUNNER_TEMP/sdk/pyproject.toml"
+            sed -i 's/{ name = "litellm", specifier = "==1\.105\.1" }/{ name = "litellm", specifier = ">=1.104,<1.106" }/' "$RUNNER_TEMP/sdk/pyproject.toml"
             grep -q 'name = "litellm", specifier = ">=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
           fi
           sed -i 's/litellm = "2026-07-20T00:00:00Z", //' "$RUNNER_TEMP/sdk/pyproject.toml"
@@ -552,7 +553,7 @@ jobs:
           # daemon-local tag under dry runs.
           scan-ref: ${{ env.SERVER_REF }}
           cache-dir: ${{ runner.temp }}/trivy-cache
-          version: v0.76.1
+          version: v0.76.2
           scanners: vuln,secret,misconfig
           severity: CRITICAL,HIGH
           ignore-unfixed: true
@@ -576,7 +577,7 @@ jobs:
           scan-type: image
           scan-ref: ${{ env.SERVER_REF }}
           cache-dir: ${{ runner.temp }}/trivy-cache
-          version: v0.76.1
+          version: v0.76.2
           scanners: vuln,secret,misconfig,license
           ignore-unfixed: false
           list-all-pkgs: 'true'
@@ -592,7 +593,7 @@ jobs:
       - name: Upload server Trivy SARIF
         # A rehearsal must not file code-scanning alerts.
         if: ${{ always() && (inputs.dry_run != true && github.event_name != 'pull_request') && hashFiles('trivy-circuit-server.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: trivy-circuit-server.sarif
           category: trivy-circuit-server

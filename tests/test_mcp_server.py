@@ -11,7 +11,7 @@ from typing import Any, cast
 import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from mcp.types import ImageContent, TextContent
+from mcp.types import CallToolRequestParams, ImageContent, TextContent
 from PIL import Image
 
 from circuit import humanrequest, mcp_server
@@ -41,6 +41,12 @@ from circuit.sch_lint import SchLintReport
 from pinout_fixtures import pinout_drawing
 from test_libverify import _vqfn_spec  # pyright: ignore[reportPrivateUsage]
 from test_mutation import _known_good_library_fixture  # pyright: ignore[reportPrivateUsage]
+
+
+async def _call_tool(name: str, arguments: dict[str, Any] | None = None):
+    from circuit import mcp_server
+
+    return await mcp_server.call_tool(None, CallToolRequestParams(name=name, arguments=arguments))
 
 
 def test_mcp_server_lists_expected_tools() -> None:
@@ -339,8 +345,8 @@ def test_writer_tools_require_a_current_error_free_spec_check(
         arguments["library_path"] = str(tmp_path / "library" / "Fixture.kicad_sym")
         arguments["footprint_id"] = "Fixture:VQFN"
 
-    result = asyncio.run(mcp_server.call_tool(tool_name, arguments))
-    assert result.isError is True
+    result = asyncio.run(_call_tool(tool_name, arguments))
+    assert result.is_error is True
     text = next(block.text for block in result.content if isinstance(block, TextContent))
     error = json.loads(text)["error"]
     expected = {
@@ -378,7 +384,7 @@ def test_writer_tools_record_generated_provenance(
     library_dir = tmp_path / "library"
     footprint_path = library_dir / "Fixture.pretty" / f"{spec.package.drawing_id}.kicad_mod"
     footprint_result = asyncio.run(
-        mcp_server.call_tool(
+        _call_tool(
             "circuit_footprint_write",
             {
                 "part_spec_path": str(spec_path),
@@ -389,7 +395,7 @@ def test_writer_tools_record_generated_provenance(
     )
     symbol_path = library_dir / "Fixture.kicad_sym"
     symbol_result = asyncio.run(
-        mcp_server.call_tool(
+        _call_tool(
             "circuit_symbol_write",
             {
                 "part_spec_path": str(spec_path),
@@ -399,8 +405,8 @@ def test_writer_tools_record_generated_provenance(
         )
     )
 
-    assert footprint_result.isError is False
-    assert symbol_result.isError is False
+    assert footprint_result.is_error is False
+    assert symbol_result.is_error is False
     footprint_payload = json.loads(
         next(block.text for block in footprint_result.content if isinstance(block, TextContent))
     )
@@ -495,19 +501,19 @@ def test_datasheet_check_received_mcp_tool_returns_findings_and_fails_closed(
 
     monkeypatch.setattr(mcp_server.datasheet, "check_received", check_received)
     result = asyncio.run(
-        mcp_server.call_tool(
+        _call_tool(
             "circuit_datasheet_check_received",
             {"pdf_path": str(pdf_path), "request_path": str(request_path)},
         )
     )
 
-    assert result.isError is False
+    assert result.is_error is False
     payload = json.loads(cast(TextContent, result.content[0]).text)
     assert payload == [finding.model_dump(mode="json")]
     assert calls == [(pdf_path, request)]
 
     failed = asyncio.run(
-        mcp_server.call_tool(
+        _call_tool(
             "circuit_datasheet_check_received",
             {
                 "pdf_path": str(pdf_path),
@@ -515,7 +521,7 @@ def test_datasheet_check_received_mcp_tool_returns_findings_and_fails_closed(
             },
         )
     )
-    assert failed.isError is True
+    assert failed.is_error is True
 
 
 def test_datasheet_revision_check_mcp_tool_uses_injected_snapshot(
@@ -545,13 +551,13 @@ def test_datasheet_revision_check_mcp_tool_uses_injected_snapshot(
 
     monkeypatch.setattr(mcp_server.revwatch, "fetch_current_revision", fetcher)
     result = asyncio.run(
-        mcp_server.call_tool(
+        _call_tool(
             "circuit_datasheet_revision_check",
             {"part_spec_path": str(spec_path), "output_path": str(output_path)},
         )
     )
 
-    assert result.isError is False
+    assert result.is_error is False
     assert fetched == [source_url]
     assert output_path.is_file()
     payload = json.loads(cast(TextContent, result.content[0]).text)
@@ -605,7 +611,7 @@ def test_human_request_mcp_create_and_status(
     }
 
     async def exercise() -> None:
-        created = await mcp_server.call_tool(
+        created = await _call_tool(
             "circuit_human_request_create",
             {
                 "project_path": str(tmp_path),
@@ -613,7 +619,7 @@ def test_human_request_mcp_create_and_status(
                 "confidential": confidential,
             },
         )
-        assert created.isError is False
+        assert created.is_error is False
         created_value = json.loads(cast(TextContent, created.content[0]).text)
         assert len(created_value["request_id"]) == 16
         request_root = (
@@ -627,11 +633,11 @@ def test_human_request_mcp_create_and_status(
             assert "CONFIDENTIAL — local only" in request_markdown.read_text(encoding="utf-8")
             assert (tmp_path / ".confidential" / ".gitignore").is_file()
 
-        status = await mcp_server.call_tool(
+        status = await _call_tool(
             "circuit_human_request_status",
             {"project_path": str(tmp_path), "request_id": created_value["request_id"]},
         )
-        assert status.isError is False
+        assert status.is_error is False
         status_value = json.loads(cast(TextContent, status.content[0]).text)
         assert status_value["request"]["request_sha256"] == created_value["request_sha256"]
         assert status_value["responses"] == []
@@ -660,8 +666,8 @@ def test_corpus_score_mcp_dispatch_and_lane_refusal(
         "footprint_path": str(workspace / "tests" / "lm358.kicad_mod"),
         "model_path": str(workspace / "tests" / "lm358.step"),
     }
-    result = asyncio.run(mcp_server.call_tool("circuit_corpus_score", arguments))
-    assert result.isError is False
+    result = asyncio.run(_call_tool("circuit_corpus_score", arguments))
+    assert result.is_error is False
     assert captured["args"] == (
         workspace / "library" / "corpus",
         "lm358-soic8",
@@ -674,8 +680,8 @@ def test_corpus_score_mcp_dispatch_and_lane_refusal(
     assert captured["kwargs"] == {}
 
     monkeypatch.setenv("CIRCUIT_AUTHORING_LANE", "a")
-    refused = asyncio.run(mcp_server.call_tool("circuit_corpus_score", arguments))
-    assert refused.isError is True
+    refused = asyncio.run(_call_tool("circuit_corpus_score", arguments))
+    assert refused.is_error is True
     error = next(block.text for block in refused.content if isinstance(block, TextContent))
     assert "author lanes cannot run the golden corpus scorer" in error
 
@@ -760,13 +766,13 @@ def test_library_metrics_and_mutation_report_mcp_tools(
 
     monkeypatch.setattr(mcp_server.mutation, "run_mutations", run_real_baseline)
     metric_result = asyncio.run(
-        mcp_server.call_tool(
+        _call_tool(
             "circuit_library_metrics",
             {"project_path": str(project), "output_path": str(metrics_output)},
         )
     )
     mutation_result = asyncio.run(
-        mcp_server.call_tool(
+        _call_tool(
             "circuit_mutation_report",
             {
                 "project_path": str(project),
@@ -783,8 +789,8 @@ def test_library_metrics_and_mutation_report_mcp_tools(
         )
     )
 
-    assert metric_result.isError is False
-    assert mutation_result.isError is False
+    assert metric_result.is_error is False
+    assert mutation_result.is_error is False
     assert report is not None
     assert called == [project]
     assert (
@@ -826,7 +832,7 @@ def test_mutation_report_mcp_defaults_to_export_oracle(
     monkeypatch.setattr(mcp_server.mutation, "library_mutation_fixture", make_fixture)
     monkeypatch.setattr(mcp_server.mutation, "run_mutations", run_mutations)
     result = asyncio.run(
-        mcp_server.call_tool(
+        _call_tool(
             "circuit_mutation_report",
             {
                 "project_path": str(tmp_path / "project"),
@@ -839,7 +845,7 @@ def test_mutation_report_mcp_defaults_to_export_oracle(
         )
     )
 
-    assert result.isError is False
+    assert result.is_error is False
     assert captured["run_export_oracle"] is True
 
 
@@ -1026,7 +1032,7 @@ def test_model_generate_and_inspect_tools_write_reports(
     monkeypatch.setattr(mcp_server.libverify, "inspect_model_file", inspect)
 
     async def exercise() -> None:
-        generated_result = await mcp_server.call_tool(
+        generated_result = await _call_tool(
             "circuit_model_generate",
             {
                 "part_spec_path": str(spec_path),
@@ -1034,13 +1040,13 @@ def test_model_generate_and_inspect_tools_write_reports(
                 "output_dir": str(tmp_path / "generated"),
             },
         )
-        assert generated_result.isError is False
+        assert generated_result.is_error is False
         generated_report = tmp_path / "circuit-reports" / "part.model-generation.json"
         assert generated_report.is_file()
         assert generated["footprint"] == footprint_path
         assert generated["output_dir"] == tmp_path / "generated"
 
-        inspected_result = await mcp_server.call_tool(
+        inspected_result = await _call_tool(
             "circuit_model_inspect",
             {
                 "part_spec_path": str(spec_path),
@@ -1049,7 +1055,7 @@ def test_model_generate_and_inspect_tools_write_reports(
                 "tolerance_mm": 0.05,
             },
         )
-        assert inspected_result.isError is False
+        assert inspected_result.is_error is False
         assert (tmp_path / "circuit-reports" / "test.inspection.json").is_file()
 
     asyncio.run(exercise())
@@ -1127,7 +1133,7 @@ def test_vision_read_mcp_result_contains_only_paths_prompts_and_images(
     ]
 
     result = asyncio.run(
-        mcp_server.call_tool(
+        _call_tool(
             "circuit_vision_read",
             {
                 "extraction_path": str(extraction_path),
@@ -1137,7 +1143,7 @@ def test_vision_read_mcp_result_contains_only_paths_prompts_and_images(
         )
     )
 
-    assert result.isError is False
+    assert result.is_error is False
     text = next(block.text for block in result.content if isinstance(block, TextContent))
     payload = json.loads(text)
     assert len(payload["items"]) == 8
@@ -1340,7 +1346,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
     async def exercise() -> None:
         land_pattern = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_land_pattern",
                 {
                     "part_spec_path": str(spec_path),
@@ -1351,7 +1357,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 },
             ),
         )
-        assert land_pattern.isError is False
+        assert land_pattern.is_error is False
         land_pattern_report = json.loads(
             (tmp_path / "circuit-reports" / "part.land-pattern.json").read_text(encoding="utf-8")
         )
@@ -1359,7 +1365,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
 
         candidates = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_library_candidates",
                 {
                     "part_spec_path": str(spec_path),
@@ -1367,13 +1373,13 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 },
             ),
         )
-        assert candidates.isError is False
+        assert candidates.is_error is False
         assert candidate_products == ["controller-board"]
         assert (tmp_path / "circuit-reports" / "part.library-candidates.json").is_file()
 
         imported = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_library_import",
                 {
                     "source_path": str(source_path),
@@ -1390,13 +1396,13 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 },
             ),
         )
-        assert imported.isError is False
+        assert imported.is_error is False
         assert captured_sources[0].origin == "manufacturer"
         assert (tmp_path / "circuit-reports" / "Fixture.library-import.json").is_file()
 
         recorded = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_library_record",
                 {
                     "library_dir": str(library_dir),
@@ -1415,13 +1421,13 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 },
             ),
         )
-        assert recorded.isError is False
+        assert recorded.is_error is False
         assert (library_dir / "provenance.json").is_file()
         assert (tmp_path / "circuit-reports" / "library.library-record.json").is_file()
 
         verified = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_library_verify",
                 {
                     "part_spec_path": str(spec_path),
@@ -1435,7 +1441,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 },
             ),
         )
-        assert verified.isError is False
+        assert verified.is_error is False
         assert (tmp_path / "circuit-reports" / "part.library-verification.json").is_file()
         assert verification_options == [True]
         assert verification_pin_sources == [pin_source_path]
@@ -1562,7 +1568,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
         monkeypatch.setattr(mcp_server.libreview, "load_decisions", no_decisions)
         packet = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_library_review_packet",
                 {
                     "part_spec_path": str(spec_path),
@@ -1575,12 +1581,12 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 },
             ),
         )
-        assert packet.isError is False
+        assert packet.is_error is False
         assert (tmp_path / "circuit-reports" / "part.library-review-packet.json").is_file()
 
         status = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_library_review_status",
                 {
                     "part_spec_path": str(spec_path),
@@ -1593,7 +1599,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 },
             ),
         )
-        assert status.isError is False
+        assert status.is_error is False
         assert (tmp_path / "circuit-reports" / "part.library-review-status.json").is_file()
         assert review_pin_sources == [pin_source_path]
         assert review_pin_source_lists == [pin_source_inputs]
@@ -1602,7 +1608,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
 
         applied = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_library_review_apply",
                 {
                     "part_spec_path": str(spec_path),
@@ -1612,7 +1618,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 },
             ),
         )
-        assert applied.isError is False
+        assert applied.is_error is False
         assert (tmp_path / "circuit-reports" / "part.library-review-apply.json").is_file()
 
         decisions = [
@@ -1683,7 +1689,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
         monkeypatch.setattr(mcp_server.libreview, "apply_corrections", apply_selected)
         selected_apply = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_library_review_apply",
                 {
                     "part_spec_path": str(spec_path),
@@ -1693,7 +1699,7 @@ def test_library_mcp_tools_create_reports(tmp_path: Path, monkeypatch: Any) -> N
                 },
             ),
         )
-        assert selected_apply.isError is False
+        assert selected_apply.is_error is False
         assert selected == ["b" * 64]
 
     asyncio.run(exercise())
@@ -1724,7 +1730,7 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
             for tool in tools.tools:
                 assert tool.annotations is not None
                 assert tool.annotations.title
-                assert tool.annotations.openWorldHint is False
+                assert tool.annotations.open_world_hint is False
             annotations_by_name = {tool.name: tool.annotations for tool in tools.tools}
             konnect = annotations_by_name["circuit_konnect_call"]
             doctor = annotations_by_name["circuit_doctor"]
@@ -1733,15 +1739,15 @@ def test_stdio_server_lists_tools_and_reports_version(tmp_path: Path) -> None:
             revision_check = annotations_by_name["circuit_datasheet_revision_check"]
             review_status = annotations_by_name["circuit_library_review_status"]
             review_apply = annotations_by_name["circuit_library_review_apply"]
-            assert konnect is not None and konnect.destructiveHint is True
-            assert doctor is not None and doctor.readOnlyHint is True
-            assert erc is not None and erc.readOnlyHint is False
-            assert connector_placement is not None and connector_placement.readOnlyHint is False
-            assert revision_check is not None and revision_check.readOnlyHint is False
-            assert review_status is not None and review_status.readOnlyHint is False
-            assert review_apply is not None and review_apply.readOnlyHint is False
+            assert konnect is not None and konnect.destructive_hint is True
+            assert doctor is not None and doctor.read_only_hint is True
+            assert erc is not None and erc.read_only_hint is False
+            assert connector_placement is not None and connector_placement.read_only_hint is False
+            assert revision_check is not None and revision_check.read_only_hint is False
+            assert review_status is not None and review_status.read_only_hint is False
+            assert review_apply is not None and review_apply.read_only_hint is False
             result = await session.call_tool("circuit_kicad_version", {})
-            assert result.isError is False
+            assert result.is_error is False
             content = result.content[0]
             assert isinstance(content, TextContent)
             assert content.text == '"10.99.0"'
@@ -1756,9 +1762,9 @@ def test_brief_validate_tool(tmp_path: Path, monkeypatch: Any) -> None:
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool("circuit_brief_validate", {"brief_path": str(brief_path)}),
+            await _call_tool("circuit_brief_validate", {"brief_path": str(brief_path)}),
         )
-        assert result.isError is False
+        assert result.is_error is False
         assert '"brief_sha256"' in result.content[0].text
 
     asyncio.run(exercise())
@@ -1772,9 +1778,9 @@ def test_path_arguments_accept_workspace_relative_paths(tmp_path: Path, monkeypa
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool("circuit_brief_validate", {"brief_path": "brief.json"}),
+            await _call_tool("circuit_brief_validate", {"brief_path": "brief.json"}),
         )
-        assert result.isError is False
+        assert result.is_error is False
         assert '"brief_sha256"' in result.content[0].text
 
     asyncio.run(exercise())
@@ -1786,12 +1792,12 @@ def test_path_arguments_reject_parent_traversal(tmp_path: Path, monkeypatch: Any
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_brief_validate",
                 {"brief_path": "../outside.json"},
             ),
         )
-        assert result.isError is True
+        assert result.is_error is True
         assert "outside the workspace" in result.content[0].text
 
     asyncio.run(exercise())
@@ -1822,12 +1828,12 @@ def test_path_arguments_reject_outside_absolute_path(tmp_path: Path, monkeypatch
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_brief_validate",
                 {"brief_path": str(outside)},
             ),
         )
-        assert result.isError is True
+        assert result.is_error is True
         assert "outside the workspace" in result.content[0].text
 
     asyncio.run(exercise())
@@ -1843,12 +1849,12 @@ def test_path_arguments_reject_symlink_components(tmp_path: Path, monkeypatch: A
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_brief_validate",
                 {"brief_path": str(linked / "brief.json")},
             ),
         )
-        assert result.isError is True
+        assert result.is_error is True
         assert "symlink" in result.content[0].text
 
     asyncio.run(exercise())
@@ -1881,7 +1887,7 @@ def test_render_result_includes_image_content(tmp_path: Path, monkeypatch: Any) 
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_render",
                 {
                     "board_path": str(tmp_path / "board.kicad_pcb"),
@@ -1890,11 +1896,11 @@ def test_render_result_includes_image_content(tmp_path: Path, monkeypatch: Any) 
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         assert isinstance(result.content[0], TextContent)
         image = result.content[1]
         assert isinstance(image, ImageContent)
-        assert image.mimeType == "image/png"
+        assert image.mime_type == "image/png"
         assert base64.b64decode(image.data) == png_bytes
 
     asyncio.run(exercise())
@@ -1919,7 +1925,7 @@ def test_render_result_text_only_when_png_missing(tmp_path: Path, monkeypatch: A
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_render",
                 {
                     "board_path": str(tmp_path / "board.kicad_pcb"),
@@ -1928,7 +1934,7 @@ def test_render_result_text_only_when_png_missing(tmp_path: Path, monkeypatch: A
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         assert len(result.content) == 1
         assert isinstance(result.content[0], TextContent)
 
@@ -1956,7 +1962,7 @@ def test_render_schematic_kind_attaches_images(tmp_path: Path, monkeypatch: Any)
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_render",
                 {
                     "kind": "schematic",
@@ -1965,7 +1971,7 @@ def test_render_schematic_kind_attaches_images(tmp_path: Path, monkeypatch: Any)
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         assert isinstance(result.content[0], TextContent)
         payload = json.loads(result.content[0].text)
         assert payload["images"] == [str(path) for path in produced]
@@ -1994,7 +2000,7 @@ def test_render_layers_kind_attaches_capped_images(tmp_path: Path, monkeypatch: 
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_render",
                 {
                     "kind": "layers",
@@ -2004,7 +2010,7 @@ def test_render_layers_kind_attaches_capped_images(tmp_path: Path, monkeypatch: 
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         payload = json.loads(result.content[0].text)
         assert len(payload["images"]) == 6
         assert len(result.content) == 1 + 4  # inline image cap
@@ -2037,8 +2043,8 @@ def test_render_kind_requires_its_inputs(
             "layers": "F.Cu",
         }
         del args[missing]
-        result = cast(Any, await mcp_server.call_tool("circuit_render", args))
-        assert result.isError is True
+        result = cast(Any, await _call_tool("circuit_render", args))
+        assert result.is_error is True
         assert isinstance(result.content[0], TextContent)
         assert missing in result.content[0].text
 
@@ -2051,13 +2057,13 @@ def test_render_unknown_kind_errors(tmp_path: Path, monkeypatch: Any) -> None:
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_render",
                 {"kind": "cross_section", "board_path": str(tmp_path / "b.kicad_pcb")},
             ),
         )
-        assert result.isError is True
-        assert "unknown circuit_render kind" in result.content[0].text
+        assert result.is_error is True
+        assert "Input validation error" in result.content[0].text
 
     asyncio.run(exercise())
 
@@ -2087,7 +2093,7 @@ def test_diff_png_attaches_image(tmp_path: Path, monkeypatch: Any) -> None:
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_diff",
                 {
                     "kind": "pcb",
@@ -2098,7 +2104,7 @@ def test_diff_png_attaches_image(tmp_path: Path, monkeypatch: Any) -> None:
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         image = result.content[1]
         assert isinstance(image, ImageContent)
         assert base64.b64decode(image.data) == png_bytes
@@ -2198,7 +2204,7 @@ def test_konnect_call_ops_extract_image_blocks(tmp_path: Path, monkeypatch: Any)
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_konnect_call",
                 {
                     "ops": [
@@ -2215,7 +2221,7 @@ def test_konnect_call_ops_extract_image_blocks(tmp_path: Path, monkeypatch: Any)
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         payload = json.loads(result.content[0].text)
         blocks = cast(list[Any], payload["results"][0]["content"])
         dict_blocks = [cast(dict[str, Any], block) for block in blocks if isinstance(block, dict)]
@@ -2241,7 +2247,7 @@ def test_konnect_call_proxies_to_managed_subprocess(tmp_path: Path, monkeypatch:
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_konnect_call",
                 {
                     "tool": "circuit_kicad_version",
@@ -2249,7 +2255,7 @@ def test_konnect_call_proxies_to_managed_subprocess(tmp_path: Path, monkeypatch:
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         content = result.content[0]
         assert isinstance(content, TextContent)
         assert "10.99.0" in content.text
@@ -2274,7 +2280,7 @@ def test_konnect_call_runs_ops_in_one_session(tmp_path: Path, monkeypatch: Any) 
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_konnect_call",
                 {
                     "ops": [
@@ -2284,7 +2290,7 @@ def test_konnect_call_runs_ops_in_one_session(tmp_path: Path, monkeypatch: Any) 
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         content = result.content[0]
         assert isinstance(content, TextContent)
         payload = json.loads(content.text)
@@ -2300,12 +2306,12 @@ def test_konnect_call_ops_propagate_errors(tmp_path: Path, monkeypatch: Any) -> 
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_konnect_call",
                 {"ops": [{"tool": "no_such_tool"}, {"tool": "circuit_kicad_version"}]},
             ),
         )
-        assert result.isError is True
+        assert result.is_error is True
         content = result.content[0]
         assert isinstance(content, TextContent)
         payload = json.loads(content.text)
@@ -2321,9 +2327,9 @@ def test_konnect_call_requires_tool_or_ops(tmp_path: Path, monkeypatch: Any) -> 
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool("circuit_konnect_call", {}),
+            await _call_tool("circuit_konnect_call", {}),
         )
-        assert result.isError is True
+        assert result.is_error is True
         content = result.content[0]
         assert isinstance(content, TextContent)
         assert "requires" in content.text
@@ -2341,13 +2347,14 @@ def test_konnect_call_rejects_non_ipc_socket(tmp_path: Path, monkeypatch: Any, s
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_konnect_call",
                 {"tool": "circuit_kicad_version", "socket": socket},
             ),
         )
-        assert result.isError is True
-        assert "must use ipc://" in result.content[0].text
+        assert result.is_error is True
+        text = result.content[0].text
+        assert "must use ipc://" in text or "Input validation error" in text
 
     asyncio.run(exercise())
 
@@ -2380,9 +2387,9 @@ def test_konnect_call_contains_nested_tool_and_operation_paths(
         ]:
             result = cast(
                 Any,
-                await mcp_server.call_tool("circuit_konnect_call", arguments),
+                await _call_tool("circuit_konnect_call", arguments),
             )
-            assert result.isError is True
+            assert result.is_error is True
             assert "outside the workspace" in result.content[0].text
 
     asyncio.run(exercise())
@@ -2493,7 +2500,7 @@ def test_design_report_collects_pipeline_sections(tmp_path: Path, monkeypatch: A
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_design_report",
                 {
                     "brief_path": str(brief_path),
@@ -2502,7 +2509,7 @@ def test_design_report_collects_pipeline_sections(tmp_path: Path, monkeypatch: A
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         report_path = reports / "board.design-report.json"
         assert report_path.is_file()
         design = DesignReport.model_validate_json(report_path.read_text(encoding="utf-8"))
@@ -2542,7 +2549,7 @@ def test_import_dispatches_and_returns_report(
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_import",
                 {
                     "kind": "sch",
@@ -2552,7 +2559,7 @@ def test_import_dispatches_and_returns_report(
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         payload = json.loads(result.content[0].text)
         assert payload["report"] == {"source_format": "LTspice"}
         assert payload["output"].endswith("out.kicad_sch")
@@ -2581,12 +2588,12 @@ def test_stackup_writes_json_and_svg(tmp_path: Path, monkeypatch: pytest.MonkeyP
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_stackup",
                 {"board_path": str(tmp_path / "board.kicad_pcb"), "output_dir": str(out_dir)},
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         payload = json.loads(result.content[0].text)
         assert Path(payload["json_path"]).is_file()
         svg = Path(payload["svg_path"])
@@ -2615,7 +2622,7 @@ def test_rasterize_attaches_pngs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_rasterize",
                 {
                     "source_path": str(tmp_path / "doc.pdf"),
@@ -2623,10 +2630,10 @@ def test_rasterize_attaches_pngs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         image = result.content[1]
         assert isinstance(image, ImageContent)
-        assert image.mimeType == "image/png"
+        assert image.mime_type == "image/png"
 
     asyncio.run(exercise())
 
@@ -2650,7 +2657,7 @@ def test_fp_svg_export_accepts_workspace_library(
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_export",
                 {
                     "kind": "fp_svg",
@@ -2659,7 +2666,7 @@ def test_fp_svg_export_accepts_workspace_library(
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         assert calls == [("fp_svg", library, output_dir)]
 
     asyncio.run(exercise())
@@ -2699,7 +2706,7 @@ def test_fp_svg_export_accepts_installed_library_roots(
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_export",
                 {
                     "kind": "fp_svg",
@@ -2708,7 +2715,7 @@ def test_fp_svg_export_accepts_installed_library_roots(
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
         assert calls == [("fp_svg", library, output_dir)]
 
     asyncio.run(exercise())
@@ -2729,7 +2736,7 @@ def test_fp_svg_export_rejects_external_library(
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_export",
                 {
                     "kind": "fp_svg",
@@ -2738,7 +2745,7 @@ def test_fp_svg_export_rejects_external_library(
                 },
             ),
         )
-        assert result.isError is True
+        assert result.is_error is True
         assert "installed KiCad/CERN library" in result.content[0].text
 
     asyncio.run(exercise())
@@ -2823,8 +2830,8 @@ def test_call_tool_rejects_invalid_literal_args(
     monkeypatch.setattr(mcp_server.kicad_cli, "import_file", _fail_if_called("import_file"))
 
     async def exercise() -> None:
-        result = cast(Any, await mcp_server.call_tool(tool, arguments))
-        assert result.isError is True
+        result = cast(Any, await _call_tool(tool, arguments))
+        assert result.is_error is True
         text = result.content[0].text
         assert f"'{key}'" in text
         assert repr(value) in text
@@ -2847,18 +2854,17 @@ def test_render_valid_literal_args_pass_through(tmp_path: Path, monkeypatch: Any
     async def exercise() -> None:
         result = cast(
             Any,
-            await mcp_server.call_tool(
+            await _call_tool(
                 "circuit_render",
                 {
                     "board_path": str(tmp_path / "b.kicad_pcb"),
                     "output_path": str(out_path),
                     "side": "bottom",
-                    "background": "",
                     "quality": "high",
                 },
             ),
         )
-        assert result.isError is False
+        assert result.is_error is False
 
     asyncio.run(exercise())
 

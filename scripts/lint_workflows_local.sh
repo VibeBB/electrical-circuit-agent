@@ -24,13 +24,13 @@ fi
 "$tooldir/actionlint" -oneline
 
 # zizmor (same pinned wheel and sha256 as workflow-lint.yml).
-wheel="zizmor-1.31.1-py3-none-manylinux_2_28_x86_64.whl"
+wheel="zizmor-1.32.0-py3-none-manylinux_2_28_x86_64.whl"
 if [ ! -f "$tooldir/$wheel" ]; then
   curl --fail --location --silent --show-error --retry 8 --retry-delay 20 \
     --retry-max-time 600 --retry-all-errors \
     --output "$tooldir/$wheel" \
-    "https://files.pythonhosted.org/packages/7c/f7/ee2c8eedc7bf07f443a41aa12f828c7846fd17bab184c22403afd0cbb137/$wheel"
-  echo "58e878eb2dbd2c6183c105e1ac28c14f7dd1eca44a783f1fe2a69647d012c410  $tooldir/$wheel" \
+    "https://files.pythonhosted.org/packages/6f/b2/45f4fcb6f428e774750709ecf5320ba6d96393c03b941d9f37a4586f6924/$wheel"
+  echo "84a6acb975accc13408786a2bd274b572537ca19c933ebbc13e78f3988562071  $tooldir/$wheel" \
     | sha256sum -c -
 fi
 # Online audits (advisory DB lookups, ref resolution) activate when GH_TOKEN

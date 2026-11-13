@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch as mock_patch
 
+from mcp.types import CallToolRequestParams, CallToolResult
+
 
 class ReplayError(RuntimeError):
     pass
@@ -612,8 +614,8 @@ def _redact_private(value: object, secrets: Sequence[str]) -> object:
     return value
 
 
-def _tool_result(raw: object) -> tuple[bool, object]:
-    is_error = bool(getattr(raw, "isError", False))
+def _tool_result(raw: CallToolResult) -> tuple[bool, object]:
+    is_error = bool(raw.is_error)
     content = getattr(raw, "content", [])
     text = next(
         (
@@ -676,7 +678,9 @@ async def _call_tool(
                     capture_control_image,
                 )
             )
-        raw = await mcp_server.call_tool(tool_name, arguments)
+        raw = await mcp_server.call_tool(
+            None, CallToolRequestParams(name=tool_name, arguments=arguments)
+        )
     is_error, result = _tool_result(raw)
     return is_error, result, control_answers[0] if control_answers else None
 

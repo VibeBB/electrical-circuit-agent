@@ -150,11 +150,11 @@ async def _konnect_call(
             results.append(
                 {
                     "tool": op_tool,
-                    "isError": bool(op_result.isError),
+                    "isError": bool(op_result.is_error),
                     "content": content,
                 }
             )
         return CallToolResult(
             content=[TextContent(type="text", text=_json({"results": results}))],
-            isError=any(item["isError"] for item in results),
+            is_error=any(item["isError"] for item in results),
         )

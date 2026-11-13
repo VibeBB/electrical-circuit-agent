@@ -9,9 +9,10 @@ dependencies = [
     "pdfplumber==0.11.10",
     "pillow==13.0.0",
     "cadquery-ocp-novtk==8.0.1.0.0",
-    "mcp>=1.29,<2",
-    "openhands-sdk==1.59.0",
-    "openhands-tools==1.59.0",
+    "jsonschema>=4",
+    "mcp>=2",
+    "openhands-sdk==1.62.0",
+    "openhands-tools==1.62.0",
 ]
 
 [dependency-groups]
@@ -32,7 +33,7 @@ build-backend = "hatchling.build"
 packages = ["src/circuit"]
 
 [tool.uv]
-required-version = "==0.13.6"
+required-version = "==0.13.8"
 # litellm>=1.104 pins filelock<4.0, which keeps the image-publish Trivy gate
 # on CVE-2026-112940. filelock's locking API is unchanged in 4.x, so the
 # override is safe; drop it once litellm relaxes the cap.

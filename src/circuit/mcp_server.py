@@ -9,12 +9,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from mcp.server import Server
+from jsonschema import Draft202012Validator
+from mcp.server import Server, ServerRequestContext
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import (
+    CallToolRequestParams,
     CallToolResult,
     ContentBlock,
+    ListToolsResult,
+    PaginatedRequestParams,
     ServerCapabilities,
     TextContent,
     Tool,
@@ -93,8 +97,6 @@ from .mcp_collect import (
 )
 from .mcp_konnect import _konnect_call, _rewrite_base64_images
 from .pinsource import PinSourceInput
-
-server = Server("circuit", version=__version__)
 
 # Every tool whose result can include rendered images (returned inline as
 # ImageContent); hooks/record_image_observation.py must observe all of them.
@@ -1339,10 +1341,10 @@ def _anno(
 ) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
-        readOnlyHint=not write,
-        destructiveHint=destructive,
-        idempotentHint=idempotent,
-        openWorldHint=False,
+        read_only_hint=not write,
+        destructive_hint=destructive,
+        idempotent_hint=idempotent,
+        open_world_hint=False,
     )
 
 
@@ -1424,7 +1426,7 @@ def tool_specs() -> list[Tool]:
         Tool(
             name=name,
             description=description,
-            inputSchema=schema,
+            input_schema=schema,
             annotations=_ANNOTATIONS[name],
         )
         for name, description, schema in _TOOLS
@@ -1968,7 +1970,7 @@ def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
             source=import_source,
             symbol_names=cast(list[str], symbol_names) if isinstance(symbol_names, list) else None,
             members=cast(list[str], members) if isinstance(members, list) else None,
-            replace=bool(args.get("replace", False)),
+            replace=args.get("replace") is True,
         )
         output = _output_path(
             library_dir.parent / f"{args['nickname']}.json",
@@ -2077,9 +2079,10 @@ def _library_metrics_tool(name: str, args: dict[str, Any]) -> Any:
     raise ValueError(f"unsupported library metrics tool: {name}")
 
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    return tool_specs()
+async def list_tools(
+    ctx: ServerRequestContext | None, params: PaginatedRequestParams | None
+) -> ListToolsResult:
+    return ListToolsResult(tools=tool_specs())
 
 
 def _pin_source_inputs(args: dict[str, Any]) -> list[PinSourceInput] | None:
@@ -2108,7 +2111,26 @@ _RECORD_TOOLS: dict[str, Callable[[dict[str, Any]], Any]] = {
 }
 
 
-async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResult:
+async def call_tool(
+    ctx: ServerRequestContext | None, params: CallToolRequestParams
+) -> CallToolResult:
+    name, arguments = params.name, params.arguments or {}
+    spec = next((tool for tool in tool_specs() if tool.name == name), None)
+    if spec is not None:
+        errors = sorted(
+            Draft202012Validator(spec.input_schema).iter_errors(  # pyright: ignore[reportUnknownMemberType]
+                arguments
+            ),
+            key=lambda error: list(error.absolute_path),
+        )
+        if errors:
+            first = errors[0]
+            key = ".".join(str(part) for part in first.absolute_path)
+            message = first.message if not key else f"'{key}': {first.message}"
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"Input validation error: {message}")],
+                is_error=True,
+            )
     image_paths: list[Path] = []
     result: Any = None
     try:
@@ -2805,13 +2827,13 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResu
     except Exception as exc:
         return CallToolResult(
             content=[TextContent(type="text", text=_json({"error": str(exc)}))],
-            isError=True,
+            is_error=True,
         )
 
 
 __all__ = ["call_tool", "server"]
 
-server.call_tool()(call_tool)
+server = Server("circuit", on_list_tools=list_tools, on_call_tool=call_tool)
 
 
 async def _run() -> None:

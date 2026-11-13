@@ -1026,6 +1026,44 @@ build.
 - Verification: see the PR for `verify_all --stage fast`, plugin load,
   and shared-workflow results.
 
+### OpenHands SDK v1.62.0 and mcp 2.x update review
+
+- Checked on: 2026-11-14
+- `openhands-sdk`/`openhands-tools` `==1.59.0` → `==1.62.0`; `mcp`
+  `>=1.29,<2` → `>=2` (forced — SDK 1.62.0 requires `fastmcp>=4`, whose
+  slim client extra pins `mcp>=2`); uv `0.13.6` → `0.13.8`; ruff →
+  `0.17.5`; pydantic → `2.14.3`; zizmor `1.32.0`, trivy `0.76.2`;
+  harden-runner v2.22.4; docker/login-action v4.8.0; codeql-action
+  v4.39.3. Full changelog review:
+  `docs/research/sdk-v1.62.0-feature-evaluation.md`.
+- `src/circuit/mcp_server.py` (and `mcp_collect.py`, `mcp_konnect.py`)
+  migrated to the mcp 2.x lowlevel API: `Server(name, on_list_tools=…,
+  on_call_tool=…)`, `PaginatedRequestParams`/`CallToolRequestParams`.
+  mcp 2.x dropped the mcp 1.x request-layer jsonschema argument
+  validation, so `call_tool` now validates `arguments` against each
+  tool's `input_schema` with `jsonschema.Draft202012Validator` and
+  returns an `Input validation error` `CallToolResult` on failure.
+- `.trivyignore` 2026-11-14 additions (exp 2027-02-14): pyasn1 0.6.4
+  (CVE-2026-119194/119195/119196/119197) and soupsieve 2.8.4
+  (CVE-2026-126190/126191) inside the upstream agent-server `.venv`,
+  plus golang.org/x/net CVE-2026-78661 in upstream's bundled Go tools.
+  Same upstream-owned deferral as the existing .venv/vendored classes;
+  they clear when upstream rebuilds with the fixed versions.
+  parameters, `ListToolsResult`/`CallToolResult` returns, snake_case
+  `input_schema`/`is_error`/`mime_type` fields. The mcp deferral entry
+  was consumed and removed.
+- KiCad nightly `202610142039+ccb19070e9~190` → `202611131137+711550ba60~190`,
+  symbols `202610290319+45efbd93b~12` → `202611121241+9fa442824~12`,
+  footprints `202610272317+a337146e0~14` → `202611021521+a0dcd398e~14`
+  (deb sha256 re-verified by download); Semeru JRE `27.0.0.0` → `27.0.1.0`;
+  CERN KiCad libs `0b41c59f` → `c62d9bd1` (submodule). Re-test the
+  `_cvpcb.kiface` ERC failure after the tools image republishes.
+- Upstream SDK v1.62.0 moved the litellm constraint to `==1.105.1` in
+  `constraint-dependencies` and dropped the `exclude-newer-package`
+  cap; the publish Re-resolve sed needles were updated to match.
+- Deferrals unchanged: Python minor still deferred (3.12/3.13 floor,
+  3.14 required leg, 3.15 canary only).
+
 ### OpenHands SDK v1.59.0 and KiCad nightly update review
 
 - Checked on: 2026-10-29

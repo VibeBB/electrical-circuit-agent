@@ -190,9 +190,10 @@ def _resolved_import_source(source: SourceInfoInput) -> SourceInfoInput:
         )
         if source.license != required:
             raise LibrarySourceError("KiCad official imports require the official library license")
-    elif source.origin == "cern":
-        if source.license.spdx != "CERN-OHL-P-2.0" or source.license.license_ref is not None:
-            raise LibrarySourceError("CERN imports require the CERN-OHL-P-2.0 license")
+    elif source.origin == "cern" and (
+        source.license.spdx != "CERN-OHL-P-2.0" or source.license.license_ref is not None
+    ):
+        raise LibrarySourceError("CERN imports require the CERN-OHL-P-2.0 license")
     return source
 
 
