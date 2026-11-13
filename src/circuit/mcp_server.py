@@ -1969,7 +1969,7 @@ def _part_build_tool(name: str, args: dict[str, Any]) -> Any:
             source=import_source,
             symbol_names=cast(list[str], symbol_names) if isinstance(symbol_names, list) else None,
             members=cast(list[str], members) if isinstance(members, list) else None,
-            replace=bool(args.get("replace", False)),
+            replace=args.get("replace") is True,
         )
         output = _output_path(
             library_dir.parent / f"{args['nickname']}.json",

@@ -615,7 +615,7 @@ def _redact_private(value: object, secrets: Sequence[str]) -> object:
 
 
 def _tool_result(raw: object) -> tuple[bool, object]:
-    is_error = bool(getattr(raw, "isError", False))
+    is_error = bool(raw.is_error)
     content = getattr(raw, "content", [])
     text = next(
         (
