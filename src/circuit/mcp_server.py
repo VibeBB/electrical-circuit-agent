@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from jsonschema import Draft202012Validator
 from mcp.server import Server, ServerRequestContext
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
@@ -2114,6 +2115,22 @@ async def call_tool(
     ctx: ServerRequestContext | None, params: CallToolRequestParams
 ) -> CallToolResult:
     name, arguments = params.name, params.arguments or {}
+    spec = next((tool for tool in tool_specs() if tool.name == name), None)
+    if spec is not None:
+        errors = sorted(
+            Draft202012Validator(spec.input_schema).iter_errors(  # pyright: ignore[reportUnknownMemberType]
+                arguments
+            ),
+            key=lambda error: list(error.absolute_path),
+        )
+        if errors:
+            first = errors[0]
+            key = ".".join(str(part) for part in first.absolute_path)
+            message = first.message if not key else f"'{key}': {first.message}"
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"Input validation error: {message}")],
+                is_error=True,
+            )
     image_paths: list[Path] = []
     result: Any = None
     try:

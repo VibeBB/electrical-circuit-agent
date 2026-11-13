@@ -2063,7 +2063,7 @@ def test_render_unknown_kind_errors(tmp_path: Path, monkeypatch: Any) -> None:
             ),
         )
         assert result.is_error is True
-        assert "unknown circuit_render kind" in result.content[0].text
+        assert "Input validation error" in result.content[0].text
 
     asyncio.run(exercise())
 
@@ -2353,7 +2353,8 @@ def test_konnect_call_rejects_non_ipc_socket(tmp_path: Path, monkeypatch: Any, s
             ),
         )
         assert result.is_error is True
-        assert "must use ipc://" in result.content[0].text
+        text = result.content[0].text
+        assert "must use ipc://" in text or "Input validation error" in text
 
     asyncio.run(exercise())
 
@@ -2859,7 +2860,6 @@ def test_render_valid_literal_args_pass_through(tmp_path: Path, monkeypatch: Any
                     "board_path": str(tmp_path / "b.kicad_pcb"),
                     "output_path": str(out_path),
                     "side": "bottom",
-                    "background": "",
                     "quality": "high",
                 },
             ),

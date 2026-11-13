@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch as mock_patch
 
-from mcp.types import CallToolRequestParams
+from mcp.types import CallToolRequestParams, CallToolResult
 
 
 class ReplayError(RuntimeError):
@@ -614,7 +614,7 @@ def _redact_private(value: object, secrets: Sequence[str]) -> object:
     return value
 
 
-def _tool_result(raw: object) -> tuple[bool, object]:
+def _tool_result(raw: CallToolResult) -> tuple[bool, object]:
     is_error = bool(raw.is_error)
     content = getattr(raw, "content", [])
     text = next(

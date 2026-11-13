@@ -837,6 +837,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cadquery-ocp-novtk" },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "openhands-sdk" },
     { name = "openhands-tools" },
@@ -858,6 +859,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cadquery-ocp-novtk", specifier = "==8.0.1.0.0" },
+    { name = "jsonschema", specifier = ">=4" },
     { name = "mcp", specifier = ">=2" },
     { name = "openhands-sdk", specifier = "==1.62.0" },
     { name = "openhands-tools", specifier = "==1.62.0" },

@@ -1038,7 +1038,17 @@ build.
   `docs/research/sdk-v1.62.0-feature-evaluation.md`.
 - `src/circuit/mcp_server.py` (and `mcp_collect.py`, `mcp_konnect.py`)
   migrated to the mcp 2.x lowlevel API: `Server(name, on_list_tools=…,
-  on_call_tool=…)`, `PaginatedRequestParams`/`CallToolRequestParams`
+  on_call_tool=…)`, `PaginatedRequestParams`/`CallToolRequestParams`.
+  mcp 2.x dropped the mcp 1.x request-layer jsonschema argument
+  validation, so `call_tool` now validates `arguments` against each
+  tool's `input_schema` with `jsonschema.Draft202012Validator` and
+  returns an `Input validation error` `CallToolResult` on failure.
+- `.trivyignore` 2026-11-14 additions (exp 2027-02-14): pyasn1 0.6.4
+  (CVE-2026-119194/119195/119196/119197) and soupsieve 2.8.4
+  (CVE-2026-126190/126191) inside the upstream agent-server `.venv`,
+  plus golang.org/x/net CVE-2026-78661 in upstream's bundled Go tools.
+  Same upstream-owned deferral as the existing .venv/vendored classes;
+  they clear when upstream rebuilds with the fixed versions.
   parameters, `ListToolsResult`/`CallToolResult` returns, snake_case
   `input_schema`/`is_error`/`mime_type` fields. The mcp deferral entry
   was consumed and removed.

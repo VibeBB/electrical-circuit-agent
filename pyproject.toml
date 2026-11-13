@@ -9,6 +9,7 @@ dependencies = [
     "pdfplumber==0.11.10",
     "pillow==13.0.0",
     "cadquery-ocp-novtk==8.0.1.0.0",
+    "jsonschema>=4",
     "mcp>=2",
     "openhands-sdk==1.62.0",
     "openhands-tools==1.62.0",

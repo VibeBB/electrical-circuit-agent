@@ -37,7 +37,7 @@ Primary sources:
 
 | Upstream change | Decision | Evaluation |
 | --- | --- | --- |
-| #6540 fix(mcp): migrate to fastmcp 4 and mcp 2 | adopted implicitly (SDK side) | The SDK's own MCP layer moved to fastmcp 4. fastmcp 4 no longer depends on the `mcp` package, so this does not force consumers onto mcp 2.x; repos that pin `mcp>=1.29,<2` keep resolving. Our own `mcp_server.py` also migrated to the mcp 2.x API in this change (the `mcp<2` cap was unsatisfiable against `fastmcp>=4`); the mcp deferral entry was consumed and removed. |
+| #6540 fix(mcp): migrate to fastmcp 4 and mcp 2 | adopted implicitly (SDK side) | The SDK's own MCP layer moved to fastmcp 4. The fastmcp 4 core no longer depends on the `mcp` package, but the `fastmcp-slim[client]` extra the SDK pulls in pins `mcp>=2`, which makes the repo's `mcp>=1.29,<2` cap unsatisfiable. `mcp_server.py` migrated to the mcp 2.x API in this change and the mcp deferral entry was consumed and removed. |
 | #6542 feat(hooks): expose per-plugin PLUGIN_ROOT to plugin hook commands | adopted | The loader now exports `PLUGIN_ROOT` and resolves `${PLUGIN_ROOT}` in hook/MCP command strings. Every `for c in` candidate list in `plugins/*/hooks/hooks.json` and `plugins/*/.mcp.json` now tries `${PLUGIN_ROOT:-}` first — a cheap, backward-compatible resolution improvement (empty var is skipped on older SDKs). |
 | #5767 fix(agent-server): load skills marketplace from .plugin manifest first | adopted implicitly | Matches the VibeBB `.plugin/plugin.json` layout; install-source resolution prefers our manifest. |
 | #6307 Replace OpenVSCode Server with Coder code-server | noted | Agent-server IDE component swap; VibeBB plugins do not reference the IDE. |
