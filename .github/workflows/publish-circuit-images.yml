@@ -198,9 +198,9 @@ jobs:
             for attempt in 1 2 3; do
               # The two download-only flags are mutually exclusive, so the
               # DBs are fetched in two runs inside the same attempt.
-              if docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.1 \
+              if docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.2 \
                   --cache-dir /cache image --download-db-only \
-              && docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.1 \
+              && docker run --rm -v "$RUNNER_TEMP/$dir:/cache" aquasec/trivy:0.76.2 \
                   --cache-dir /cache image --download-java-db-only; then
                 break
               fi
