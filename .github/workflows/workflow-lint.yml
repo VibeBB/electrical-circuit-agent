@@ -27,7 +27,7 @@ jobs:
       # Uploads the zizmor SARIF report to code scanning.
       security-events: write
     steps:
-      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -55,12 +55,12 @@ jobs:
         run: |
           set -euo pipefail
           # The sha256 is the published value for
-          # zizmor-1.31.1-py3-none-manylinux_2_28_x86_64.whl on PyPI.
-          wheel="zizmor-1.31.1-py3-none-manylinux_2_28_x86_64.whl"
+          # zizmor-1.32.0-py3-none-manylinux_2_28_x86_64.whl on PyPI.
+          wheel="zizmor-1.32.0-py3-none-manylinux_2_28_x86_64.whl"
           curl --fail --location --silent --show-error --retry 5 --retry-delay 10 \
             --output "$RUNNER_TEMP/$wheel" \
-            "https://files.pythonhosted.org/packages/7c/f7/ee2c8eedc7bf07f443a41aa12f828c7846fd17bab184c22403afd0cbb137/$wheel"
-          echo "58e878eb2dbd2c6183c105e1ac28c14f7dd1eca44a783f1fe2a69647d012c410  $RUNNER_TEMP/$wheel" \
+            "https://files.pythonhosted.org/packages/6f/b2/45f4fcb6f428e774750709ecf5320ba6d96393c03b941d9f37a4586f6924/$wheel"
+          echo "84a6acb975accc13408786a2bd274b572537ca19c933ebbc13e78f3988562071  $RUNNER_TEMP/$wheel" \
             | sha256sum -c -
       - name: Zizmor
         env:
@@ -72,9 +72,9 @@ jobs:
         run: |
           flags=""
           case "$HEAD_REF" in bot/update-image-digests-*) flags="--offline";; esac
-          uvx --from "$RUNNER_TEMP/zizmor-1.31.1-py3-none-manylinux_2_28_x86_64.whl" \
+          uvx --from "$RUNNER_TEMP/zizmor-1.32.0-py3-none-manylinux_2_28_x86_64.whl" \
             zizmor $flags --format sarif .github/workflows > results.sarif
-      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         # Bot digest-lock branches are deleted on auto-merge, so their SARIF
         # cannot be uploaded; the plain zizmor run below still gates them.
         if: always() && hashFiles('results.sarif') != '' && !startsWith(github.head_ref || github.ref_name, 'bot/update-image-digests-')

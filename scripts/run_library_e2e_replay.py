@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch as mock_patch
 
+from mcp.types import CallToolRequestParams
+
 
 class ReplayError(RuntimeError):
     pass
@@ -676,7 +678,9 @@ async def _call_tool(
                     capture_control_image,
                 )
             )
-        raw = await mcp_server.call_tool(tool_name, arguments)
+        raw = await mcp_server.call_tool(
+            None, CallToolRequestParams(name=tool_name, arguments=arguments)
+        )
     is_error, result = _tool_result(raw)
     return is_error, result, control_answers[0] if control_answers else None
 

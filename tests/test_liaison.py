@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from mcp.types import TextContent
+from mcp.types import CallToolRequestParams, TextContent
 
 from circuit import cli, liaison, records
 
@@ -403,14 +403,22 @@ def test_mcp_ux_tools(workspace: Path) -> None:
     from circuit import mcp_server
 
     _write_request(workspace, "move-j2")
-    result = asyncio.run(mcp_server.call_tool("circuit_ux_inbox", {}))
-    assert result.isError is False
+    result = asyncio.run(
+        mcp_server.call_tool(None, CallToolRequestParams(name="circuit_ux_inbox", arguments={}))
+    )
+    assert result.is_error is False
     payload = json.loads(cast(TextContent, result.content[0]).text)
     assert payload["requests"][0]["id"] == "move-j2"
     result = asyncio.run(
-        mcp_server.call_tool("circuit_ux_respond", {"request": "move-j2", "status": "accepted"})
+        mcp_server.call_tool(
+            None,
+            CallToolRequestParams(
+                name="circuit_ux_respond",
+                arguments={"request": "move-j2", "status": "accepted"},
+            ),
+        )
     )
-    assert result.isError is False
+    assert result.is_error is False
     written = json.loads(
         (workspace / "liaison" / "move-j2.ux-response.json").read_text(encoding="utf-8")
     )

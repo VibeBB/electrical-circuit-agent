@@ -37,7 +37,7 @@ def _image_content(path: Path) -> ImageContent | None:
         data = base64.b64encode(path.read_bytes()).decode("ascii")
     except OSError:
         return None
-    return ImageContent(type="image", data=data, mimeType=mime)
+    return ImageContent(type="image", data=data, mime_type=mime)
 
 
 def _load_report(path: Path, *, kind: str, source: Path) -> kicad_cli.Report:

@@ -24,7 +24,7 @@ fi
 "$tooldir/actionlint" -oneline
 
 # zizmor (same pinned wheel and sha256 as workflow-lint.yml).
-wheel="zizmor-1.31.1-py3-none-manylinux_2_28_x86_64.whl"
+wheel="zizmor-1.32.0-py3-none-manylinux_2_28_x86_64.whl"
 if [ ! -f "$tooldir/$wheel" ]; then
   curl --fail --location --silent --show-error --retry 8 --retry-delay 20 \
     --retry-max-time 600 --retry-all-errors \
