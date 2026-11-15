@@ -1,6 +1,6 @@
 [project]
 name = "circuit-agent"
-version = "0.1.0"
+version = "1.0.0"
 description = "OpenHands plugin foundation for conversational KiCad design"
 license = "BSD-3-Clause"
 requires-python = ">=3.12"

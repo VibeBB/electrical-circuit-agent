@@ -1,7 +1,7 @@
 ---
 name: circuit-libraries
 description: Use the official KiCad and CERN libraries while preserving their provenance and licenses.
-version: 0.1.0
+version: 1.0.0
 license: BSD-3-Clause
 triggers:
   - KiCad library

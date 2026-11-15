@@ -1,7 +1,7 @@
 ---
 name: circuit-workflow
 description: Execute a KiCad design workflow with explicit board server lifecycle and deterministic verification.
-version: 0.1.0
+version: 1.0.0
 license: BSD-3-Clause
 triggers:
   - KiCad design
