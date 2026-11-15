@@ -284,3 +284,44 @@ def test_session_start_exposes_native_record_context(
     context = json.loads(capsys.readouterr().out)["additionalContext"]
     assert 'session_id="current"' in context
     assert "delegated agent" in context
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {},
+        {"session_id": "current"},
+        {"session_id": None},
+        {"plugin": "foreign"},
+        {"image_path": "copy.png"},
+        {"image_sha256": "c" * 64},
+        {"primary_event_id": "f" * 64},
+    ],
+)
+def test_only_bound_delegated_review_discharges_parent_debt(
+    hook: ModuleType,
+    policy: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: dict[str, Any],
+) -> None:
+    primary = _primary()
+    blind = (
+        _primary(
+            reviewer="blind",
+            session_id="reviewer",
+            primary_event_id=primary["event_id"],
+            event_id="d" * 64,
+        )
+        | change
+    )
+    reconcile = {
+        "plugin": "owner",
+        "session_id": "current",
+        "reviews": [primary["event_id"], blind["event_id"]],
+        "round": 1,
+        "outcome": "agree",
+    }
+    _logs(hook, monkeypatch, {"vision_review": [primary, blind], "review_reconcile": [reconcile]})
+    problems, _ = hook.problems_for({"session_id": "current"}, policy, tmp_path, time.time() - 10)
+    assert any("blind second review" in p for p in problems) is bool(change)

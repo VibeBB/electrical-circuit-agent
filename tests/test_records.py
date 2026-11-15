@@ -1246,6 +1246,7 @@ def test_blind_round_cannot_consume_another_session_primary(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    assert _hook("session-start", workspace, session="second").returncode == 0
     records.record_vision_review(_vision(session_id="first"))
     with pytest.raises(ValueError, match="primary"):
         records.record_vision_review(_vision("blind", session_id="second", impression=IMPRESSION_B))
@@ -1253,7 +1254,12 @@ def test_blind_round_cannot_consume_another_session_primary(
         _vision(session_id="second", impression=IMPRESSION_C + " W1.")
     )["record"]
     blind = records.record_vision_review(
-        _vision("blind", session_id="second", impression=IMPRESSION_B)
+        _vision(
+            "blind",
+            session_id="reviewer",
+            primary_event_id=primary["event_id"],
+            impression=IMPRESSION_B,
+        )
     )["record"]
     with pytest.raises(ValueError, match="session"):
         records.record_reconcile(
@@ -1264,3 +1270,9 @@ def test_blind_round_cannot_consume_another_session_primary(
     )["record"]
     assert reconciled["session_id"] == "second"
     assert reconciled["outcome"] == "agree"
+    stopped = _hook("stop", workspace, session="second")
+    assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+    status_path = records.records_dir(workspace) / ".sessions/second.status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["record_compliance"] == "pass"
+    assert status["run_completion"] == status["acceptance"] == "unknown"

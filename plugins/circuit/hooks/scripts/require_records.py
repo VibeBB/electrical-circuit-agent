@@ -59,6 +59,7 @@ from _records import (
     parse_time,
     recall,
     received,
+    review_primary,
     sha256_file,
     song_deliveries,
     tree_sha256,
@@ -170,6 +171,10 @@ def _dual_review_problems(
             r
             for r in reviews
             if r.get("reviewer") == "blind"
+            and (
+                not primary.get("session_id")
+                or r.get("primary_event_id") == primary.get("event_id")
+            )
             and r.get("image_sha256") == digest
             and r.get("image_path") == image
         ]
@@ -233,6 +238,21 @@ def problems_for(
         kind: [r for r in items if _in_session(r, session_id, since)]
         for kind, items in logs.items()
     }
+    for review in logs["vision_review"]:
+        if review.get("reviewer") not in {"blind", "tiebreak"}:
+            continue
+        primary = review_primary(review, logs["vision_review"], root)
+        if (review.get("session_id") or review.get("primary_event_id")) and primary is None:
+            if review in session["vision_review"]:
+                session["vision_review"].remove(review)
+                problems.append("scoped independent review has no valid primary_event_id")
+            continue
+        if (
+            primary is not None
+            and _in_session(primary, session_id, since)
+            and review not in session["vision_review"]
+        ):
+            session["vision_review"].append(review)
 
     reviews = session["vision_review"]
     reviewed_events = {

@@ -24,6 +24,12 @@ when_to_use_examples:
   - ユーザー要件から設計ブリーフを作る
   - Create a provenance-bound brief from conversation requirements
 hooks:
+  session_start:
+    - matcher: "*"
+      hooks:
+        - type: command
+          name: require-records
+          command: "p=$(for c in  \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/require_records.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/require_records.py\" session-start"
   pre_tool_use:
     - matcher: "*"
       hooks:
@@ -168,3 +174,11 @@ with their sha256, the gate verdicts from the kicad-cli ERC/DRC JSON output,
 and the `decision_refs`/`impression_refs` of the VRP records you left; it is
 refused if any gate verdict is `fail` or `unknown`. Use `questions_for_user`
 for anything only the human can decide.
+
+
+Use the native `session_id` supplied by your SessionStart record context for VRP
+writes. For an independent blind/tiebreak review, pass `primary_event_id` from
+the delegation brief; the writer binds it to the same image path and SHA-256.
+When delegating, provide only that opaque ID, the image identity and task facts;
+never disclose the earlier review prose. Each reviewer keeps its own native
+session ID, and the primary's session performs reconciliation.
