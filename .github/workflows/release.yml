@@ -67,6 +67,13 @@ jobs:
 
   verify:
     needs: bump-version
+    # The caller's permissions cap the called workflow's token; ci.yml's
+    # docker jobs request packages:write for the shared registry buildcache,
+    # so the grant must cover it or the expanded graph fails dispatch-time
+    # validation with a startup_failure.
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository] same-repo reuse
     with:
       ref: ${{ needs.bump-version.outputs.sha }}
