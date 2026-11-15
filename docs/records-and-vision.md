@@ -156,6 +156,9 @@ inputs. The writer also accepts `OPENHANDS_SESSION_ID` when supplied by the SDK
 process; conflicting explicit and environment identities are rejected. The ID is
 included in the record hash. Writers never infer it from shared marker files.
 
+Delegated SessionStart hooks expose only native record context (`record-context`), without
+recalling earlier review prose. Ordinary plugin SessionStart retains sister-concern recall.
+
 Delegate independent reviews with an opaque `primary_event_id`, the resolved image
 path and SHA-256; never send the earlier findings. Reviewers keep their own native
 `session_id`. The writer and Stop resolve that reference into an intact primary

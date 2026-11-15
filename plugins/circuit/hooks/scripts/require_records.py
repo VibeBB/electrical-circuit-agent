@@ -27,6 +27,9 @@ starts with them in context. Nothing here waits on another agent: only
 records that already exist are checked, so two plugins reading each
 other cannot deadlock.
 
+Delegated agents use ``record-context`` instead: native identity is exposed
+without recalling earlier review prose that could bias an independent review.
+
 The refusal is bounded by ``max_stop_denials`` per session so a model
 that cannot comply still terminates; the last verdict is written to
 ``<records_dir>/records-status.json`` either way. Hook errors never
@@ -131,12 +134,18 @@ def _create_marker(
     return marker
 
 
-def session_start(payload: dict[str, Any], policy: dict[str, Any], root: Path) -> int:
+def session_start(
+    payload: dict[str, Any],
+    policy: dict[str, Any],
+    root: Path,
+    *,
+    include_recall: bool = True,
+) -> int:
     records_dir = root / str(policy["records_dir"])
     marker = _marker_path(records_dir, payload)
     if _read_marker(marker) is None:
         _create_marker(marker, payload, "session_start")
-    briefing = recall(root, str(policy["plugin"]))
+    briefing = recall(root, str(policy["plugin"])) if include_recall else ""
     if payload.get("session_id"):
         identity = json.dumps(payload["session_id"], ensure_ascii=False)
         briefing = (
@@ -435,6 +444,8 @@ def main(argv: list[str]) -> int:
         root = _project_dir(payload)
         if mode in ("session-start", "SessionStart"):
             return session_start(payload, policy, root)
+        if mode == "record-context":
+            return session_start(payload, policy, root, include_recall=False)
         if mode in ("stop", "Stop"):
             return stop(payload, policy, root)
     except (OSError, ValueError, KeyError, TypeError) as exc:

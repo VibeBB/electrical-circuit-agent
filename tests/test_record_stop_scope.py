@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+import re
 import sys
 import time
 from datetime import UTC, datetime
@@ -284,6 +286,40 @@ def test_session_start_exposes_native_record_context(
     context = json.loads(capsys.readouterr().out)["additionalContext"]
     assert 'session_id="current"' in context
     assert "delegated agent" in context
+
+
+def test_delegated_agent_start_does_not_recall_review_prose(
+    hook: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    earlier_review = "Earlier primary review: the warning label looks too small."
+
+    def recall_review(*_args: Any) -> str:
+        return earlier_review
+
+    monkeypatch.setattr(hook, "recall", recall_review)
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    agents = Path(__file__).resolve().parents[1].glob("plugins/*/agents/*.md")
+    checked = 0
+    for agent in agents:
+        start = agent.read_text(encoding="utf-8").partition("\n  session_start:\n")[2]
+        block = re.split(r"(?m)^  [a-z_]+:|^---$", start, maxsplit=1)[0]
+        commands = [
+            line
+            for line in block.splitlines()
+            if "command:" in line and "require_records.py" in line
+        ]
+        for command in commands:
+            mode = command.rsplit(" ", 1)[-1].rstrip("'\"")
+            monkeypatch.setattr(hook.sys, "stdin", io.StringIO('{"session_id": "child"}'))
+            assert hook.main([mode]) == 0
+            context = json.loads(capsys.readouterr().out)["additionalContext"]
+            assert 'session_id="child"' in context
+            assert earlier_review not in context, agent.name
+            checked += 1
+    assert checked > 0
 
 
 @pytest.mark.parametrize(
