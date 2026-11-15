@@ -182,6 +182,7 @@ class Lookback(_Strict):
 
 
 class VisionReviewInput(_ImpressionBody):
+    coordinator_session_id: str | None = Field(default=None, min_length=1)
     primary_event_id: str | None = Field(default=None, pattern=_SHA256)
     image_path: str | None = Field(default=None, description="Workspace-relative image")
     source_event_id: str | None = Field(
@@ -466,6 +467,11 @@ def _round_errors(
     """Keep each bounded review round bound to one resolved path and digest."""
     reviewer = str(body.get("reviewer"))
     if reviewer == "primary":
+        scope_errors = _vrp.primary_scope_errors(
+            {**body, "session_id": _session_id(body), "plugin": PLUGIN}, base
+        )
+        if scope_errors:
+            return scope_errors
         if body.get("primary_event_id"):
             return ["a primary review cannot reference another primary"]
         return []
@@ -526,7 +532,10 @@ def record_reconcile(payload: Mapping[str, Any], root: Path | None = None) -> di
         raise ValueError(f"unknown vision review event ids: {missing}")
     reviews = [by_id[event] for event in request.reviews]
     session_id = _session_id(payload)
-    if reviews[0].get("session_id") != session_id or any(
+    if (
+        session_id != reviews[0].get("session_id")
+        and (not session_id or session_id != reviews[0].get("coordinator_session_id"))
+    ) or any(
         (r.get("session_id") is not None or reviews[0].get("session_id") is not None)
         and _vrp.review_primary(r, own.get("vision_review", []), base) is not reviews[0]
         for r in reviews[1:]

@@ -172,3 +172,24 @@ at Stop; they cannot satisfy explicitly scoped writer rounds.
 Stop permission, record compliance, run completion and acceptance are separate
 status fields. Reaching the refusal budget permits stopping while preserving gaps;
 it does not establish execution completion or product acceptance.
+
+### Coordinating a delegated primary
+
+When delegating the primary visual review, pass your native `session_id` as
+`coordinator_session_id` in the task prompt. The delegate records its own
+`session_id` and that coordinator on the primary, then returns the opaque
+`primary_event_id` and image path/SHA. The blind reviewer receives only these
+references and its own native record context. Do not copy the primary's prose
+into the blind review prompt.
+
+The primary author or its declared coordinator can reconcile the bound reviews.
+The coordinator's Stop hook retains the independent-review and reconciliation
+obligations; the primary delegate reports the handoff without starting another
+review loop. A primary started through delegated `record-context` must name its
+coordinator. Record-capable delegates also declare their own Stop hook, so a
+legacy primary without coordination cannot silently lose its review debt.
+An uncoordinated record from another native session remains outside this run.
+
+These checks concern record attribution and review bookkeeping. SDK startup,
+plugin loading, and deterministic tests do not establish LLM judgment quality,
+GUI operation, released-image compatibility, or product acceptance.
