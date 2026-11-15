@@ -67,6 +67,7 @@ from _records import (
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 MAX_LISTED = 20
+LEGACY_SESSION_WINDOW_SECONDS = 24 * 60 * 60
 
 
 def _project_dir(payload: dict[str, Any]) -> Path:
@@ -81,10 +82,20 @@ def _session_key(payload: dict[str, Any]) -> str:
 
 
 def _in_session(record: dict[str, Any], session_id: str | None, since: float) -> bool:
-    if session_id and record.get("session_id") == session_id:
-        return True
+    recorded_session = record.get("session_id")
+    if recorded_session:
+        return bool(session_id and recorded_session == session_id)
+    # Old writers omit session identity. Keep a bounded compatibility window;
+    # never use time to override an explicit other-session identity.
+    if time.time() > since + LEGACY_SESSION_WINDOW_SECONDS:
+        return False
     moment = parse_time(record.get("recorded_at"))
-    return moment is not None and moment >= since
+    return moment is not None and since <= moment <= time.time()
+
+
+def _image_key(record: dict[str, Any], root: Path) -> tuple[str, str]:
+    path = (root / str(record.get("image_path") or "")).resolve()
+    return str(path), str(record.get("image_sha256") or "")
 
 
 def _marker_path(records_dir: Path, payload: dict[str, Any]) -> Path:
@@ -101,7 +112,9 @@ def _read_marker(path: Path) -> dict[str, Any] | None:
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def session_start(payload: dict[str, Any], policy: dict[str, Any], root: Path) -> int:
@@ -110,7 +123,12 @@ def session_start(payload: dict[str, Any], policy: dict[str, Any], root: Path) -
     if _read_marker(marker) is None:
         _write_json(
             marker,
-            {"session_id": payload.get("session_id"), "started_at": time.time(), "denials": 0},
+            {
+                "session_id": payload.get("session_id"),
+                "started_at": time.time(),
+                "denials": 0,
+                "scope_origin": "session_start",
+            },
         )
     briefing = recall(root, str(policy["plugin"]))
     if briefing:
@@ -119,7 +137,7 @@ def session_start(payload: dict[str, Any], policy: dict[str, Any], root: Path) -
 
 
 def _dual_review_problems(
-    policy: dict[str, Any], logs: dict[str, list[dict[str, Any]]], since: float
+    policy: dict[str, Any], logs: dict[str, list[dict[str, Any]]]
 ) -> tuple[list[str], list[str]]:
     patterns = cast(list[str], policy.get("dual_review_globs") or [])
     problems: list[str] = []
@@ -132,14 +150,17 @@ def _dual_review_problems(
         r
         for r in reviews
         if r.get("reviewer") == "primary"
-        and _in_session(r, None, since)
         and matches(str(r.get("image_path") or ""), patterns)
     ]
     for primary in primaries:
         digest = primary.get("image_sha256")
         image = primary.get("image_path")
         blind = [
-            r for r in reviews if r.get("reviewer") == "blind" and r.get("image_sha256") == digest
+            r
+            for r in reviews
+            if r.get("reviewer") == "blind"
+            and r.get("image_sha256") == digest
+            and r.get("image_path") == image
         ]
         if not blind:
             problems.append(
@@ -162,7 +183,9 @@ def _dual_review_problems(
                 " again (round 2 is the last)"
             )
         elif last.get("outcome") == "unresolved":
-            warnings.append(f"image {image}: independent reviews stay split; treat it as unknown")
+            warnings.append(
+                f"image {image}: independent reviews stay split; treat it as unknown"
+            )
     return problems, warnings
 
 
@@ -175,18 +198,44 @@ def problems_for(
     problems: list[str] = []
     warnings: list[str] = []
     logs: dict[str, list[dict[str, Any]]] = {}
+    if not session_id:
+        warnings.append("session_id is missing; record attribution is unknown")
     for kind, filename in LOG_FILES.items():
         records, issues = verify_log(records_dir / filename, kind)
         problems.extend(issues)
-        logs[kind] = records
+        if any(r.get("plugin") != plugin for r in records):
+            problems.append(f"{filename}: record plugin differs from owner {plugin}")
+        logs[kind] = [r for r in records if r.get("plugin") == plugin]
+        legacy = [
+            r
+            for r in logs[kind]
+            if not r.get("session_id")
+            and (parse_time(r.get("recorded_at")) or 0) >= since
+        ]
+        if legacy:
+            warnings.append(
+                f"{filename}: {len(legacy)} legacy records lack session_id; "
+                "timestamp fallback is limited to 24 hours after session start; "
+                "session attribution remains unknown"
+            )
     session = {
-        kind: [r for r in items if _in_session(r, None, since)] for kind, items in logs.items()
+        kind: [r for r in items if _in_session(r, session_id, since)]
+        for kind, items in logs.items()
     }
 
     reviews = session["vision_review"]
-    reviewed_events = {str(r.get("source_event_id")) for r in reviews if r.get("source_event_id")}
-    reviewed_images = {str(r.get("image_sha256")) for r in reviews if r.get("image_sha256")}
-    events, _ = load_jsonl(records_dir / VISION_EVENTS_FILE)
+    reviewed_events = {
+        str(r.get("source_event_id")) for r in reviews if r.get("source_event_id")
+    }
+    reviewed_images = {_image_key(r, root) for r in reviews if r.get("image_sha256")}
+    events, malformed = load_jsonl(records_dir / VISION_EVENTS_FILE)
+    if malformed:
+        problems.append(f"{VISION_EVENTS_FILE}: {malformed} malformed lines")
+    if any(
+        not e.get("session_id") and (parse_time(e.get("recorded_at")) or 0) >= since
+        for e in events
+    ):
+        warnings.append("legacy vision events lack session_id; attribution is unknown")
     for event in events:
         if not _in_session(event, session_id, since):
             continue
@@ -195,16 +244,27 @@ def problems_for(
                 f"vision tool event {event.get('event_id')} (question: "
                 f"{str(event.get('question'))[:80]!r}) has no vision_review impression"
             )
-    observations, _ = load_jsonl(records_dir / IMAGE_OBSERVATIONS_FILE)
-    seen: set[str] = set()
+    observations, malformed = load_jsonl(records_dir / IMAGE_OBSERVATIONS_FILE)
+    if malformed:
+        problems.append(f"{IMAGE_OBSERVATIONS_FILE}: {malformed} malformed lines")
+    if any(
+        not item.get("session_id")
+        and (parse_time(item.get("recorded_at")) or 0) >= since
+        for item in observations
+    ):
+        warnings.append(
+            "legacy image observations lack session_id; attribution is unknown"
+        )
+    seen: set[tuple[str, str]] = set()
     for observation in observations:
         if not _in_session(observation, session_id, since):
             continue
         digest = str(observation.get("image_sha256"))
-        if digest in seen:
+        key = _image_key(observation, root)
+        if key in seen:
             continue
-        seen.add(digest)
-        reviewed = digest in reviewed_images or str(observation.get("event_id")) in reviewed_events
+        seen.add(key)
+        reviewed = key in reviewed_images
         if not reviewed:
             problems.append(
                 f"viewed image {observation.get('image_path')} (sha256 {digest[:12]}) has no"
@@ -214,7 +274,7 @@ def problems_for(
     for read in session["upstream_read"]:
         after = parse_time(read.get("recorded_at"))
         for ref in cast(list[dict[str, Any]], read.get("refs") or []):
-            if not acknowledged(logs, ref, after):
+            if not acknowledged(session, ref, after):
                 problems.append(
                     f"sister impression {ref.get('system')}:{str(ref.get('event_id'))[:12]} came"
                     f" with {cast(dict[str, Any], read.get('artifact') or {}).get('path')}; cite"
@@ -224,7 +284,7 @@ def problems_for(
         for issue in cast(list[str], read.get("unresolved") or []):
             warnings.append(f"import {read.get('producer')}: {issue}")
 
-    dual, split = _dual_review_problems(policy, logs, since)
+    dual, split = _dual_review_problems(policy, session)
     problems.extend(dual)
     warnings.extend(split)
 
@@ -270,38 +330,61 @@ def stop(payload: dict[str, Any], policy: dict[str, Any], root: Path) -> int:
     records_dir = root / str(policy["records_dir"])
     marker_path = _marker_path(records_dir, payload)
     marker = _read_marker(marker_path)
+    missing_marker = marker is None
     if marker is None:
         session_start(payload, policy, root)
-        return 0
+        marker = _read_marker(marker_path) or {}
+        marker["scope_origin"] = "stop"
+        _write_json(marker_path, marker)
     since = float(marker.get("started_at") or 0.0)
     problems, warnings = problems_for(payload, policy, root, since)
+    if missing_marker or marker.get("scope_origin") == "stop":
+        warnings.append(
+            "session-start marker was missing; prior record scope is unknown"
+        )
+    limit = max(0, int(policy.get("max_stop_denials", DEFAULT_MAX_STOP_DENIALS)))
+    denials = int(marker.get("denials") or 0)
+    deny = bool(problems) and denials < limit
+    if deny:
+        denials += 1
+        marker["denials"] = denials
+        _write_json(marker_path, marker)
     status = {
+        "schema_version": 1,
         "plugin": policy["plugin"],
         "session_id": payload.get("session_id"),
         "checked_at": time.time(),
+        "stop_permission": "deny" if deny else "allow",
+        "record_compliance": "fail" if problems else "unknown" if warnings else "pass",
+        "run_completion": "unknown",
+        "acceptance": "unknown",
+        "stop_denials": denials,
+        "max_stop_denials": limit,
+        "checkpoint": str(marker_path.relative_to(root)),
         "verdict": "fail" if problems else "pass",
         "problems": problems,
         "warnings": warnings,
     }
     _write_json(records_dir / "records-status.json", status)
+    _write_json(marker_path.with_suffix(".status.json"), status)
     if not problems:
         return 0
-    limit = int(policy.get("max_stop_denials", DEFAULT_MAX_STOP_DENIALS))
-    denials = int(marker.get("denials") or 0)
     listed = problems[:MAX_LISTED]
     more = len(problems) - len(listed)
     body = "\n".join(f"- {item}" for item in listed)
     if more > 0:
         body += f"\n- ... and {more} more"
     hint = str(policy.get("record_hint") or "")
-    if denials < limit:
-        marker["denials"] = denials + 1
-        _write_json(marker_path, marker)
+    if deny:
         message = (
             f"[{policy['plugin']}] VibeBB Record Protocol: this session still owes records."
-            f" Record them before finishing (refusal {denials + 1}/{limit}):\n{body}\n{hint}"
+            f" Record them before finishing (refusal {denials}/{limit}):\n{body}\n{hint}"
         ).strip()
-        print(json.dumps({"decision": "deny", "reason": message, "additionalContext": message}))
+        print(
+            json.dumps(
+                {"decision": "deny", "reason": message, "additionalContext": message}
+            )
+        )
         return 2
     message = (
         f"[{policy['plugin']}] VibeBB Record Protocol still unmet after {limit} refusals;"
