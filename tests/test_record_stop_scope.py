@@ -270,3 +270,17 @@ def test_missing_marker_recovery_emits_one_hook_response(
     response = json.loads(capsys.readouterr().out)
     assert response["decision"] == "deny"
     assert "missing receipt" in response["reason"]
+
+
+def test_session_start_exposes_native_record_context(
+    hook: ModuleType,
+    policy: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(hook, "recall", _no_recall)
+    assert hook.session_start({"session_id": "current"}, policy, tmp_path) == 0
+    context = json.loads(capsys.readouterr().out)["additionalContext"]
+    assert 'session_id="current"' in context
+    assert "delegated agent" in context

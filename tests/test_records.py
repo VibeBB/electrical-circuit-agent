@@ -1198,3 +1198,69 @@ def test_identical_image_paths_keep_separate_blind_rounds(workspace: Path) -> No
                 delta="A duplicate.",
             )
         )
+
+
+@pytest.mark.parametrize("use_environment", [False, True])
+def test_record_session_context_is_persisted(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, use_environment: bool
+) -> None:
+    monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    context: dict[str, Any] = {"session_id": "current"}
+    if use_environment:
+        monkeypatch.setenv("OPENHANDS_SESSION_ID", "current")
+        context = {}
+    result = records.record_decision(_decision(_vision()["image_path"]) | context)["record"]
+    assert result["session_id"] == "current"
+    read = records.record_read(
+        {"artifact": _vision()["image_path"], "producer": "sister", **context}
+    )["record"]
+    assert read["session_id"] == "current"
+    assert result["event_id"] == _vrp.compute_event_id(result)
+    since = datetime.now(UTC).timestamp() - 48 * 60 * 60
+    spec = importlib.util.spec_from_file_location("record_session_stop", HOOK)
+    assert spec is not None and spec.loader is not None
+    stop = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stop)
+    assert stop._in_session(result, "current", since)
+    assert not stop._in_session(result, "other", since)
+
+
+def test_record_session_context_rejects_native_mismatch(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENHANDS_SESSION_ID", "native")
+    with pytest.raises(ValueError, match="does not match OPENHANDS_SESSION_ID"):
+        records.record_decision(_decision(_vision()["image_path"]) | {"session_id": "other"})
+
+
+@pytest.mark.parametrize("session_id", ["", " ", 7, ["current"]])
+def test_record_session_context_rejects_invalid_identity(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, session_id: Any
+) -> None:
+    monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    with pytest.raises(ValueError):
+        records.record_decision(_decision(_vision()["image_path"]) | {"session_id": session_id})
+
+
+def test_blind_round_cannot_consume_another_session_primary(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    records.record_vision_review(_vision(session_id="first"))
+    with pytest.raises(ValueError, match="primary"):
+        records.record_vision_review(_vision("blind", session_id="second", impression=IMPRESSION_B))
+    primary = records.record_vision_review(
+        _vision(session_id="second", impression=IMPRESSION_C + " W1.")
+    )["record"]
+    blind = records.record_vision_review(
+        _vision("blind", session_id="second", impression=IMPRESSION_B)
+    )["record"]
+    with pytest.raises(ValueError, match="session"):
+        records.record_reconcile(
+            {"reviews": [primary["event_id"], blind["event_id"]], "session_id": "first"}
+        )
+    reconciled = records.record_reconcile(
+        {"reviews": [primary["event_id"], blind["event_id"]], "session_id": "second"}
+    )["record"]
+    assert reconciled["session_id"] == "second"
+    assert reconciled["outcome"] == "agree"

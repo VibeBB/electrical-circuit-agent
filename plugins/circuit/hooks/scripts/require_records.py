@@ -136,6 +136,13 @@ def session_start(payload: dict[str, Any], policy: dict[str, Any], root: Path) -
     if _read_marker(marker) is None:
         _create_marker(marker, payload, "session_start")
     briefing = recall(root, str(policy["plugin"]))
+    if payload.get("session_id"):
+        identity = json.dumps(payload["session_id"], ensure_ascii=False)
+        briefing = (
+            f"VRP record context: pass session_id={identity} to this plugin's record tools. "
+            "Use the delegated agent's own session context for its records.\n"
+            + briefing
+        )
     if briefing:
         print(json.dumps({"additionalContext": briefing}, ensure_ascii=False))
     return 0

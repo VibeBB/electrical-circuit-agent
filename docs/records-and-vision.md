@@ -148,3 +148,21 @@ not infer product acceptance from Stop permission or the absence of
 record problems. Reviewer identity propagation and derived-image
 ownership require a separate recording contract; this status does not
 claim to verify them.
+
+## Session attribution
+
+Pass the native `session_id` from the SessionStart record context in record-tool
+inputs. The writer also accepts `OPENHANDS_SESSION_ID` when supplied by the SDK
+process; conflicting explicit and environment identities are rejected. The ID is
+included in the record hash. Writers never infer it from shared marker files.
+
+Primary/blind/tiebreak rounds and reconciles bind one session, resolved image path
+and SHA-256. A copied image has its own round. Historical inputs without identity
+remain supported, with bounded timestamp attribution and an unknown compliance
+warning at Stop; they cannot satisfy explicitly scoped writer rounds. Cross-agent
+review delegation still requires an explicit owner/reviewer relationship contract:
+a different native child session is not silently treated as the parent's review.
+
+Stop permission, record compliance, run completion and acceptance are separate
+status fields. Reaching the refusal budget permits stopping while preserving gaps;
+it does not establish execution completion or product acceptance.

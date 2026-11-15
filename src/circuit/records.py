@@ -143,7 +143,11 @@ class Upstream(_Strict):
     concern_ids: list[str] | None = None
 
 
-class _ImpressionBody(_Strict):
+class _SessionRecord(_Strict):
+    session_id: str | None = Field(default=None, min_length=1, strict=True)
+
+
+class _ImpressionBody(_SessionRecord):
     impression: str
     facets: Facets
     claims: list[Claim]
@@ -203,7 +207,7 @@ class DecisionOption(_Strict):
     cons: list[str] = Field(min_length=1)
 
 
-class DecisionInput(_Strict):
+class DecisionInput(_SessionRecord):
     id: str = Field(pattern=_SLUG, description="Stable decision id, e.g. 'circuit-vcc-decoupling'")
     stage: str = Field(pattern=_SLUG)
     question: str = Field(min_length=QUESTION_MIN_CHARS)
@@ -247,7 +251,7 @@ class GateResult(_Strict):
     verdict: Literal["pass", "fail", "unknown"]
 
 
-class InsightStatusInput(_Strict):
+class InsightStatusInput(_SessionRecord):
     insight: InsightRef
     status: Literal["tried", "adopted", "rejected", "deferred", "superseded"]
     reason: str = Field(min_length=_vrp.REASON_MIN_CHARS)
@@ -257,7 +261,7 @@ class InsightStatusInput(_Strict):
     revisit_when: str | None = None
 
 
-class ReconcileInput(_Strict):
+class ReconcileInput(_SessionRecord):
     reviews: list[str] = Field(
         min_length=2,
         max_length=3,
@@ -265,14 +269,14 @@ class ReconcileInput(_Strict):
     )
 
 
-class SongReceiptInput(_Strict):
+class SongReceiptInput(_SessionRecord):
     delivery: str = Field(description="liaison/<id>.bard-song.json addressed to this plugin")
     felt: str = Field(description="What the song made you feel about the design (160+ chars)")
     prompted_review: bool
     follow_up: str | None = None
 
 
-class ReadInput(_Strict):
+class ReadInput(_SessionRecord):
     artifact: str = Field(description="Workspace-relative sister artifact you took in")
     producer: str = Field(pattern=_SLUG, description="Plugin that produced it")
 
@@ -299,6 +303,19 @@ def _archive_legacy(log: Path) -> None:
         index += 1
         target = log.with_name(f"{log.stem}.v1-{index}.jsonl")
     log.rename(target)
+
+
+def _session_id(body: Mapping[str, Any]) -> str | None:
+    """Use explicit/native context; never guess a session from shared marker files."""
+    supplied = body.get("session_id")
+    if supplied is not None and (
+        not isinstance(supplied, str) or not supplied.strip() or supplied != supplied.strip()
+    ):
+        raise ValueError("session_id must be a non-empty string without surrounding whitespace")
+    inherited = os.environ.get("OPENHANDS_SESSION_ID", "").strip() or None
+    if supplied is not None and inherited is not None and supplied != inherited:
+        raise ValueError("session_id does not match OPENHANDS_SESSION_ID")
+    return supplied or inherited
 
 
 def _append(kind: str, body: dict[str, Any], root: Path) -> dict[str, Any]:
@@ -331,6 +348,9 @@ def _append(kind: str, body: dict[str, Any], root: Path) -> dict[str, Any]:
             "writer": writer,
             **{key: value for key, value in body.items() if value is not None},
         }
+        session_id = _session_id(body)
+        if session_id is not None:
+            record["session_id"] = session_id
         record["event_id"] = _vrp.compute_event_id(record)
         errors = _vrp.record_errors(kind, record)
         if errors:
@@ -447,10 +467,12 @@ def _round_errors(
     if reviewer == "primary":
         return []
     image = (base / str(body.get("image_path") or "")).resolve()
+    session_id = _session_id(body)
     reviews = [
         r
         for r in own.get("vision_review", [])
-        if r.get("image_sha256") == body.get("image_sha256")
+        if r.get("session_id") == session_id
+        and r.get("image_sha256") == body.get("image_sha256")
         and (base / str(r.get("image_path") or "")).resolve() == image
     ]
     primaries = [r for r in reviews if r.get("reviewer") == "primary"]
@@ -486,6 +508,12 @@ def record_reconcile(payload: Mapping[str, Any], root: Path | None = None) -> di
     if missing:
         raise ValueError(f"unknown vision review event ids: {missing}")
     reviews = [by_id[event] for event in request.reviews]
+    session_id = _session_id(payload)
+    if any(r.get("session_id") != session_id for r in reviews):
+        raise ValueError("reconciled reviews must belong to the current session")
+    paths = {(base / str(r.get("image_path") or "")).resolve() for r in reviews}
+    if len(paths) != 1:
+        raise ValueError("reconciled reviews must bind the same resolved image path")
     roles = [str(r.get("reviewer")) for r in reviews]
     expected = ["primary", "blind", "tiebreak"][: len(reviews)]
     if roles != expected:
@@ -504,7 +532,7 @@ def record_reconcile(payload: Mapping[str, Any], root: Path | None = None) -> di
     if result["round"] == 2 and not any(c.get("outcome") == "disagree" for c in prior):
         raise ValueError("round 2 needs a round-1 reconcile that disagrees")
     body = {"image_sha256": digests.pop(), "reviews": list(request.reviews), **result}
-    return _append("review_reconcile", body, base)
+    return _append("review_reconcile", body | {"session_id": payload.get("session_id")}, base)
 
 
 def record_insight(payload: Mapping[str, Any], root: Path | None = None) -> dict[str, Any]:
@@ -609,7 +637,7 @@ def record_read(payload: Mapping[str, Any], root: Path | None = None) -> dict[st
         "refs": refs,
         "unresolved": unresolved,
     }
-    return _append("upstream_read", body, base)
+    return _append("upstream_read", body | {"session_id": payload.get("session_id")}, base)
 
 
 RECORDERS = {
