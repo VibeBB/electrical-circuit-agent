@@ -1,7 +1,7 @@
 ---
 name: circuit-konnect
 description: Use Konnect MCP toolsets for live KiCad PCB operations without confusing them with verdict authority.
-version: 0.1.0
+version: 1.0.0
 license: BSD-3-Clause
 triggers:
   - Konnect
