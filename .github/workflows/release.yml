@@ -30,8 +30,11 @@ jobs:
   bump-version:
     runs-on: ubuntu-26.04
     # Covers the slow path: direct-push rejection → bump PR + dispatched
-    # checks + merge wait.
-    timeout-minutes: 45
+    # checks + merge wait. The dispatched ci.yml runs this repo's full e2e
+    # matrix (~40 min observed), which exceeds a 45-minute budget once the
+    # merge wait is added — the v1.0.0 run was cancelled at the cap with its
+    # bump PR left open. 120 matches the dashboard release.
+    timeout-minutes: 120
     # No actions/cache usage: forbid restore and save entirely.
     cache-mode: none
     permissions:
