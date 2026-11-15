@@ -241,7 +241,8 @@ def problems_for(
         problems.extend(issues)
         if any(r.get("plugin") != plugin for r in records):
             problems.append(f"{filename}: record plugin differs from owner {plugin}")
-        logs[kind] = [r for r in records if r.get("plugin") == plugin]
+        # Invalid chains are evidence of a gap, never usable review input.
+        logs[kind] = [] if issues else [r for r in records if r.get("plugin") == plugin]
         legacy = [
             r
             for r in logs[kind]

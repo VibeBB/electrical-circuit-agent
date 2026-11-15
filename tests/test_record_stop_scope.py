@@ -55,6 +55,43 @@ def policy() -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("references", [[], None, "invalid"])
+def test_invalid_reconcile_keeps_status_and_refusal_budget(
+    hook: ModuleType,
+    policy: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    references: Any,
+) -> None:
+    primary = _primary(session_id="delegate", coordinator_session_id="current")
+
+    def verify(_path: Path, kind: str) -> tuple[list[dict[str, Any]], list[str]]:
+        if kind == "vision_review":
+            return [primary], []
+        if kind == "review_reconcile":
+            return (
+                [{"plugin": "owner", "reviews": references, "session_id": "delegate"}],
+                ["invalid reconciliation"],
+            )
+        return [], []
+
+    monkeypatch.setattr(hook, "verify_log", verify)
+    monkeypatch.setattr(hook, "song_deliveries", _empty)
+    monkeypatch.setattr(hook, "changed_artifacts", _empty)
+    payload = {"session_id": "current"}
+    hook.session_start(payload, policy, tmp_path, include_recall=False)
+    capsys.readouterr()
+    for expected in (2, 2, 0):
+        assert hook.stop(payload, policy, tmp_path) == expected
+        response = json.loads(capsys.readouterr().out)
+        assert response["decision"] == ("deny" if expected else "allow")
+        status = json.loads(
+            (tmp_path / "observations/owner/records-status.json").read_text(encoding="utf-8")
+        )
+        assert "invalid reconciliation" in status["problems"]
+
+
 def test_explicit_session_identity_overrides_time(hook: ModuleType) -> None:
     now = time.time()
     fresh = datetime.fromtimestamp(now - 1, UTC).isoformat()
