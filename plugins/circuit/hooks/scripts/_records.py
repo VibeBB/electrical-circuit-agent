@@ -258,6 +258,13 @@ def _envelope_errors(record: dict[str, Any], kind: str) -> list[str]:
         errors.append(f"kind must be {kind!r}")
     if not _slug(record.get("plugin")):
         errors.append("plugin is required")
+    session_id = record.get("session_id")
+    if session_id is not None and (
+        not isinstance(session_id, str)
+        or not session_id.strip()
+        or session_id != session_id.strip()
+    ):
+        errors.append("session_id must be a non-empty native session identity")
     if parse_time(record.get("recorded_at")) is None:
         errors.append("recorded_at must be an ISO-8601 timestamp with a timezone")
     sequence = record.get("sequence")
@@ -518,6 +525,21 @@ def stage_impression_errors(record: dict[str, Any]) -> list[str]:
 
 def vision_review_errors(record: dict[str, Any]) -> list[str]:
     errors = _envelope_errors(record, "vision_review")
+    coordinator = record.get("coordinator_session_id")
+    if coordinator is not None and (
+        not isinstance(coordinator, str)
+        or not coordinator.strip()
+        or coordinator != coordinator.strip()
+        or not record.get("session_id")
+        or coordinator == record.get("session_id")
+        or record.get("reviewer") != "primary"
+    ):
+        errors.append("coordinator_session_id needs a native primary and a non-empty identity")
+    if record.get("primary_event_id") is not None:
+        if not _sha(record["primary_event_id"]):
+            errors.append("primary_event_id must be a sha256 event reference")
+        if record.get("reviewer") == "primary":
+            errors.append("a primary review cannot reference another primary")
     has_image = _str(record.get("image_path"))
     if has_image and not _sha(record.get("image_sha256")):
         errors.append("image_sha256 must bind the review to the image bytes")
@@ -715,6 +737,53 @@ def song_delivery_errors(value: Any) -> list[str]:
 
 
 # --- logs and chains ------------------------------------------------------
+
+
+def primary_scope_errors(review: dict[str, Any], root: Path) -> list[str]:
+    """A delegated primary hands its review round back to an explicit coordinator."""
+    session_id = review.get("session_id")
+    if review.get("reviewer") != "primary" or not session_id:
+        return []
+    key = re.sub(r"[^A-Za-z0-9._-]+", "-", str(session_id))[:96] or "default"
+    marker = root / "observations" / str(review["plugin"]) / ".sessions" / f"{key}.json"
+    try:
+        context = json.loads(marker.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError):
+        return ["cannot read the primary review's session context"]
+    if not isinstance(context, dict):
+        return ["the primary review's session context is not an object"]
+    context = cast(dict[str, Any], context)
+    if context.get("scope_origin") == "record-context" and not review.get("coordinator_session_id"):
+        return ["a delegated primary needs coordinator_session_id from its caller"]
+    return []
+
+
+def review_primary(
+    review: dict[str, Any], reviews: list[dict[str, Any]], root: Path
+) -> dict[str, Any] | None:
+    """Resolve a delegated review without trusting a shared timestamp or role label."""
+    event_id = review.get("primary_event_id")
+    for primary in reviews:
+        if primary.get("event_id") != event_id or primary.get("reviewer") != "primary":
+            continue
+        reviewer_session = review.get("session_id")
+        owner_session = primary.get("session_id")
+        if (
+            not isinstance(reviewer_session, str)
+            or not reviewer_session.strip()
+            or not isinstance(owner_session, str)
+            or not owner_session.strip()
+            or reviewer_session == owner_session
+            or review.get("plugin") != primary.get("plugin")
+            or review.get("image_sha256") != primary.get("image_sha256")
+            or (root / str(review.get("image_path") or "")).resolve()
+            != (root / str(primary.get("image_path") or "")).resolve()
+        ):
+            return None
+        return primary
+    return None
 
 
 def parse_time(value: Any) -> float | None:

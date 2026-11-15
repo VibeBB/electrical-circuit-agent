@@ -1165,3 +1165,193 @@ def test_review_record_cli_leaves_the_vrp_vision_log_to_the_agent(
     assert Path(emitted["record"]).is_file()
     assert set(emitted) == {"verdict", "record"}
     assert not (tmp_path / "observations" / "circuit" / "vision-reviews.jsonl").exists()
+
+
+def test_identical_image_paths_keep_separate_blind_rounds(workspace: Path) -> None:
+    image = workspace / _vision()["image_path"]
+    copied = image.with_name("copy.png")
+    copied.write_bytes(image.read_bytes())
+    copied_path = copied.relative_to(workspace).as_posix()
+    copied_claims = [{**claim, "artifact": copied_path} for claim in _vision()["claims"]]
+    first = records.record_vision_review(_vision())["record"]
+    second = records.record_vision_review(
+        _vision(image_path=copied_path, claims=copied_claims, impression=IMPRESSION_C + " W1.")
+    )["record"]
+    blind_first = records.record_vision_review(_vision("blind", impression=IMPRESSION_B))["record"]
+    blind_second = records.record_vision_review(
+        _vision(
+            "blind", image_path=copied_path, claims=copied_claims, impression=IMPRESSION_JA + " W1."
+        )
+    )["record"]
+    assert blind_first["image_sha256"] == blind_second["image_sha256"]
+    assert blind_first["image_path"] != blind_second["image_path"]
+    for primary, blind in ((first, blind_first), (second, blind_second)):
+        result = records.record_reconcile({"reviews": [primary["event_id"], blind["event_id"]]})
+        assert result["record"]["outcome"] == "agree"
+    with pytest.raises(ValueError, match="already has its blind review"):
+        records.record_vision_review(
+            _vision(
+                "blind",
+                image_path=copied_path,
+                claims=copied_claims,
+                impression=IMPRESSION_B,
+                delta="A duplicate.",
+            )
+        )
+
+
+@pytest.mark.parametrize("use_environment", [False, True])
+def test_record_session_context_is_persisted(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, use_environment: bool
+) -> None:
+    monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    context: dict[str, Any] = {"session_id": "current"}
+    if use_environment:
+        monkeypatch.setenv("OPENHANDS_SESSION_ID", "current")
+        context = {}
+    result = records.record_decision(_decision(_vision()["image_path"]) | context)["record"]
+    assert result["session_id"] == "current"
+    read = records.record_read(
+        {"artifact": _vision()["image_path"], "producer": "sister", **context}
+    )["record"]
+    assert read["session_id"] == "current"
+    assert result["event_id"] == _vrp.compute_event_id(result)
+    since = datetime.now(UTC).timestamp() - 48 * 60 * 60
+    spec = importlib.util.spec_from_file_location("record_session_stop", HOOK)
+    assert spec is not None and spec.loader is not None
+    stop = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stop)
+    assert stop._in_session(result, "current", since)
+    assert not stop._in_session(result, "other", since)
+
+
+def test_record_session_context_rejects_native_mismatch(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENHANDS_SESSION_ID", "native")
+    with pytest.raises(ValueError, match="does not match OPENHANDS_SESSION_ID"):
+        records.record_decision(_decision(_vision()["image_path"]) | {"session_id": "other"})
+
+
+@pytest.mark.parametrize("session_id", ["", " ", 7, ["current"]])
+def test_record_session_context_rejects_invalid_identity(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, session_id: Any
+) -> None:
+    monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    with pytest.raises(ValueError):
+        records.record_decision(_decision(_vision()["image_path"]) | {"session_id": session_id})
+
+
+def test_blind_round_cannot_consume_another_session_primary(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    assert _hook("session-start", workspace, session="second").returncode == 0
+    records.record_vision_review(_vision(session_id="first"))
+    with pytest.raises(ValueError, match="primary"):
+        records.record_vision_review(_vision("blind", session_id="second", impression=IMPRESSION_B))
+    primary = records.record_vision_review(
+        _vision(session_id="second", impression=IMPRESSION_C + " W1.")
+    )["record"]
+    blind = records.record_vision_review(
+        _vision(
+            "blind",
+            session_id="reviewer",
+            primary_event_id=primary["event_id"],
+            impression=IMPRESSION_B,
+        )
+    )["record"]
+    with pytest.raises(ValueError, match="session"):
+        records.record_reconcile(
+            {"reviews": [primary["event_id"], blind["event_id"]], "session_id": "first"}
+        )
+    reconciled = records.record_reconcile(
+        {"reviews": [primary["event_id"], blind["event_id"]], "session_id": "second"}
+    )["record"]
+    assert reconciled["session_id"] == "second"
+    assert reconciled["outcome"] == "agree"
+    stopped = _hook("stop", workspace, session="second")
+    assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+    status_path = records.records_dir(workspace) / ".sessions/second.status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["record_compliance"] == "pass"
+    assert status["run_completion"] == status["acceptance"] == "unknown"
+
+
+def test_reconcile_rejects_same_session_secondary_from_another_primary(workspace: Path) -> None:
+    first = records.record_vision_review(_vision(session_id="first"))["record"]
+    other = records.record_vision_review(
+        _vision(session_id="second", impression=IMPRESSION_B + " W1.")
+    )["record"]
+    other_blind = records.record_vision_review(
+        _vision(
+            "blind",
+            session_id="first",
+            primary_event_id=other["event_id"],
+            impression=IMPRESSION_C + " W1.",
+        )
+    )["record"]
+    with pytest.raises(ValueError, match="session"):
+        records.record_reconcile(
+            {"reviews": [first["event_id"], other_blind["event_id"]], "session_id": "first"}
+        )
+    blind = records.record_vision_review(
+        _vision(
+            "blind",
+            session_id="third",
+            primary_event_id=first["event_id"],
+            impression=IMPRESSION_JA,
+        )
+    )["record"]
+    result = records.record_reconcile(
+        {"reviews": [first["event_id"], blind["event_id"]], "session_id": "first"}
+    )["record"]
+    assert result["round"] == 1
+    assert result["outcome"] == "agree"
+
+
+def test_delegated_primary_requires_coordinator_and_returns_round_to_caller(
+    workspace: Path,
+) -> None:
+    context_dir = workspace / "observations" / records.PLUGIN / ".sessions"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    (context_dir / "primary.json").write_text(
+        json.dumps({"scope_origin": "record-context", "session_id": "primary"}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="coordinator_session_id"):
+        records.record_vision_review(_vision(session_id="primary"))
+    primary = records.record_vision_review(
+        _vision(session_id="primary", coordinator_session_id="caller")
+    )["record"]
+    blind = records.record_vision_review(
+        _vision(
+            "blind",
+            session_id="blind",
+            primary_event_id=primary["event_id"],
+            impression=IMPRESSION_B + " W1.",
+        )
+    )["record"]
+    for caller in ("unrelated", None):
+        with pytest.raises(ValueError, match="session"):
+            records.record_reconcile(
+                {"reviews": [primary["event_id"], blind["event_id"]], "session_id": caller}
+            )
+    reconciliation = records.record_reconcile(
+        {"reviews": [primary["event_id"], blind["event_id"]], "session_id": "caller"}
+    )["record"]
+    assert reconciliation["session_id"] == "caller"
+    assert reconciliation["round"] == 1
+    assert reconciliation["outcome"] == "agree"
+
+
+@pytest.mark.parametrize("coordinator", ["", " caller", "primary", 42])
+def test_coordinator_needs_distinct_native_identity(workspace: Path, coordinator: Any) -> None:
+    with pytest.raises(ValueError):
+        records.record_vision_review(
+            _vision(session_id="primary", coordinator_session_id=coordinator)
+        )
+
+
+def test_legacy_primary_cannot_claim_coordinator(workspace: Path) -> None:
+    with pytest.raises(ValueError):
+        records.record_vision_review(_vision(coordinator_session_id="caller"))

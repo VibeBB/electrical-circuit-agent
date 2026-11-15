@@ -24,6 +24,12 @@ when_to_use_examples:
   - 回路図を作成し ERC を通す
   - Create a schematic and pass ERC
 hooks:
+  session_start:
+    - matcher: "*"
+      hooks:
+        - type: command
+          name: require-records
+          command: "p=$(for c in  \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/require_records.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/require_records.py\" record-context"
   pre_tool_use:
     - matcher: "*"
       hooks:
@@ -35,6 +41,13 @@ hooks:
         - type: command
           name: safety-rail
           command: 'p=$(for c in  "${CIRCUIT_PLUGIN_ROOT:-}" "${PLUGIN_ROOT:-}" "${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit" "${HOME:-}/.agents/plugins/circuit" "${HOME:-}/.openhands/plugins/installed/circuit" "${HOME:-}/plugins/installed/circuit" "${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit"; do [ -f "$c/hooks/scripts/safety_rail.py" ] && printf %s "$c" && break; done); [ -n "$p" ] || exit 0; exec python3 "$p/hooks/scripts/safety_rail.py"'
+  stop:
+    - matcher: "*"
+      hooks:
+        - type: command
+          name: require-records
+          command: "p=$(for c in  \"${CIRCUIT_PLUGIN_ROOT:-}\" \"${PLUGIN_ROOT:-}\" \"${OPENHANDS_PROJECT_DIR:-.}/plugins/circuit\" \"${HOME:-}/.agents/plugins/circuit\" \"${HOME:-}/.openhands/plugins/installed/circuit\" \"${HOME:-}/plugins/installed/circuit\" \"${OH_PERSISTENCE_DIR:-/nonexistent}/plugins/installed/circuit\"; do [ -f \"$c/hooks/scripts/require_records.py\" ] && printf %s \"$c\" && break; done); [ -n \"$p\" ] || exit 0; exec python3 \"$p/hooks/scripts/require_records.py\" stop"
+
 permission_mode: never_confirm
 ---
 
@@ -190,3 +203,11 @@ not only legibility.
 | layout | top/bottom/side/isometric views, layer plots, stackup PNG after DRC |
 | review | circuit_diff PNGs (checklist `diff`) |
 | manufacturing | gerber layer plots and fab PDF pages rasterized via circuit_rasterize |
+
+
+Use the native `session_id` supplied by your SessionStart record context for VRP
+writes. For an independent blind/tiebreak review, pass `primary_event_id` from
+the delegation brief; the writer binds it to the same image path and SHA-256.
+When delegating, provide only that opaque ID, the image identity and task facts;
+never disclose the earlier review prose. Each reviewer keeps its own native
+session ID, and the primary's session performs reconciliation.

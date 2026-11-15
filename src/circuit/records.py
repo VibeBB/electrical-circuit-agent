@@ -143,7 +143,11 @@ class Upstream(_Strict):
     concern_ids: list[str] | None = None
 
 
-class _ImpressionBody(_Strict):
+class _SessionRecord(_Strict):
+    session_id: str | None = Field(default=None, min_length=1, strict=True)
+
+
+class _ImpressionBody(_SessionRecord):
     impression: str
     facets: Facets
     claims: list[Claim]
@@ -178,6 +182,8 @@ class Lookback(_Strict):
 
 
 class VisionReviewInput(_ImpressionBody):
+    coordinator_session_id: str | None = Field(default=None, min_length=1)
+    primary_event_id: str | None = Field(default=None, pattern=_SHA256)
     image_path: str | None = Field(default=None, description="Workspace-relative image")
     source_event_id: str | None = Field(
         default=None, description="event_id of the vision tool event or image observation"
@@ -203,7 +209,7 @@ class DecisionOption(_Strict):
     cons: list[str] = Field(min_length=1)
 
 
-class DecisionInput(_Strict):
+class DecisionInput(_SessionRecord):
     id: str = Field(pattern=_SLUG, description="Stable decision id, e.g. 'circuit-vcc-decoupling'")
     stage: str = Field(pattern=_SLUG)
     question: str = Field(min_length=QUESTION_MIN_CHARS)
@@ -247,7 +253,7 @@ class GateResult(_Strict):
     verdict: Literal["pass", "fail", "unknown"]
 
 
-class InsightStatusInput(_Strict):
+class InsightStatusInput(_SessionRecord):
     insight: InsightRef
     status: Literal["tried", "adopted", "rejected", "deferred", "superseded"]
     reason: str = Field(min_length=_vrp.REASON_MIN_CHARS)
@@ -257,7 +263,7 @@ class InsightStatusInput(_Strict):
     revisit_when: str | None = None
 
 
-class ReconcileInput(_Strict):
+class ReconcileInput(_SessionRecord):
     reviews: list[str] = Field(
         min_length=2,
         max_length=3,
@@ -265,14 +271,14 @@ class ReconcileInput(_Strict):
     )
 
 
-class SongReceiptInput(_Strict):
+class SongReceiptInput(_SessionRecord):
     delivery: str = Field(description="liaison/<id>.bard-song.json addressed to this plugin")
     felt: str = Field(description="What the song made you feel about the design (160+ chars)")
     prompted_review: bool
     follow_up: str | None = None
 
 
-class ReadInput(_Strict):
+class ReadInput(_SessionRecord):
     artifact: str = Field(description="Workspace-relative sister artifact you took in")
     producer: str = Field(pattern=_SLUG, description="Plugin that produced it")
 
@@ -299,6 +305,19 @@ def _archive_legacy(log: Path) -> None:
         index += 1
         target = log.with_name(f"{log.stem}.v1-{index}.jsonl")
     log.rename(target)
+
+
+def _session_id(body: Mapping[str, Any]) -> str | None:
+    """Use explicit/native context; never guess a session from shared marker files."""
+    supplied = body.get("session_id")
+    if supplied is not None and (
+        not isinstance(supplied, str) or not supplied.strip() or supplied != supplied.strip()
+    ):
+        raise ValueError("session_id must be a non-empty string without surrounding whitespace")
+    inherited = os.environ.get("OPENHANDS_SESSION_ID", "").strip() or None
+    if supplied is not None and inherited is not None and supplied != inherited:
+        raise ValueError("session_id does not match OPENHANDS_SESSION_ID")
+    return supplied or inherited
 
 
 def _append(kind: str, body: dict[str, Any], root: Path) -> dict[str, Any]:
@@ -331,6 +350,9 @@ def _append(kind: str, body: dict[str, Any], root: Path) -> dict[str, Any]:
             "writer": writer,
             **{key: value for key, value in body.items() if value is not None},
         }
+        session_id = _session_id(body)
+        if session_id is not None:
+            record["session_id"] = session_id
         record["event_id"] = _vrp.compute_event_id(record)
         errors = _vrp.record_errors(kind, record)
         if errors:
@@ -433,21 +455,53 @@ def record_vision_review(payload: Mapping[str, Any], root: Path | None = None) -
         body["image_sha256"] = sha256_file(path)
     own = _own(_workspace(base))
     errors = _context_errors("vision_review", body, base, [])
-    errors += _round_errors(review.reviewer, body.get("image_sha256"), own)
+    errors += _round_errors(body, own, base)
     if errors:
         raise ValueError("; ".join(errors))
     return _append("vision_review", body, base)
 
 
-def _round_errors(reviewer: str, digest: Any, own: dict[str, list[dict[str, Any]]]) -> list[str]:
-    """Blind needs a primary; a tiebreak needs a round-1 split; each happens once."""
+def _round_errors(
+    body: dict[str, Any], own: dict[str, list[dict[str, Any]]], base: Path
+) -> list[str]:
+    """Keep each bounded review round bound to one resolved path and digest."""
+    reviewer = str(body.get("reviewer"))
     if reviewer == "primary":
+        scope_errors = _vrp.primary_scope_errors(
+            {**body, "session_id": _session_id(body), "plugin": PLUGIN}, base
+        )
+        if scope_errors:
+            return scope_errors
+        if body.get("primary_event_id"):
+            return ["a primary review cannot reference another primary"]
         return []
-    reviews = [r for r in own.get("vision_review", []) if r.get("image_sha256") == digest]
+    image = (base / str(body.get("image_path") or "")).resolve()
+    session_id = _session_id(body)
+    reference = body.get("primary_event_id")
+    all_reviews = own.get("vision_review", [])
+    delegated = _vrp.review_primary(
+        {**body, "session_id": session_id, "plugin": PLUGIN}, all_reviews, base
+    )
+    if reference and delegated is None:
+        return [
+            "primary_event_id needs the same owner, path and hash, and distinct native sessions"
+        ]
+    if session_id and not reference:
+        return ["a scoped blind/tiebreak review needs primary_event_id and a distinct session"]
+    reviews = [
+        r
+        for r in all_reviews
+        if (r.get("primary_event_id") == reference or r is delegated)
+        and (delegated is not None or r.get("session_id") == session_id)
+        and r.get("image_sha256") == body.get("image_sha256")
+        and (base / str(r.get("image_path") or "")).resolve() == image
+    ]
     primaries = [r for r in reviews if r.get("reviewer") == "primary"]
     if not primaries:
         return [f"a {reviewer} review needs a primary review of the same image bytes first"]
     primary = primaries[-1]
+    if session_id and any(r.get("session_id") == session_id for r in reviews):
+        return ["each review role needs a distinct native reviewer session"]
     after = _vrp.parse_time(primary.get("recorded_at")) or 0.0
     later = [
         r
@@ -477,6 +531,16 @@ def record_reconcile(payload: Mapping[str, Any], root: Path | None = None) -> di
     if missing:
         raise ValueError(f"unknown vision review event ids: {missing}")
     reviews = [by_id[event] for event in request.reviews]
+    session_id = _session_id(payload)
+    if (
+        session_id != reviews[0].get("session_id")
+        and (not session_id or session_id != reviews[0].get("coordinator_session_id"))
+    ) or any(
+        (r.get("session_id") is not None or reviews[0].get("session_id") is not None)
+        and _vrp.review_primary(r, own.get("vision_review", []), base) is not reviews[0]
+        for r in reviews[1:]
+    ):
+        raise ValueError("reconciled reviews must belong to the current session")
     roles = [str(r.get("reviewer")) for r in reviews]
     expected = ["primary", "blind", "tiebreak"][: len(reviews)]
     if roles != expected:
@@ -495,7 +559,7 @@ def record_reconcile(payload: Mapping[str, Any], root: Path | None = None) -> di
     if result["round"] == 2 and not any(c.get("outcome") == "disagree" for c in prior):
         raise ValueError("round 2 needs a round-1 reconcile that disagrees")
     body = {"image_sha256": digests.pop(), "reviews": list(request.reviews), **result}
-    return _append("review_reconcile", body, base)
+    return _append("review_reconcile", body | {"session_id": payload.get("session_id")}, base)
 
 
 def record_insight(payload: Mapping[str, Any], root: Path | None = None) -> dict[str, Any]:
@@ -600,7 +664,7 @@ def record_read(payload: Mapping[str, Any], root: Path | None = None) -> dict[st
         "refs": refs,
         "unresolved": unresolved,
     }
-    return _append("upstream_read", body, base)
+    return _append("upstream_read", body | {"session_id": payload.get("session_id")}, base)
 
 
 RECORDERS = {

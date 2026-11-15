@@ -148,3 +148,51 @@ not infer product acceptance from Stop permission or the absence of
 record problems. Reviewer identity propagation and derived-image
 ownership require a separate recording contract; this status does not
 claim to verify them.
+
+## Session attribution
+
+Pass the native `session_id` from the SessionStart record context in record-tool
+inputs. The writer also accepts `OPENHANDS_SESSION_ID` when supplied by the SDK
+process; conflicting explicit and environment identities are rejected. The ID is
+included in the record hash. Writers never infer it from shared marker files.
+
+Delegated SessionStart hooks expose only native record context (`record-context`), without
+recalling earlier review prose. Ordinary plugin SessionStart retains sister-concern recall.
+
+Delegate independent reviews with an opaque `primary_event_id`, the resolved image
+path and SHA-256; never send the earlier findings. Reviewers keep their own native
+`session_id`. The writer and Stop resolve that reference into an intact primary
+with the same plugin, path and hash and a different native session. Every review
+role has its own session. Reconciliation belongs to the primary's session.
+
+A copied image has its own round. Historical inputs without identity remain
+supported, with bounded timestamp attribution and an unknown compliance warning
+at Stop; they cannot satisfy explicitly scoped writer rounds.
+
+Stop permission, record compliance, run completion and acceptance are separate
+status fields. Reaching the refusal budget permits stopping while preserving gaps;
+it does not establish execution completion or product acceptance.
+
+### Coordinating a delegated primary
+
+When delegating the primary visual review, pass your native `session_id` as
+`coordinator_session_id` in the task prompt. The delegate records its own
+`session_id` and that coordinator on the primary, then returns the opaque
+`primary_event_id` and image path/SHA. The blind reviewer receives only these
+references and its own native record context. Do not copy the primary's prose
+into the blind review prompt.
+
+The primary author or its declared coordinator can reconcile the bound reviews.
+The coordinator's Stop hook retains the independent-review and reconciliation
+obligations; the primary delegate reports the handoff without starting another
+review loop. A primary started through delegated `record-context` must name its
+coordinator. Primary-capable delegates also declare their own Stop hook, so a
+legacy primary without coordination cannot silently lose its review debt.
+The blind/tiebreak delegate returns one bound review to its caller and has no
+workspace-wide Stop hook: it cannot read songs or earlier records to clear those
+obligations. The caller still requires its bound independent review and reconcile.
+An uncoordinated record from another native session remains outside this run.
+
+These checks concern record attribution and review bookkeeping. SDK startup,
+plugin loading, and deterministic tests do not establish LLM judgment quality,
+GUI operation, released-image compatibility, or product acceptance.

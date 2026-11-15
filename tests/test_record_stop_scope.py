@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+import re
 import sys
 import time
 from datetime import UTC, datetime
@@ -51,6 +53,43 @@ def policy() -> dict[str, Any]:
         "dual_review_globs": ["*.png"],
         "max_stop_denials": 2,
     }
+
+
+@pytest.mark.parametrize("references", [[], None, "invalid"])
+def test_invalid_reconcile_keeps_status_and_refusal_budget(
+    hook: ModuleType,
+    policy: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    references: Any,
+) -> None:
+    primary = _primary(session_id="delegate", coordinator_session_id="current")
+
+    def verify(_path: Path, kind: str) -> tuple[list[dict[str, Any]], list[str]]:
+        if kind == "vision_review":
+            return [primary], []
+        if kind == "review_reconcile":
+            return (
+                [{"plugin": "owner", "reviews": references, "session_id": "delegate"}],
+                ["invalid reconciliation"],
+            )
+        return [], []
+
+    monkeypatch.setattr(hook, "verify_log", verify)
+    monkeypatch.setattr(hook, "song_deliveries", _empty)
+    monkeypatch.setattr(hook, "changed_artifacts", _empty)
+    payload = {"session_id": "current"}
+    hook.session_start(payload, policy, tmp_path, include_recall=False)
+    capsys.readouterr()
+    for expected in (2, 2, 0):
+        assert hook.stop(payload, policy, tmp_path) == expected
+        response = json.loads(capsys.readouterr().out)
+        assert response["decision"] == ("deny" if expected else "allow")
+        status = json.loads(
+            (tmp_path / "observations/owner/records-status.json").read_text(encoding="utf-8")
+        )
+        assert "invalid reconciliation" in status["problems"]
 
 
 def test_explicit_session_identity_overrides_time(hook: ModuleType) -> None:
@@ -252,3 +291,161 @@ def test_missing_identity_does_not_prove_compliance(
     problems, warnings = hook.problems_for({}, policy, tmp_path, time.time() - 10)
     assert problems == []
     assert any("session_id is missing" in warning for warning in warnings)
+
+
+def test_missing_marker_recovery_emits_one_hook_response(
+    hook: ModuleType,
+    policy: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def pending_recall(*_args: Any) -> str:
+        return "A sister song still needs its receipt."
+
+    monkeypatch.setattr(hook, "recall", pending_recall)
+    monkeypatch.setattr(hook, "problems_for", partial(_problems, problems=("missing receipt",)))
+    assert hook.stop({"session_id": "current"}, policy, tmp_path) == 2
+    response = json.loads(capsys.readouterr().out)
+    assert response["decision"] == "deny"
+    assert "missing receipt" in response["reason"]
+
+
+def test_session_start_exposes_native_record_context(
+    hook: ModuleType,
+    policy: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(hook, "recall", _no_recall)
+    assert hook.session_start({"session_id": "current"}, policy, tmp_path) == 0
+    context = json.loads(capsys.readouterr().out)["additionalContext"]
+    assert 'session_id="current"' in context
+    assert "delegated agent" in context
+
+
+def test_delegated_agent_start_does_not_recall_review_prose(
+    hook: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    earlier_review = "Earlier primary review: the warning label looks too small."
+
+    def recall_review(*_args: Any) -> str:
+        return earlier_review
+
+    monkeypatch.setattr(hook, "recall", recall_review)
+    monkeypatch.setenv("OPENHANDS_PROJECT_DIR", str(tmp_path))
+    agents = Path(__file__).resolve().parents[1].glob("plugins/*/agents/*.md")
+    checked = 0
+    for agent in agents:
+        start = agent.read_text(encoding="utf-8").partition("\n  session_start:\n")[2]
+        block = re.split(r"(?m)^  [a-z_]+:|^---$", start, maxsplit=1)[0]
+        commands = [
+            line
+            for line in block.splitlines()
+            if "command:" in line and "require_records.py" in line
+        ]
+        for command in commands:
+            mode = command.rsplit(" ", 1)[-1].rstrip("'\"")
+            monkeypatch.setattr(hook.sys, "stdin", io.StringIO('{"session_id": "child"}'))
+            assert hook.main([mode]) == 0
+            context = json.loads(capsys.readouterr().out)["additionalContext"]
+            assert 'session_id="child"' in context
+            assert earlier_review not in context, agent.name
+            checked += 1
+    assert checked > 0
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {},
+        {"session_id": "current"},
+        {"session_id": None},
+        {"plugin": "foreign"},
+        {"image_path": "copy.png"},
+        {"image_sha256": "c" * 64},
+        {"primary_event_id": "f" * 64},
+    ],
+)
+def test_only_bound_delegated_review_discharges_parent_debt(
+    hook: ModuleType,
+    policy: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: dict[str, Any],
+) -> None:
+    primary = _primary()
+    blind = (
+        _primary(
+            reviewer="blind",
+            session_id="reviewer",
+            primary_event_id=primary["event_id"],
+            event_id="d" * 64,
+        )
+        | change
+    )
+    reconcile = {
+        "plugin": "owner",
+        "session_id": "current",
+        "reviews": [primary["event_id"], blind["event_id"]],
+        "round": 1,
+        "outcome": "agree",
+    }
+    _logs(hook, monkeypatch, {"vision_review": [primary, blind], "review_reconcile": [reconcile]})
+    problems, _ = hook.problems_for({"session_id": "current"}, policy, tmp_path, time.time() - 10)
+    assert any("blind second review" in p for p in problems) is bool(change)
+
+
+def test_delegated_primary_debt_belongs_to_declared_coordinator(
+    hook: ModuleType,
+    policy: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary = _primary(session_id="child", coordinator_session_id="current")
+    _logs(hook, monkeypatch, {"vision_review": [primary]})
+    parent_problems, _ = hook.problems_for(
+        {"session_id": "current"}, policy, tmp_path, time.time() - 10
+    )
+    assert any("blind second review" in p for p in parent_problems)
+    child_problems, warnings = hook.problems_for(
+        {"session_id": "child"}, policy, tmp_path, time.time() - 10
+    )
+    assert not child_problems
+    assert any("coordinator current" in w for w in warnings)
+    blind = _primary(
+        reviewer="blind",
+        session_id="independent",
+        event_id="c" * 64,
+        primary_event_id=primary["event_id"],
+    )
+    _logs(hook, monkeypatch, {"vision_review": [primary, blind]})
+    parent_problems, _ = hook.problems_for(
+        {"session_id": "current"}, policy, tmp_path, time.time() - 10
+    )
+    assert any("reconcile" in p for p in parent_problems)
+    assert not any("blind second review" in p for p in parent_problems)
+    _logs(
+        hook,
+        monkeypatch,
+        {
+            "vision_review": [primary, blind],
+            "review_reconcile": [
+                {
+                    "plugin": "owner",
+                    "session_id": "current",
+                    "reviews": [primary["event_id"], blind["event_id"]],
+                    "round": 1,
+                    "outcome": "agree",
+                }
+            ],
+        },
+    )
+    parent_problems, _ = hook.problems_for(
+        {"session_id": "current"}, policy, tmp_path, time.time() - 10
+    )
+    assert not parent_problems
