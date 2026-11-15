@@ -1,46 +1,46 @@
 {
   "circuit_server": {
-    "attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/67403572",
-    "digest": "sha256:25ff55480972851b7dea76e2492af9765ffd9d22c5487ae270b72951be818d0d",
+    "attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/67768378",
+    "digest": "sha256:5cf5a892db4f3692d9ecc04e952f92903168741cc850923ca6eb67765e3cafd7",
     "dockerfile": "sdk:openhands-agent-server/v1.62.0",
     "image": "ghcr.io/vibebb/circuit-server",
-    "published_at": "2026-11-14T00:30:31Z",
-    "sbom_attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/67403866",
-    "tag": "63c4f26461055bc92d6102ebe385d73fd7cabc42-latest-source",
+    "published_at": "2026-11-15T10:49:38Z",
+    "sbom_attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/67768747",
+    "tag": "e7258995dbc8fb3e9cbf4be064382bac2ce47ff6-latest-source",
     "tools": {
       "cern_commit": "c62d9bd1e43477312d7ccfb6abde60a358039237",
       "circuit": "0.1.0",
       "freerouting": "2.5.0",
       "kicad-cli": "10.99.0",
-      "kicad-nightly": "202611131137+711550ba60~190~ubuntu26.04.1",
+      "kicad-nightly": "202611141128+7f566c2dd7~190~ubuntu26.04.1",
       "kicad-nightly-footprints": "202611021521+a0dcd398e~14~ubuntu26.04.1",
       "kicad-nightly-symbols": "202611121241+9fa442824~12~ubuntu26.04.1",
       "konnect": "0.13.0",
       "python": "Python 3.14.4",
       "semeru_jre": "27.0.1.0"
     },
-    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/43530441431"
+    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/43704332033"
   },
   "circuit_tools": {
-    "attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/67401123",
-    "digest": "sha256:71a7eaa00184647d7b0116d8c94fedc233c55f093eaadaa6ad8cc283f4c30b77",
+    "attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/67766487",
+    "digest": "sha256:3637257bb3643d05f445bcee81760d96d477bc394533779fe9c2c70207140265",
     "dockerfile": "docker/circuit-tools.Dockerfile",
     "image": "ghcr.io/vibebb/circuit-tools",
-    "published_at": "2026-11-14T00:30:31Z",
-    "sbom_attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/67401555",
-    "tag": "63c4f26461055bc92d6102ebe385d73fd7cabc42-tools",
+    "published_at": "2026-11-15T10:49:38Z",
+    "sbom_attestation": "https://github.com/VibeBB/electrical-circuit-agent/attestations/67766843",
+    "tag": "e7258995dbc8fb3e9cbf4be064382bac2ce47ff6-tools",
     "tools": {
       "cern_commit": "c62d9bd1e43477312d7ccfb6abde60a358039237",
       "circuit": "0.1.0",
       "freerouting": "2.5.0",
       "kicad-cli": "10.99.0",
-      "kicad-nightly": "202611131137+711550ba60~190~ubuntu26.04.1",
+      "kicad-nightly": "202611141128+7f566c2dd7~190~ubuntu26.04.1",
       "kicad-nightly-footprints": "202611021521+a0dcd398e~14~ubuntu26.04.1",
       "kicad-nightly-symbols": "202611121241+9fa442824~12~ubuntu26.04.1",
       "konnect": "0.13.0",
       "python": "Python 3.14.4",
       "semeru_jre": "27.0.1.0"
     },
-    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/43530441431"
+    "workflow_run": "https://github.com/VibeBB/electrical-circuit-agent/actions/runs/43704332033"
   }
 }
