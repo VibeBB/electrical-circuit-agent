@@ -186,8 +186,11 @@ The primary author or its declared coordinator can reconcile the bound reviews.
 The coordinator's Stop hook retains the independent-review and reconciliation
 obligations; the primary delegate reports the handoff without starting another
 review loop. A primary started through delegated `record-context` must name its
-coordinator. Record-capable delegates also declare their own Stop hook, so a
+coordinator. Primary-capable delegates also declare their own Stop hook, so a
 legacy primary without coordination cannot silently lose its review debt.
+The blind/tiebreak delegate returns one bound review to its caller and has no
+workspace-wide Stop hook: it cannot read songs or earlier records to clear those
+obligations. The caller still requires its bound independent review and reconcile.
 An uncoordinated record from another native session remains outside this run.
 
 These checks concern record attribution and review bookkeeping. SDK startup,
