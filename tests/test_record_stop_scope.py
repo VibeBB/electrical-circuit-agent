@@ -252,3 +252,21 @@ def test_missing_identity_does_not_prove_compliance(
     problems, warnings = hook.problems_for({}, policy, tmp_path, time.time() - 10)
     assert problems == []
     assert any("session_id is missing" in warning for warning in warnings)
+
+
+def test_missing_marker_recovery_emits_one_hook_response(
+    hook: ModuleType,
+    policy: dict[str, Any],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def pending_recall(*_args: Any) -> str:
+        return "A sister song still needs its receipt."
+
+    monkeypatch.setattr(hook, "recall", pending_recall)
+    monkeypatch.setattr(hook, "problems_for", partial(_problems, problems=("missing receipt",)))
+    assert hook.stop({"session_id": "current"}, policy, tmp_path) == 2
+    response = json.loads(capsys.readouterr().out)
+    assert response["decision"] == "deny"
+    assert "missing receipt" in response["reason"]

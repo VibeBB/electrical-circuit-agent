@@ -117,24 +117,28 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
     )
 
 
+def _create_marker(
+    path: Path, payload: dict[str, Any], scope_origin: str
+) -> dict[str, Any]:
+    marker = {
+        "session_id": payload.get("session_id"),
+        "started_at": time.time(),
+        "denials": 0,
+        "scope_origin": scope_origin,
+    }
+    _write_json(path, marker)
+    return marker
+
+
 def session_start(payload: dict[str, Any], policy: dict[str, Any], root: Path) -> int:
     records_dir = root / str(policy["records_dir"])
     marker = _marker_path(records_dir, payload)
     if _read_marker(marker) is None:
-        _write_json(
-            marker,
-            {
-                "session_id": payload.get("session_id"),
-                "started_at": time.time(),
-                "denials": 0,
-                "scope_origin": "session_start",
-            },
-        )
+        _create_marker(marker, payload, "session_start")
     briefing = recall(root, str(policy["plugin"]))
     if briefing:
         print(json.dumps({"additionalContext": briefing}, ensure_ascii=False))
     return 0
-
 
 def _dual_review_problems(
     policy: dict[str, Any], logs: dict[str, list[dict[str, Any]]]
@@ -332,10 +336,7 @@ def stop(payload: dict[str, Any], policy: dict[str, Any], root: Path) -> int:
     marker = _read_marker(marker_path)
     missing_marker = marker is None
     if marker is None:
-        session_start(payload, policy, root)
-        marker = _read_marker(marker_path) or {}
-        marker["scope_origin"] = "stop"
-        _write_json(marker_path, marker)
+        marker = _create_marker(marker_path, payload, "stop")
     since = float(marker.get("started_at") or 0.0)
     problems, warnings = problems_for(payload, policy, root, since)
     if missing_marker or marker.get("scope_origin") == "stop":
