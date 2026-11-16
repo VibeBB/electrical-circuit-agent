@@ -263,7 +263,23 @@ def capture_image_delivery(payload: dict[str, object], root: Path, log: Path) ->
                 "identity_status": "bound" if claim else "unknown",
                 "delivery_evidence": "inline_bytes",
                 "session_id": payload.get("session_id"),
-                "actor": None,
+                "actor": {
+                    key: payload[key]
+                    for key in sorted(payload)
+                    if key
+                    in {
+                        "agent",
+                        "agent_name",
+                        "actor",
+                        "subagent_type",
+                        "task_agent",
+                        "action_id",
+                        "tool_call_id",
+                        "parent_id",
+                        "call_id",
+                    }
+                }
+                or None,
                 "tool_call_id": payload.get("tool_call_id") or payload.get("action_id"),
             }
             encoded = json.dumps(row, sort_keys=True, separators=(",", ":")).encode()

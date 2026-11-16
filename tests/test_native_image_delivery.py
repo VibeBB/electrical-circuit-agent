@@ -190,6 +190,37 @@ def test_identical_inline_bytes_keep_each_unambiguous_metadata_path(
         assert all(row["identity_status"] == "bound" for row in rows)
 
 
+@pytest.mark.parametrize("use_action_id", [False, True])
+def test_inline_delivery_retains_actor_and_parent_call(
+    tmp_path: Path,
+    native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
+    use_action_id: bool,
+) -> None:
+    _, _, vrp = native
+    image = tmp_path / "image.png"
+    claim = _claim(image, PLUGIN)
+    actor = {
+        "agent_name": "reviewer",
+        "parent_id": "parent",
+        "call_id": "parent-call",
+        "action_id" if use_action_id else "tool_call_id": "native-call",
+    }
+    log = tmp_path / "delivery.jsonl"
+    assert vrp.capture_image_delivery(
+        {
+            **actor,
+            "tool_name": "render",
+            "session_id": "reader",
+            "tool_response": _response(image, claim),
+        },
+        tmp_path,
+        log,
+    )
+    row = json.loads(log.read_text(encoding="utf-8"))
+    assert row["actor"] == actor
+    assert row["tool_call_id"] == "native-call"
+
+
 def test_file_editor_inherits_only_exact_ux_producer_receipt(
     tmp_path: Path,
     native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
