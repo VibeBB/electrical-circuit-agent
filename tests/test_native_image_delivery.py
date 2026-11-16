@@ -280,6 +280,44 @@ def test_writer_can_review_the_delivered_revision_after_regeneration(
     assert row["image_delivery"]["status"] == ("bound" if damage == "none" else "unknown")
 
 
+@pytest.mark.parametrize("damage", ["utf8", "depth", "io"])
+def test_unreadable_delivery_log_preserves_a_review_with_unknown_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
+    damage: str,
+) -> None:
+    writer, vision, _ = native
+    monkeypatch.delenv("OPENHANDS_CONVERSATION_ID", raising=False)
+    monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    image = tmp_path / "detail.png"
+    claim = _claim(image, PLUGIN)
+    observation = _observe(tmp_path, image, _response(image, claim))
+    log = tmp_path / "observations" / PLUGIN / "image-observations.jsonl"
+    if damage == "utf8":
+        log.write_bytes(b"\xff\xfe")
+    elif damage == "depth":
+        log.write_text("[" * 2000 + "0" + "]" * 2000, encoding="utf-8")
+    else:
+        read_text = Path.read_text
+
+        def unreadable(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+            if path == log:
+                raise PermissionError("delivery log cannot be read")
+            return read_text(path, encoding=encoding, errors=errors)
+
+        monkeypatch.setattr(Path, "read_text", unreadable)
+    image.write_bytes(b"new W1 render; unreadable evidence cannot bind the old revision")
+    payload = vision(
+        image_path="detail.png", session_id="reader", source_event_id=observation["event_id"]
+    )
+    for entry in cast(list[dict[str, object]], payload["claims"]):
+        entry["artifact"] = "detail.png"
+    row = writer.record_vision_review(payload, tmp_path)["record"]
+    assert row["image_sha256"] == hashlib.sha256(image.read_bytes()).hexdigest()
+    assert row["image_delivery"]["status"] == "unknown"
+
+
 def test_file_editor_inherits_only_exact_ux_producer_receipt(
     tmp_path: Path,
     native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
