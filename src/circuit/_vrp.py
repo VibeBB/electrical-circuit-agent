@@ -225,11 +225,20 @@ def capture_image_delivery(payload: dict[str, object], root: Path, log: Path) ->
         viewed = action.get("image_path")
     log.parent.mkdir(parents=True, exist_ok=True)
     sequence = len(log.read_text(encoding="utf-8").splitlines()) + 1 if log.exists() else 1
+    occurrences: dict[str, int] = {}
     with log.open("a", encoding="utf-8") as stream:
         for digest in digests:
             matches = [m for m in metadata if m.get("sha256") == digest]
-            paths = {m["path"] for m in matches if isinstance(m.get("path"), str)}
-            path = next(iter(paths)) if len(paths) == 1 else viewed if len(digests) == 1 else None
+            paths = sorted({str(m["path"]) for m in matches if isinstance(m.get("path"), str)})
+            occurrence = occurrences.get(digest, 0)
+            occurrences[digest] = occurrence + 1
+            path = (
+                paths[occurrence % len(paths)]
+                if paths and len(paths) <= digests.count(digest)
+                else viewed
+                if not paths and len(digests) == 1
+                else None
+            )
             if isinstance(path, str):
                 path = str((root / path).resolve())
             candidates: dict[str, dict[str, object]] = {}

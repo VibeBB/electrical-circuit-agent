@@ -158,6 +158,38 @@ def test_native_observer_and_writer_bind_original_or_auxiliary(
     )
 
 
+@pytest.mark.parametrize("extra_path", [False, True])
+def test_identical_inline_bytes_keep_each_unambiguous_metadata_path(
+    tmp_path: Path,
+    native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
+    extra_path: bool,
+) -> None:
+    _, _, vrp = native
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    response_a = _response(first, _claim(first, PLUGIN))
+    response_b = _response(second, _claim(second, PLUGIN))
+    content = cast(list[object], response_a["content"]) + cast(list[object], response_b["content"])
+    if extra_path:
+        third = tmp_path / "third.png"
+        content += cast(list[object], _response(third, _claim(third, PLUGIN))["content"])[:1]
+    log = tmp_path / "delivery.jsonl"
+    assert vrp.capture_image_delivery(
+        {"tool_name": "render", "session_id": "reader", "tool_response": {"content": content}},
+        tmp_path,
+        log,
+    )
+    rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 2
+    if extra_path:
+        assert all(
+            row["image_path"] is None and row["identity_status"] == "unknown" for row in rows
+        )
+    else:
+        assert {row["image_path"] for row in rows} == {str(first), str(second)}
+        assert all(row["identity_status"] == "bound" for row in rows)
+
+
 def test_file_editor_inherits_only_exact_ux_producer_receipt(
     tmp_path: Path,
     native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
