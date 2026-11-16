@@ -21,10 +21,10 @@ _EXPECTED_SAFETY_RAIL_NORMALIZED_AST_SHA256 = (
     "1a9f3f72fec383f046db2ca8805a7190c33daa86daf42f06c3cd27e3f8be245b"
 )
 _EXPECTED_RECORDS_NORMALIZED_AST_SHA256 = (
-    "031bf027f9fcb3c58470f70f5601b7587d082bc148099b22dda0ed75238d01c0"
+    "ef254c8fef1a005fe6f216a20224362290689b68372d7c50deb9d72f45fe1e87"
 )
 _EXPECTED_REQUIRE_RECORDS_NORMALIZED_AST_SHA256 = (
-    "3b60e28729bb5e6e66c7d43a38be67cd1a9af2f8980a80d114a2b939ee72e67e"
+    "0fbd6de1886e922ceca095fc28841ba2f736ab2ca56c425d48b354d7ca8a02b8"
 )
 EXPECTED: dict[str, str] = {
     "ensure_llm_profiles.py": _EXPECTED_ENSURE_LLM_PROFILES_NORMALIZED_AST_SHA256,
@@ -34,6 +34,7 @@ EXPECTED: dict[str, str] = {
     "_records.py": _EXPECTED_RECORDS_NORMALIZED_AST_SHA256,
     "require_records.py": _EXPECTED_REQUIRE_RECORDS_NORMALIZED_AST_SHA256,
 }
+CANONICAL_RECORD_HOOKS = frozenset({"_records.py", "require_records.py"})
 REQUIRED = frozenset(
     {
         "ensure_llm_profiles.py",
@@ -66,9 +67,12 @@ def _strip_docstrings(node: ast.AST) -> None:
 
 def _digest(path: Path, plugin_name: str) -> str:
     source = path.read_text(encoding="utf-8")
-    source = re.sub(rf"\b{re.escape(plugin_name)}\b", "PLUGIN", source)
-    if plugin_name == "ux":
-        source = re.sub(r"\bux_creator\b", "PLUGIN", source)
+    # Canonical record hooks contain the full family owner vocabulary.
+    # Replacing one member's name would give each repository a different AST.
+    if path.name not in CANONICAL_RECORD_HOOKS:
+        source = re.sub(rf"\b{re.escape(plugin_name)}\b", "PLUGIN", source)
+        if plugin_name == "ux":
+            source = re.sub(r"\bux_creator\b", "PLUGIN", source)
     tree = ast.parse(source, filename=str(path))
     _strip_docstrings(tree)
     dump = cast(Callable[..., str], ast.dump)

@@ -8,7 +8,7 @@ from typing import Literal, cast
 from mcp.types import ImageContent
 from pydantic import ValidationError
 
-from . import kicad_cli
+from . import _vrp, kicad_cli
 from .advisory import AdvisoryResult
 
 __all__ = [
@@ -37,7 +37,12 @@ def _image_content(path: Path) -> ImageContent | None:
         data = base64.b64encode(path.read_bytes()).decode("ascii")
     except OSError:
         return None
-    return ImageContent(type="image", data=data, mime_type=mime)
+    return ImageContent(
+        type="image",
+        data=data,
+        mime_type=mime,
+        _meta=_vrp.rendered_image_metadata(path, base64.b64decode(data), "circuit"),
+    )
 
 
 def _load_report(path: Path, *, kind: str, source: Path) -> kicad_cli.Report:
