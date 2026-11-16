@@ -246,6 +246,40 @@ def test_home_relative_observation_override_binds_the_writer(
     assert row["image_delivery"]["image_identity"] == claim
 
 
+@pytest.mark.parametrize("damage", ["none", "session", "integrity", "source"])
+def test_writer_can_review_the_delivered_revision_after_regeneration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
+    damage: str,
+) -> None:
+    writer, vision, _ = native
+    monkeypatch.delenv("OPENHANDS_CONVERSATION_ID", raising=False)
+    monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    image = tmp_path / "detail.png"
+    claim = _claim(image, PLUGIN)
+    observation = _observe(tmp_path, image, _response(image, claim))
+    if damage == "integrity":
+        log = tmp_path / "observations" / PLUGIN / "image-observations.jsonl"
+        log.write_text(
+            json.dumps({**observation, "image_sha256": "f" * 64}) + "\n", encoding="utf-8"
+        )
+    image.write_bytes(b"new W1 render, old delivery remains a separate obligation")
+    payload = vision(
+        image_path="detail.png",
+        session_id="foreign" if damage == "session" else "reader",
+        source_event_id="f" * 64 if damage == "source" else observation["event_id"],
+    )
+    for entry in cast(list[dict[str, object]], payload["claims"]):
+        entry["artifact"] = "detail.png"
+    row = writer.record_vision_review(payload, tmp_path)["record"]
+    expected = (
+        claim["sha256"] if damage == "none" else hashlib.sha256(image.read_bytes()).hexdigest()
+    )
+    assert row["image_sha256"] == expected
+    assert row["image_delivery"]["status"] == ("bound" if damage == "none" else "unknown")
+
+
 def test_file_editor_inherits_only_exact_ux_producer_receipt(
     tmp_path: Path,
     native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],

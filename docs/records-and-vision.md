@@ -196,3 +196,11 @@ An uncoordinated record from another native session remains outside this run.
 These checks concern record attribution and review bookkeeping. SDK startup,
 plugin loading, and deterministic tests do not establish LLM judgment quality,
 GUI operation, released-image compatibility, or product acceptance.
+
+For an image regenerated at the same path, pass the original native image
+observation's `source_event_id` with `image_path` and your own `session_id`.
+The typed writer retains the delivered SHA only when that receipt's integrity,
+path, and native session match. A foreign or altered receipt cannot supply a
+historical revision. Without a matching receipt, the writer hashes the current
+file. Delivery evidence remains advisory and does not prove native vision
+selection, perception, or product acceptance.

@@ -356,6 +356,31 @@ def review_image_delivery(review: dict[str, object], root: Path, plugin: str) ->
     }
 
 
+def observed_image_revision(review: dict[str, object], root: Path, plugin: str) -> str | None:
+    """Use an explicit native delivery receipt to review a superseded revision."""
+    source, path, session = (review.get(k) for k in ("source_event_id", "image_path", "session_id"))
+    if not source or not isinstance(path, str) or not session:
+        return None
+    log = Path(
+        os.environ.get(f"{plugin.upper()}_IMAGE_OBSERVATIONS")
+        or f"observations/{plugin}/image-observations.jsonl"
+    ).expanduser()
+    rows, malformed = load_jsonl(log if log.is_absolute() else root / log)
+    matching = [row for row in rows if row.get("event_id") == source]
+    if malformed or not matching:
+        return None
+    if any(
+        not _delivery_receipt(row)
+        or row.get("image_path") != str((root / path).resolve())
+        or row.get("session_id") != session
+        or not _sha(row.get("image_sha256"))
+        for row in matching
+    ):
+        return None
+    digests = {str(row["image_sha256"]) for row in matching}
+    return digests.pop() if len(digests) == 1 else None
+
+
 SCHEMA_VERSION = 2
 IMPRESSION_MIN_CHARS = 400
 IMPRESSION_MIN_SENTENCES = 3
