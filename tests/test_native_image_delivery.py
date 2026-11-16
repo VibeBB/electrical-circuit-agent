@@ -221,6 +221,31 @@ def test_inline_delivery_retains_actor_and_parent_call(
     assert row["tool_call_id"] == "native-call"
 
 
+def test_home_relative_observation_override_binds_the_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
+) -> None:
+    writer, vision, vrp = native
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(f"{PLUGIN.upper()}_IMAGE_OBSERVATIONS", "~/deliveries.jsonl")
+    monkeypatch.delenv("OPENHANDS_CONVERSATION_ID", raising=False)
+    monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    image = tmp_path / "image.png"
+    claim = _claim(image, PLUGIN)
+    assert vrp.capture_image_delivery(
+        {"tool_name": "render", "session_id": "reader", "tool_response": _response(image, claim)},
+        tmp_path,
+        tmp_path / "deliveries.jsonl",
+    )
+    payload = vision(image_path="image.png", session_id="reader")
+    for entry in cast(list[dict[str, object]], payload["claims"]):
+        entry["artifact"] = "image.png"
+    row = writer.record_vision_review(payload, tmp_path)["record"]
+    assert row["image_delivery"]["status"] == "bound"
+    assert row["image_delivery"]["image_identity"] == claim
+
+
 def test_file_editor_inherits_only_exact_ux_producer_receipt(
     tmp_path: Path,
     native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
