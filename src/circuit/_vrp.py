@@ -158,7 +158,12 @@ def producer_image_metadata(path: Path, data: bytes, root: Path) -> dict[str, ob
     return {"vibebb_image_identity": claim} if claim is not None else {}
 
 
-def capture_image_delivery(payload: dict[str, object], root: Path, log: Path) -> bool:
+def capture_image_delivery(
+    payload: dict[str, object],
+    root: Path,
+    log: Path,
+    event_ids: list[str] | None = None,
+) -> bool:
     """Append actual returned bytes before the legacy filename observer runs."""
     response = _delivery_mapping(payload.get("tool_response"))
     if "error" in response or response.get("is_error") or response.get("isError"):
@@ -286,6 +291,8 @@ def capture_image_delivery(payload: dict[str, object], root: Path, log: Path) ->
             row["event_id"] = hashlib.sha256(encoded).hexdigest()
             row["recorded_at"] = datetime.now().astimezone().isoformat()
             stream.write(json.dumps(row, separators=(",", ":")) + "\n")
+            if event_ids is not None:
+                event_ids.append(row["event_id"])
             sequence += 1
     return True
 
