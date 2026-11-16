@@ -38,6 +38,7 @@ block (exit 0 with a stderr note).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -102,6 +103,196 @@ def _image_key(record: dict[str, Any], root: Path) -> tuple[str, str]:
     return str(path), str(record.get("image_sha256") or "")
 
 
+def _original_image(claim: Any, root: Path, *, current: bool = True) -> bool:
+    """Validate producer scope against the current workspace revision."""
+    if not isinstance(claim, dict):
+        return False
+    claim = cast(dict[str, Any], claim)
+    if set(claim) != {"path", "sha256", "owner_plugin", "origin"}:
+        return False
+    if claim.get("origin") not in ("renderer", "liaison-response"):
+        return False
+    if claim.get("owner_plugin") not in (
+        "ux",
+        "bard",
+        "circuit",
+        "dashboard",
+        "doc",
+        "firmware",
+        "fpga",
+        "mech",
+        "prodeng",
+        "sim",
+        "wire",
+    ):
+        return False
+    return _intact_image(claim, root, current=current)
+
+
+def _intact_image(claim: dict[str, Any], root: Path, *, current: bool = True) -> bool:
+    path, digest = claim.get("path"), claim.get("sha256")
+    if (
+        not isinstance(path, str)
+        or not isinstance(digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+    ):
+        return False
+    try:
+        source = Path(path)
+        return (
+            source.is_absolute()
+            and str(source.resolve()) == path
+            and source.is_relative_to(root)
+            and (not current or (source.is_file() and sha256_file(source) == digest))
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def _producer_sources(
+    observation: dict[str, Any], root: Path, *, current: bool = True
+) -> list[dict[str, Any]] | None:
+    """Unknown/corrupt ownership never suppresses a review obligation."""
+    claim = observation.get("image_identity")
+    if not isinstance(claim, dict) or observation.get("identity_status") != "bound":
+        return None
+    claim = cast(dict[str, Any], claim)
+    if (
+        claim.get("path") != observation.get("image_path")
+        or claim.get("sha256") != observation.get("image_sha256")
+        or not _intact_image(claim, root, current=current)
+    ):
+        return None
+    if claim.get("origin") != "derived":
+        return [claim] if _original_image(claim, root, current=current) else None
+    raw_parents = claim.get("parents")
+    if not isinstance(raw_parents, list):
+        return None
+    parents = cast(list[Any], raw_parents)
+    if (
+        set(claim)
+        != {"path", "sha256", "owner_plugin", "origin", "operation", "parents"}
+        or claim.get("owner_plugin") != "ux"
+        or claim.get("operation") not in ("crop", "tile", "composite")
+        or not 1 <= len(parents) <= 16
+        or (claim.get("operation") != "composite" and len(parents) != 1)
+        or any(
+            not _original_image(p, root, current=current) or p["path"] == claim["path"]
+            for p in parents
+        )
+        or len({p["path"] for p in parents}) != len(parents)
+    ):
+        return None
+    return cast(list[dict[str, Any]], parents)
+
+
+def _receipt_sources(
+    observation: dict[str, Any], root: Path, *, current: bool = True
+) -> list[dict[str, Any]] | None:
+    content = {
+        k: v for k, v in observation.items() if k not in {"event_id", "recorded_at"}
+    }
+    intact = (
+        observation.get("delivery_evidence") == "inline_bytes"
+        and observation.get("event_id")
+        == hashlib.sha256(
+            json.dumps(content, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    return _producer_sources(observation, root, current=current) if intact else None
+
+
+def _current_originals(
+    observations: list[dict[str, Any]], root: Path
+) -> dict[str, dict[str, Any]]:
+    originals: dict[str, dict[str, Any]] = {}
+    ambiguous: set[str] = set()
+    for observation in observations:
+        for source in _receipt_sources(observation, root) or []:
+            previous = originals.get(source["path"])
+            if previous and previous["owner_plugin"] != source["owner_plugin"]:
+                ambiguous.add(source["path"])
+            originals[source["path"]] = source
+    return {path: source for path, source in originals.items() if path not in ambiguous}
+
+
+def _superseding_sources(
+    observation: dict[str, Any], root: Path, originals: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]] | None:
+    """Retire an old receipt only after its originals were re-delivered intact."""
+    sources = _receipt_sources(observation, root, current=False)
+    if not sources:
+        return None
+    replacements: list[dict[str, Any]] = []
+    changed = False
+    for source in sources:
+        replacement = originals.get(source["path"])
+        if replacement is None or replacement["owner_plugin"] != source["owner_plugin"]:
+            return None
+        changed = changed or replacement["sha256"] != source["sha256"]
+        replacements.append(replacement)
+    return replacements if changed else None
+
+
+def _observation_keys(
+    observation: dict[str, Any],
+    root: Path,
+    plugin: str,
+    originals: dict[str, dict[str, Any]] | None = None,
+) -> tuple[list[tuple[str, str]], str | None]:
+    sources = _receipt_sources(observation, root)
+    superseded = False
+    if sources is None and originals is not None:
+        sources = _superseding_sources(observation, root, originals)
+        superseded = sources is not None
+    if sources is None:
+        key = _image_key(observation, root)
+        try:
+            current = Path(key[0])
+            if current.is_relative_to(root) and current.is_file():
+                key = (key[0], sha256_file(current))
+        except (OSError, ValueError):
+            pass
+        return [key], "image owner/ancestry unknown; legacy review scope retained"
+    keys = [(p["path"], p["sha256"]) for p in sources if p["owner_plugin"] == plugin]
+    if superseded:
+        return keys, "earlier image delivery superseded by current original revisions"
+    return (
+        keys,
+        "foreign or auxiliary image scoped to its original owner/revision"
+        if not keys
+        else None,
+    )
+
+
+def _auxiliary_review(review: dict[str, Any], root: Path) -> bool:
+    delivery = review.get("image_delivery")
+    if not isinstance(delivery, dict):
+        return False
+    delivery = cast(dict[str, Any], delivery)
+    if delivery.get("status") != "bound":
+        return False
+    claim = delivery.get("image_identity")
+    if not isinstance(claim, dict):
+        return False
+    claim = cast(dict[str, Any], claim)
+    if claim.get("origin") != "derived":
+        return False
+    return (
+        _producer_sources(
+            {
+                "image_identity": claim,
+                "identity_status": delivery.get("producer_identity_status"),
+                "image_path": _image_key(review, root)[0],
+                "image_sha256": review.get("image_sha256"),
+            },
+            root,
+            current=False,
+        )
+        is not None
+    )
+
+
 def _marker_path(records_dir: Path, payload: dict[str, Any]) -> Path:
     return records_dir / ".sessions" / f"{_session_key(payload)}.json"
 
@@ -151,9 +342,11 @@ def session_start(
     if payload.get("session_id"):
         identity = json.dumps(payload["session_id"], ensure_ascii=False)
         briefing = (
-            f"VRP record context: pass session_id={identity} to this plugin's record tools. "
+            f"VRP record context: pass session_id={identity} "
+            "to this plugin's record tools. "
             "Use the delegated agent's own session context for its records. "
-            "A delegated primary must record coordinator_session_id supplied by its caller; "
+            "A delegated primary must record coordinator_session_id "
+            "supplied by its caller; "
             "when delegating a primary, pass your own session_id as that coordinator.\n"
             + briefing
         )
@@ -166,6 +359,7 @@ def _dual_review_problems(
     policy: dict[str, Any],
     logs: dict[str, list[dict[str, Any]]],
     session_id: str | None,
+    root: Path,
 ) -> tuple[list[str], list[str]]:
     patterns = cast(list[str], policy.get("dual_review_globs") or [])
     problems: list[str] = []
@@ -178,6 +372,7 @@ def _dual_review_problems(
         r
         for r in reviews
         if r.get("reviewer") == "primary"
+        and not _auxiliary_review(r, root)
         and (
             not r.get("coordinator_session_id")
             or r.get("coordinator_session_id") == session_id
@@ -200,7 +395,8 @@ def _dual_review_problems(
         ]
         if not blind:
             problems.append(
-                f"image {image} needs a blind second review: delegate it with `task` to the"
+                f"image {image} needs a blind second review: "
+                "delegate it with `task` to the"
                 " blind vision sub-agent (it must not see the first review)"
             )
             continue
@@ -215,7 +411,8 @@ def _dual_review_problems(
         last = max(mine, key=lambda c: int(c.get("round") or 0))
         if last.get("outcome") == "disagree":
             problems.append(
-                f"image {image}: the reviews disagree; get one tiebreak review and reconcile"
+                f"image {image}: the reviews disagree; "
+                "get one tiebreak review and reconcile"
                 " again (round 2 is the last)"
             )
         elif last.get("outcome") == "unresolved":
@@ -341,35 +538,50 @@ def problems_for(
             "legacy image observations lack session_id; attribution is unknown"
         )
     seen: set[tuple[str, str]] = set()
+    originals = _current_originals(observations, root)
     for observation in observations:
         if not _in_session(observation, session_id, since):
             continue
-        digest = str(observation.get("image_sha256"))
-        key = _image_key(observation, root)
-        if key in seen:
-            continue
-        seen.add(key)
-        reviewed = key in reviewed_images
-        if not reviewed:
+        keys, warning = _observation_keys(observation, root, plugin, originals)
+        claim = observation.get("image_identity")
+        claim = cast(dict[str, Any], claim) if isinstance(claim, dict) else {}
+        if (
+            claim.get("origin") == "derived"
+            and warning
+            and warning.startswith("image owner/ancestry unknown")
+        ):
             problems.append(
-                f"viewed image {observation.get('image_path')} (sha256 {digest[:12]}) has no"
-                " vision_review impression"
+                "image ancestry unknown: restore and re-deliver the original revisions"
             )
+        if warning and warning not in warnings:
+            warnings.append(warning)
+        for key in keys:
+            if key in seen:
+                continue
+            seen.add(key)
+            if key not in reviewed_images:
+                problems.append(
+                    f"viewed image {key[0] if observation.get('image_path') else None} "
+                    f"(sha256 {key[1][:12]}) has no vision_review impression"
+                )
 
     for read in session["upstream_read"]:
         after = parse_time(read.get("recorded_at"))
         for ref in cast(list[dict[str, Any]], read.get("refs") or []):
             if not acknowledged(session, ref, after):
                 problems.append(
-                    f"sister impression {ref.get('system')}:{str(ref.get('event_id'))[:12]} came"
-                    f" with {cast(dict[str, Any], read.get('artifact') or {}).get('path')}; cite"
-                    " it in the upstream field of an impression (adopted, deferred, disputed or"
+                    f"sister impression {ref.get('system')}:"
+                    f"{str(ref.get('event_id'))[:12]} came with "
+                    f"{cast(dict[str, Any], read.get('artifact') or {}).get('path')}"
+                    "; cite"
+                    " it in the upstream field of an impression "
+                    "(adopted, deferred, disputed or"
                     " noted, and its effect)"
                 )
         for issue in cast(list[str], read.get("unresolved") or []):
             warnings.append(f"import {read.get('producer')}: {issue}")
 
-    dual, split = _dual_review_problems(policy, session, session_id)
+    dual, split = _dual_review_problems(policy, session, session_id, root)
     problems.extend(dual)
     warnings.extend(split)
 
@@ -381,7 +593,8 @@ def problems_for(
             continue
         if not received(logs, relative, sha256_file(root / relative)):
             problems.append(
-                f"bard sent you a song ({relative}); read it and record a song receipt: what"
+                f"bard sent you a song ({relative}); "
+                "read it and record a song receipt: what"
                 " you felt and whether it makes you look at the design again"
             )
 
@@ -401,7 +614,8 @@ def problems_for(
         uncovered = [rel for rel in changed if not any(covers(p, rel) for p in fresh)]
         for relative in uncovered:
             problems.append(
-                f"artifact {relative} changed this session but no fresh stage_impression covers it"
+                f"artifact {relative} changed this session "
+                "but no fresh stage_impression covers it"
             )
         if not session["decision"]:
             problems.append(
@@ -459,8 +673,10 @@ def stop(payload: dict[str, Any], policy: dict[str, Any], root: Path) -> int:
     hint = str(policy.get("record_hint") or "")
     if deny:
         message = (
-            f"[{policy['plugin']}] VibeBB Record Protocol: this session still owes records."
-            f" Record them before finishing (refusal {denials}/{limit}):\n{body}\n{hint}"
+            f"[{policy['plugin']}] VibeBB Record Protocol: "
+            "this session still owes records."
+            f" Record them before finishing (refusal {denials}/{limit}):\n"
+            f"{body}\n{hint}"
         ).strip()
         print(
             json.dumps(
@@ -469,7 +685,8 @@ def stop(payload: dict[str, Any], policy: dict[str, Any], root: Path) -> int:
         )
         return 2
     message = (
-        f"[{policy['plugin']}] VibeBB Record Protocol still unmet after {limit} refusals;"
+        f"[{policy['plugin']}] VibeBB Record Protocol "
+        f"still unmet after {limit} refusals;"
         f" finishing with gaps recorded in {policy['records_dir']}/records-status.json."
         f" Tell the user exactly which records are missing:\n{body}"
     )
