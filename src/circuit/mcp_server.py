@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from jsonschema import Draft202012Validator
+from mcp import types
 from mcp.server import Server, ServerRequestContext
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
@@ -2128,7 +2130,9 @@ async def call_tool(
             key = ".".join(str(part) for part in first.absolute_path)
             message = first.message if not key else f"'{key}': {first.message}"
             return CallToolResult(
-                content=[TextContent(type="text", text=f"Input validation error: {message}")],
+                content=_with_image_metadata(
+                    [TextContent(type="text", text=f"Input validation error: {message}")]
+                ),
                 is_error=True,
             )
     image_paths: list[Path] = []
@@ -2823,10 +2827,12 @@ async def call_tool(
             image = _image_content(image_path)
             if image is not None:
                 content.append(image)
-        return CallToolResult(content=content)
+        return CallToolResult(content=_with_image_metadata(content))
     except Exception as exc:
         return CallToolResult(
-            content=[TextContent(type="text", text=_json({"error": str(exc)}))],
+            content=_with_image_metadata(
+                [TextContent(type="text", text=_json({"error": str(exc)}))]
+            ),
             is_error=True,
         )
 
@@ -2847,6 +2853,33 @@ async def _run() -> None:
                 capabilities=ServerCapabilities(tools=ToolsCapability()),
             ),
         )
+
+
+def _with_image_metadata(content: Sequence[types.ContentBlock]) -> list[types.ContentBlock]:
+    """Keep producer identity in text because SDK image conversion can omit metadata."""
+    inline_images: list[dict[str, object]] = []
+    for block in content:
+        if not isinstance(block, types.ImageContent):
+            continue
+        identity: object = (block.meta or {}).get("vibebb_image_identity")
+        if not isinstance(identity, dict):
+            continue
+        claim = cast(dict[str, object], identity)
+        inline_images.append(
+            {
+                "path": claim.get("path"),
+                "sha256": claim.get("sha256"),
+                "attached": True,
+                "identity_status": "bound",
+                "image_identity": claim,
+            }
+        )
+    if not inline_images:
+        return list(content)
+    return [
+        *content,
+        types.TextContent(type="text", text=json.dumps({"inline_images": inline_images})),
+    ]
 
 
 if __name__ == "__main__":

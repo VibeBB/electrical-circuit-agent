@@ -1975,7 +1975,7 @@ def test_render_schematic_kind_attaches_images(tmp_path: Path, monkeypatch: Any)
         assert isinstance(result.content[0], TextContent)
         payload = json.loads(result.content[0].text)
         assert payload["images"] == [str(path) for path in produced]
-        images = result.content[1:]
+        images = [item for item in result.content if isinstance(item, ImageContent)]
         assert len(images) == 2
         assert all(isinstance(image, ImageContent) for image in images)
 
@@ -2013,7 +2013,8 @@ def test_render_layers_kind_attaches_capped_images(tmp_path: Path, monkeypatch: 
         assert result.is_error is False
         payload = json.loads(result.content[0].text)
         assert len(payload["images"]) == 6
-        assert len(result.content) == 1 + 4  # inline image cap
+        images = [item for item in result.content if isinstance(item, ImageContent)]
+        assert len(images) == 4  # inline image cap excludes metadata text
 
     asyncio.run(exercise())
 

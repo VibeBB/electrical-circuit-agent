@@ -31,6 +31,7 @@ from _provenance import (
     next_sequence,
     project_dir,
 )
+from _records import capture_image_delivery
 
 EVENTS_ENV = "CIRCUIT_IMAGE_OBSERVATIONS"
 EVENTS_RELATIVE_PATH = Path("observations/circuit/image-observations.jsonl")
@@ -111,6 +112,16 @@ def main() -> int:
         if "error" in response or response.get("is_error"):
             return 0
     base = project_dir(payload)
+    try:
+        if capture_image_delivery(
+            cast(dict[str, Any], payload),
+            base,
+            events_path(cast(dict[str, Any], payload), EVENTS_ENV, EVENTS_RELATIVE_PATH),
+        ):
+            return 0
+    except (OSError, UnicodeError) as exc:
+        print(f"image delivery log unavailable: {exc}", file=sys.stderr)
+        return 0
     paths = _image_paths(payload, base)
     if not paths:
         return 0
