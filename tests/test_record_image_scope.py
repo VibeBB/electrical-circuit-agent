@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -15,7 +16,7 @@ import pytest
 @pytest.fixture()
 def image_scope_hook(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     scripts = next(Path(__file__).resolve().parents[1].glob("plugins/*/hooks/scripts"))
-    monkeypatch.syspath_prepend(str(scripts))
+    monkeypatch.setattr(sys, "path", [str(scripts), *sys.path])
     spec = importlib.util.spec_from_file_location(
         "image_scope_hook", scripts / "require_records.py"
     )
@@ -122,3 +123,27 @@ def test_conflicting_current_owners_never_choose_one(
 ) -> None:
     candidates = [_original(tmp_path, "source.png", owner) for owner in ("ux", "bard")]
     assert image_scope_hook._current_originals([_receipt(c) for c in candidates], tmp_path) == {}
+
+
+def test_legacy_observation_retains_the_revision_that_was_viewed(
+    tmp_path: Path, image_scope_hook: ModuleType
+) -> None:
+    source = _original(tmp_path, "source.png")
+    observed = {"image_path": source["path"], "image_sha256": source["sha256"]}
+    (tmp_path / "source.png").write_bytes(b"replacement never viewed")
+    keys, warning = image_scope_hook._observation_keys(observed, tmp_path, "ux", {})
+    assert keys == [(source["path"], source["sha256"])]
+    assert warning and "unknown" in warning
+
+
+def test_redelivery_does_not_erase_an_earlier_original_review(
+    tmp_path: Path, image_scope_hook: ModuleType
+) -> None:
+    source = _original(tmp_path, "source.png")
+    observed = _receipt(source)
+    (tmp_path / "source.png").write_bytes(b"replacement delivered later")
+    replacement = _original(tmp_path, "source.png")
+    originals = image_scope_hook._current_originals([_receipt(replacement)], tmp_path)
+    keys, warning = image_scope_hook._observation_keys(observed, tmp_path, "ux", originals)
+    assert keys == [(source["path"], source["sha256"])]
+    assert warning and "unknown" in warning
