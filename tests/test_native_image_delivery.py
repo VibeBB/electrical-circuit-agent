@@ -280,6 +280,66 @@ def test_writer_can_review_the_delivered_revision_after_regeneration(
     assert row["image_delivery"]["status"] == ("bound" if damage == "none" else "unknown")
 
 
+@pytest.mark.parametrize("regenerated", [False, True])
+def test_vision_tool_citation_does_not_replace_the_delivery_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
+    regenerated: bool,
+) -> None:
+    writer, vision, vrp = native
+    monkeypatch.delenv("OPENHANDS_CONVERSATION_ID", raising=False)
+    monkeypatch.delenv("OPENHANDS_SESSION_ID", raising=False)
+    monkeypatch.delenv(f"{PLUGIN.upper()}_VISION_TOOL_EVENTS", raising=False)
+    image = tmp_path / "detail.png"
+    parent = _claim(tmp_path / "source.png", PLUGIN)
+    claim = {
+        **_claim(image, "ux"),
+        "origin": "derived",
+        "operation": "crop",
+        "parents": [parent],
+    }
+    observation = _observe(tmp_path, image, _response(image, claim))
+    subprocess.run(
+        [sys.executable, str(SCRIPTS / "record_vision_tool_event.py")],
+        input=json.dumps(
+            {
+                "session_id": "reader",
+                "tool_name": "inspect_image_with_vision",
+                "tool_input": {"question": "Synthetic fixture; no perception proof"},
+                "tool_response": {
+                    "answer": "W1 is the synthetic fixture anchor",
+                    "model": "synthetic-model",
+                    "profile_name": "synthetic-profile",
+                },
+            }
+        ),
+        env={**os.environ, "OPENHANDS_PROJECT_DIR": str(tmp_path)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    event = json.loads(
+        (tmp_path / "observations" / PLUGIN / "vision-tool-events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[-1]
+    )
+    assert event["event_id"] != observation["event_id"]
+    if regenerated:
+        image.write_bytes(b"new W1 render after the original delivery")
+    payload = vision(
+        image_path="detail.png", session_id="reader", source_event_id=event["event_id"]
+    )
+    for entry in cast(list[dict[str, object]], payload["claims"]):
+        entry["artifact"] = "detail.png"
+    row = writer.record_vision_review(payload, tmp_path)["record"]
+    assert row["source_event_id"] == event["event_id"]
+    expected = "unknown" if regenerated else "bound"
+    assert row["image_delivery"]["status"] == expected
+    assert vrp.review_image_delivery(row, tmp_path, PLUGIN)["status"] == expected
+    assert _stop_hook(monkeypatch)._auxiliary_review(row, tmp_path) is not regenerated
+
+
 @pytest.mark.parametrize("damage", ["utf8", "depth", "io"])
 def test_unreadable_delivery_log_preserves_a_review_with_unknown_binding(
     tmp_path: Path,

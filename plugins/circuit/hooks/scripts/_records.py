@@ -337,11 +337,8 @@ def review_image_delivery(review: dict[str, object], root: Path, plugin: str) ->
     }
     if not matched or len(identities) != 1:
         return unknown
-    source = review.get("source_event_id")
-    if source:
-        matched = [row for row in matched if row.get("event_id") == source]
-        if not matched:
-            return unknown
+    # A source event can cite the separate vision-tool log. Delivery is bound
+    # by path, revision and native session; it does not prove vision selection.
     # Keep the first receipt stable when the same bytes are delivered again.
     row = matched[0]
     claim = _delivery_claim(row.get("image_identity"), root)
