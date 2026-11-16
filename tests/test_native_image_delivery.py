@@ -100,11 +100,13 @@ def _stop_hook(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 
 
 @pytest.mark.parametrize("derived", [False, True])
+@pytest.mark.parametrize("repeat", [False, True])
 def test_native_observer_and_writer_bind_original_or_auxiliary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     native: tuple[ModuleType, Callable[..., dict[str, object]], ModuleType],
     derived: bool,
+    repeat: bool,
 ) -> None:
     writer, vision, vrp = native
     monkeypatch.delenv("OPENHANDS_CONVERSATION_ID", raising=False)
@@ -121,6 +123,9 @@ def test_native_observer_and_writer_bind_original_or_auxiliary(
             "parents": [parent],
         }
     observation = _observe(tmp_path, image, _response(image, claim))
+    if repeat:
+        again = _observe(tmp_path, image, _response(image, claim))
+        assert again["event_id"] != observation["event_id"]
     assert observation["image_identity"] == claim
     assert observation["delivery_evidence"] == "inline_bytes"
     payload = vision(image_path="detail.png", session_id="reader")
@@ -132,6 +137,8 @@ def test_native_observer_and_writer_bind_original_or_auxiliary(
     assert delivery["image_identity"] == claim
     assert delivery["observation_event_id"] == observation["event_id"]
     hook = _stop_hook(monkeypatch)
+    if repeat:
+        _observe(tmp_path, image, _response(image, claim))
     assert hook._auxiliary_review(review, tmp_path) is derived
     problems, _ = hook._dual_review_problems(
         {"dual_review_globs": ["*.png"]},

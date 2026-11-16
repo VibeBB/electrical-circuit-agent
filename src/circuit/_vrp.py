@@ -296,8 +296,18 @@ def review_image_delivery(review: dict[str, object], root: Path, plugin: str) ->
             and row.get("session_id") == review.get("session_id")
         ):
             matched.append(row)
-    if len(matched) != 1:
+    identities = {
+        json.dumps([row.get("identity_status"), row.get("image_identity")], sort_keys=True)
+        for row in matched
+    }
+    if not matched or len(identities) != 1:
         return unknown
+    source = review.get("source_event_id")
+    if source:
+        matched = [row for row in matched if row.get("event_id") == source]
+        if not matched:
+            return unknown
+    # Keep the first receipt stable when the same bytes are delivered again.
     row = matched[0]
     claim = _delivery_claim(row.get("image_identity"), root)
     if row.get("identity_status") != "bound":
