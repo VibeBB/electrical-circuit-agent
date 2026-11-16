@@ -242,6 +242,12 @@ def _observation_keys(
     originals: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[tuple[str, str]], str | None]:
     sources = _receipt_sources(observation, root)
+    if (
+        sources is not None
+        and originals is not None
+        and any(source["path"] not in originals for source in sources)
+    ):
+        sources = None
     superseded = False
     if sources is None and originals is not None:
         sources = _superseding_sources(observation, root, originals)

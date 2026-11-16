@@ -136,6 +136,19 @@ def test_legacy_observation_retains_the_revision_that_was_viewed(
     assert warning and "unknown" in warning
 
 
+def test_conflicting_foreign_owners_retain_unknown_review_scope(
+    tmp_path: Path, image_scope_hook: ModuleType
+) -> None:
+    receipts = [_receipt(_original(tmp_path, "source.png", owner)) for owner in ("ux", "bard")]
+    originals = image_scope_hook._current_originals(receipts, tmp_path)
+    for observed in receipts:
+        keys, warning = image_scope_hook._observation_keys(
+            observed, tmp_path, "firmware", originals
+        )
+        assert keys == [(observed["image_path"], observed["image_sha256"])]
+        assert warning and "unknown" in warning
+
+
 def test_redelivery_does_not_erase_an_earlier_original_review(
     tmp_path: Path, image_scope_hook: ModuleType
 ) -> None:
