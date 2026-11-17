@@ -1026,6 +1026,31 @@ build.
 - Verification: see the PR for `verify_all --stage fast`, plugin load,
   and shared-workflow results.
 
+### KiCad nightly 2026-11-16 and CERN library update review
+
+- Checked on: 2026-11-17
+- KiCad nightly `202611131137+711550ba60~190` →
+  `202611161144+2f8847e57d~190` (deb sha256 re-verified by download);
+  footprints and symbols ARGs still match the latest PPA index, so they
+  are unchanged. CERN KiCad libs `c62d9bd1` → `f5445d61` (submodule;
+  four upstream "Update KiCad libraries" commits adding, among others,
+  `SchLib/PCB Modules.kicad_sym` and
+  `SchLib/Operational Amplifiers.kicad_sym`).
+- Upstream KiCad `711550ba60..2f8847e57d` (88 commits) reviewed:
+  `kicad-cli` gains library-conversion commands, compatibility-report
+  file output, and older-version export options. None change our gate
+  surface — ERC/DRC verdicts still consume only `sch erc`/`pcb drc`
+  JSON — so adoption is the pin bump itself; the new CLI features are
+  noted for future tooling work but not wired in.
+- Verification: `circuit-tools:dev` rebuilt with the new pin; the
+  recorded `_cvpcb.kiface` ERC failure is fixed upstream —
+  `kicad-cli sch erc --exit-code-violations --format json` on
+  `fixtures/smoke-board/board.kicad_sch` exits 0 with 0 violations and
+  no crash — and the `smoke_kicad11_konnect.py` check passes
+  (kicad-cli 10.99.0, konnect 0.13.0, CERN libs, all checks ok).
+- Deferrals unchanged: Python minor still deferred (3.15 canary only;
+  `fastuuid` 0.14.0 still ships no cp315 wheels).
+
 ### OpenHands SDK v1.62.0 and mcp 2.x update review
 
 - Checked on: 2026-11-14
