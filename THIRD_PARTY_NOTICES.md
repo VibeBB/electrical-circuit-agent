@@ -37,8 +37,8 @@ legal advice.
   waives Section 3 of CC-BY-SA.
 - Packages: `kicad-nightly-symbols`, `kicad-nightly-footprints`
 - Versions:
-  - symbols `202610151017+9280a9379~12~ubuntu26.04.1`
-  - footprints `202610112010+f8440fa61~14~ubuntu26.04.1`
+  - symbols `202611200121+2f6414dda~12~ubuntu26.04.1`
+  - footprints `202611021521+a0dcd398e~14~ubuntu26.04.1`
 
 ## KiCad Library Convention checker
 
