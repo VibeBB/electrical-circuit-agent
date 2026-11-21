@@ -23,9 +23,9 @@ legal advice.
 - License: GPL-3.0-or-later
 - Source: <https://ppa.launchpadcontent.net/kicad/kicad-dev-nightly/>
 - Package: `kicad-nightly`
-- Version: `202611161144+2f8847e57d~190~ubuntu26.04.1`
-- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202611161144+2f8847e57d~190~ubuntu26.04.1_amd64.deb)
-- Package SHA-256: `624b2dcc787a743a44f37169bd6aaae9e0dfe13858cc9009bc0ebe2965850724`
+- Version: `202611201144+4f26951493~190~ubuntu26.04.1`
+- Package source: [Launchpad librarian package](https://launchpad.net/~kicad/+archive/ubuntu/kicad-dev-nightly/+files/kicad-nightly_202611201144+4f26951493~190~ubuntu26.04.1_amd64.deb)
+- Package SHA-256: `8035fd6a97ec669f06c2b8cd96d2f82a7312bc71c09876bd4b80d2d24c77c353`
 - Executable: `/usr/lib/kicad-nightly/bin/kicad-cli`
 
 ## KiCad official symbol / footprint libraries
@@ -66,8 +66,8 @@ legal advice.
 
 - License: CERN-OHL-P-2.0
 - Source: <https://gitlab.com/ohwr/cern-kicad-libs>
-- Commit: `f5445d612c71e216ad77846ad1dee9d1dbf460e7`
-- Commit date: 2026-11-17 UTC
+- Commit: `f793f03a4c850628d28cc70c442fa1b242c4e967`
+- Commit date: 2026-11-20 UTC
 - Location: `libraries/cern-kicad-libs`
 - The upstream LICENSE is preserved inside the submodule.
 

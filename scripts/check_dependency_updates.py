@@ -1138,7 +1138,7 @@ def check_sdk_lock_resolution(
         statuses.append(
             Status(
                 "sdk-litellm-pin",
-                "==1.93.0 assumed by publish",
+                "==1.108.3 assumed by publish",
                 "?",
                 source,
                 False,
@@ -1152,14 +1152,14 @@ def check_sdk_lock_resolution(
         statuses.append(
             Status(
                 "sdk-litellm-pin",
-                "==1.93.0 assumed by publish",
+                "==1.108.3 assumed by publish",
                 pin_text,
                 source,
-                pin_text != "==1.93.0",
+                pin_text != "==1.108.3",
                 (
                     "upstream litellm pin changed - re-verify the Re-resolve "
                     "step's sed needles against the upstream pyproject"
-                    if pin_text != "==1.93.0"
+                    if pin_text != "==1.108.3"
                     else ""
                 ),
             )

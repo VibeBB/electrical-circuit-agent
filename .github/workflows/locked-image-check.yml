@@ -35,7 +35,7 @@ jobs:
       server_attestation: ${{ steps.server.outputs.attestation }}
       server_sbom_attestation: ${{ steps.server.outputs.sbom_attestation }}
     steps:
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -241,7 +241,7 @@ jobs:
       contents: read
       attestations: read
     steps:
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -353,7 +353,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -361,7 +361,7 @@ jobs:
         with:
           submodules: true
           persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: "3.14"
           cache-suffix: locked-check-smoke
@@ -457,7 +457,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -465,7 +465,7 @@ jobs:
         with:
           submodules: true
           persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: "3.14"
           cache-suffix: locked-check-lint
@@ -479,7 +479,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -491,7 +491,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y poppler-utils
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: "3.14"
           cache-suffix: locked-check-unit
@@ -509,7 +509,7 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3]
     steps:
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -521,7 +521,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y poppler-utils librsvg2-bin
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: "3.14"
           cache-suffix: locked-check-docker-${{ matrix.shard }}
@@ -550,7 +550,7 @@ jobs:
     # Aggregation only: no checkout and no actions/cache usage.
     cache-mode: none
     steps:
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
           disable-telemetry: true
