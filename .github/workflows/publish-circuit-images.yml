@@ -86,7 +86,7 @@ jobs:
       artifact-metadata: write # creates the attestation storage record
       security-events: write # uploads the Trivy SARIF scans to code scanning
     steps:
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
           disable-telemetry: true
@@ -94,7 +94,7 @@ jobs:
         with:
           submodules: true
           persist-credentials: true
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: "3.14"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -276,7 +276,7 @@ jobs:
       - name: Upload tools Trivy SARIF
         # A rehearsal must not file code-scanning alerts.
         if: ${{ always() && inputs.skip_tools != true && (inputs.dry_run != true && github.event_name != 'pull_request') && hashFiles('trivy-circuit-tools.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           sarif_file: trivy-circuit-tools.sarif
           category: trivy-circuit-tools
@@ -408,25 +408,25 @@ jobs:
         # SDK v${SDK_VERSION}'s root uv.lock pins versions the agent-server
         # build installs via `uv sync --frozen` and the Trivy gate flags as
         # fixable: fsspec 2025.9.0 (CVE-2026-104851, fixed in 2026.6.0),
-        # litellm 1.105.1 (keep >=1.100.4 for the CVE fix), pillow 12.3.0
+        # litellm 1.108.3 (keep >=1.100.4 for the CVE fix), pillow 12.3.0
         # (fixed in 13.0.0), pypdf 6.14.2, aiohttp 3.14.3, Authlib 1.6.12,
         # oauthlib 3.3.1, dnspython 2.8.0, virtualenv 20.36.1,
         # filelock 3.20.3.
         # Re-resolve each in the cloned lockfile before the build.
         # litellm is pinned in the SDK root pyproject's constraint-
-        # dependencies as ==1.105.1; relax it to >=1.104,<1.106 (upstream
-        # caps at <1.106 for the mcp-2 boundary) so the resolver can take
+        # dependencies as ==1.108.3; relax it to >=1.104,<1.109 (upstream
+        # caps at <1.109 for the mcp-2 boundary) so the resolver can take
         # the newest fix line. Fail-closed: every pin must reach its
         # fixed version.
         run: |
           set -euo pipefail
-          sed -i 's/"litellm==1\.105\.1",/"litellm>=1.104,<1.106",/' "$RUNNER_TEMP/sdk/pyproject.toml"
-          grep -q '"litellm>=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
+          sed -i 's/"litellm==1\.108\.3",/"litellm>=1.104,<1.109",/' "$RUNNER_TEMP/sdk/pyproject.toml"
+          grep -q '"litellm>=1.104,<1.109"' "$RUNNER_TEMP/sdk/pyproject.toml"
           # Some SDK versions also carry a constraints pin in dict form;
           # relax it when present, but do not fail when it is absent.
           if grep -q 'name = "litellm", specifier = "==' "$RUNNER_TEMP/sdk/pyproject.toml"; then
-            sed -i 's/{ name = "litellm", specifier = "==1\.105\.1" }/{ name = "litellm", specifier = ">=1.104,<1.106" }/' "$RUNNER_TEMP/sdk/pyproject.toml"
-            grep -q 'name = "litellm", specifier = ">=1.104,<1.106"' "$RUNNER_TEMP/sdk/pyproject.toml"
+            sed -i 's/{ name = "litellm", specifier = "==1\.105\.1" }/{ name = "litellm", specifier = ">=1.104,<1.109" }/' "$RUNNER_TEMP/sdk/pyproject.toml"
+            grep -q 'name = "litellm", specifier = ">=1.104,<1.109"' "$RUNNER_TEMP/sdk/pyproject.toml"
           fi
           sed -i 's/litellm = "2026-07-20T00:00:00Z", //' "$RUNNER_TEMP/sdk/pyproject.toml"
           grep -q 'litellm = "2026-07-20T00:00:00Z"' "$RUNNER_TEMP/sdk/pyproject.toml" && exit 1 || true
@@ -593,7 +593,7 @@ jobs:
       - name: Upload server Trivy SARIF
         # A rehearsal must not file code-scanning alerts.
         if: ${{ always() && (inputs.dry_run != true && github.event_name != 'pull_request') && hashFiles('trivy-circuit-server.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           sarif_file: trivy-circuit-server.sarif
           category: trivy-circuit-server
