@@ -47,7 +47,7 @@ Primary sources:
 
 | Upstream change | Decision | Evaluation |
 | --- | --- | --- |
-| fix(sdk): keep openhands-sdk importable on a fresh litellm install (#7015) | adopted | The SDK now pins `litellm==1.108.3` in constraint-dependencies and stays importable on that line. litellm 1.108.3 relaxes `filelock` to `<5`, which is what allows the repo's `filelock>=4.2.1` override to be dropped in this sweep. |
+| fix(sdk): keep openhands-sdk importable on a fresh litellm install (#7015) | adopted | The SDK now requires `litellm>=1.108.3,<1.109` (its own workspace constraint pins `==1.108.3`, which does not propagate downstream); this lock resolves 1.108.14. litellm 1.108.x relaxes `filelock` to `<5`, which is what allows the repo's `filelock>=4.2.1` override to be dropped in this sweep. |
 | fix(mcp): keep runtime-added MCP tool names across restart and resume (#6929) | adopted implicitly | MCP tool names survive restart/resume; relevant to plugin MCP servers. |
 | fix(llm): classify orphan tool messages as a malformed history (#6678) | adopted implicitly | History validation instead of silent failure. |
 | fix(sdk): close built tool executors when response_schema is rejected + fix(acp): bill fork usage updates in ask_agent + fix(browser) close_tab | adopted implicitly | Correctness in tool executor and ACP/browser edges. |
@@ -60,7 +60,7 @@ Primary sources:
 | uv | 0.13.8 -> 0.13.9 | adopted | `required-version`, Dockerfile `UV_VERSION`/`UV_DIGEST`, setup-uv `version:` input. Changelog reviewed: PEP 832 support (informational), lockfile size reduction (benefits `uv.lock` size), wheel name-mismatch rejection (stricter — safe). |
 | ruff | lock drift -> 0.17.5/0.17.6 | adopted implicitly | Bug-fix releases incl. a preview TC010 fix; no config change. |
 | pydantic | lock drift -> 2.14.4 | adopted implicitly | jiter 0.19.0 bump + JSON Schema fixes. |
-| filelock override | `filelock>=4.2.1` -> dropped | adopted (removal) | The override existed only to outrun litellm<1.108's `filelock<4.0` cap for CVE-2026-112940; litellm 1.108.3 allows `<5` and the lock resolves 4.2.12. |
+| filelock override | `filelock>=4.2.1` -> dropped | adopted (removal) | The override existed only to outrun litellm<1.108's `filelock<4.0` cap for CVE-2026-112940; litellm 1.108.x allows `<5` and the lock resolves 4.2.12. |
 | step-security/harden-runner | v2.22.4 -> v2.23.0 | adopted | Secure Registry community tier (available, not wired), S3 URL redaction fix (adopted implicitly). |
 | astral-sh/setup-uv | v10.3.3 -> v10.4.0 | adopted | New `require-checksums` input evaluated: workflows already pin `version:` and the action SHA, so checksum pinning adds little; not adopted this sweep. PEP 440 fix adopted implicitly. |
 | github/codeql-action | v4.39.3 -> v4.39.4 | adopted | CodeQL bundle 2.27.5; pin-only. |
