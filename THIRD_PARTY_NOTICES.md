@@ -88,10 +88,10 @@ legal advice.
 
 - License: EPL-2.0 / Apache-2.0 / GPL-2.0-with-classpath-exception
   (per-module licenses ship inside the tarball at `/opt/jre/legal/`)
-- Version: 27.0.0.0 (OpenJ9 0.62.0)
-- Asset: `ibm-semeru-open-jre_x64_linux_27.0.0.0.tar.gz`
-- SHA-256: `9e6d9c1131da124bd08eb4183f7787a9f90111fc3d62c1231976c2d37372d59e`
-- Source: <https://github.com/ibmruntimes/semeru27-binaries/releases/tag/jdk-27.0.0.0>
+- Version: 27.0.1.0 (OpenJ9 0.63.0)
+- Asset: `ibm-semeru-open-jre_x64_linux_27.0.1.0.tar.gz`
+- SHA-256: `484ca80a21a1e967889c39d66c1b8dac518ca08070d6e1a2829e3411df4c36f1`
+- Source: <https://github.com/ibmruntimes/semeru27-binaries/releases/tag/jdk-27.0.1.0>
 - Redistribution: the release tarball is extracted unmodified to `/opt/jre`
   and resolved as the FreeRouting execution JRE via `JAVA_HOME`/`PATH`.
 - In-image provenance: `/usr/share/doc/semeru-jre/SOURCE`
