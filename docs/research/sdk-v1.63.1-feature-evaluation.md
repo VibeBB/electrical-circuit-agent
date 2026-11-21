@@ -70,4 +70,3 @@ Primary sources:
 | kicad-nightly-symbols | 202611121241 -> 202611200121 (+2f6414dda) | adopted | Same nightly series; sha256 verified. |
 | CERN KiCad libraries | f5445d61 -> f793f03a | adopted | Submodule bump to upstream master. |
 | publish litellm needle | `==1.105.1` -> `==1.108.3` | adopted | SDK 1.63.1's workspace pin moved; the re-resolve sed + fail-closed greps now match `==1.108.3` and relax to `>=1.104,<1.109`. Checker baseline updated to match. |
-
