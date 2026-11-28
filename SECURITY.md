@@ -8,9 +8,10 @@
 
 ## Reporting a vulnerability
 
-Please do not open public issues for security vulnerabilities. Report them
-via [GitHub private vulnerability reporting](https://github.com/VibeBB/electrical-circuit-agent/security/advisories/new)
-on this repository, or by contacting the maintainer directly. Include:
+Please [report vulnerabilities privately on GitHub](https://github.com/VibeBB/electrical-circuit-agent/security/advisories/new).
+Do not include vulnerability details in a public issue, pull request, or discussion.
+
+Include:
 
 - the affected version/commit,
 - a minimal reproduction (design brief, command, or payload),
