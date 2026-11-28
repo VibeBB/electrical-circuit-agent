@@ -360,11 +360,11 @@ The only required secret is `GITHUB_TOKEN`. Require `fast`, `fast (3.13)`,
 `docker-smoke`, `plugin-load`, and `zizmor` in branch protection. The publish workflow publishes
 `ghcr.io/vibebb/circuit-tools` and `ghcr.io/vibebb/circuit-server`, and creates
 `docker/image-digests.json` for the first time via a bot PR. Filling a missing
-lock with placeholders is forbidden. Because GITHUB_TOKEN events do not start
-workflows, the publish workflow dispatches the lock-branch CI itself and
-merges the lock PR synchronously once that run succeeds; when the Actions
-policy lands the bot PR's `pull_request` run as `action_required`, it approves
-the run via the Actions API. After merging, it dispatches `ci.yml`,
+lock with placeholders is forbidden. The publisher can dispatch lock-branch
+CI and uses the Actions API to approve a bot PR's `pull_request` run held as
+`action_required`. That approval is not a PR review. The lock PR waits for
+required checks and, if it touches CODEOWNERS-owned paths, manual approval
+from `@uist1idrju3i`. After merging, the publisher dispatches `ci.yml`,
 `locked-image-check.yml`, and `workflow-lint.yml` on main as observational
 runs recorded in the step summary. When the publisher instead exits at the
 required-check deadline with auto-merge armed (or a human merges the bot
