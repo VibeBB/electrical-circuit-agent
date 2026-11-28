@@ -1848,16 +1848,15 @@ failure — the leg does not silently revert to advisory.
 
 ## Settings-level posture (recorded decisions)
 
-The following live in repository Settings rather than code; they are
-intentional for the solo-maintainer bot-merge workflow and are recorded
-here so audits do not re-flag them:
+Configure the following in repository Settings rather than in workflows:
 
-- Branch protection does not require approving reviews, code owners, or
-  "apply to administrators": every merge is performed by automation
-  (digest-lock, version-bump, and Devin PRs), so required approvers would
-  only add friction to a pipeline that already gates on the required-check
-  set. OpenSSF Scorecard reports this as Branch-Protection 3 and
-  Code-Review 0; that is the recorded trade-off, not an oversight.
+- Require code-owner review in the `main` ruleset. A PR that changes paths
+  covered by `.github/CODEOWNERS` (including `/.github/`,
+  `/scripts/release_bump.sh`, and `/scripts/publish_image_pin_pr.sh`) waits
+  for manual approval from `@uist1idrju3i`. This applies to bot digest-lock
+  and version-bump PRs when they change an owned path. Auto-merge waits
+  for required checks and any required review. The owner's ruleset bypass
+  applies only to pull requests; bots have no bypass.
 - The Dependency graph must stay enabled for `dependency-review.yml` to
   evaluate pull requests.
 - `release.yml` is dispatch-only; run it once with `dry_run=true` before
